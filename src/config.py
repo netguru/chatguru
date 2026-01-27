@@ -1,0 +1,287 @@
+"""Configuration management for chatguru Agent."""
+
+import logging
+from functools import lru_cache
+from logging import Logger
+from logging.config import dictConfig
+from pathlib import Path
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def get_env_file_path() -> str:
+    """
+    Get the absolute path to the .env file.
+
+    Returns:
+        Absolute path to the .env file in the project root
+    """
+    current_file = Path(__file__)
+    project_root = current_file.parent.parent
+    env_file = project_root / ".env"
+    return str(env_file)
+
+
+class LoggingSettings(BaseSettings):
+    """Get the logging settings for the application."""
+
+    format: str = (
+        "%(asctime)s %(name)-15s %(levelname)-8s %(processName)-10s %(threadName)-10s %(message)s"
+    )
+    level: str = "INFO"
+    handlers_level: str = "DEBUG"
+
+    model_config = SettingsConfigDict(env_prefix="log_")
+
+    @property
+    def config_dict(self) -> dict:
+        """Get the logging configuration for the application."""
+        return {
+            "version": 1,
+            "disable_existing_loggers": False,
+            "formatters": {
+                "human_readable": {"class": "logging.Formatter", "format": self.format},
+            },
+            "loggers": {
+                "logger": {
+                    "handlers": ["console_handler"],
+                    "propagate": False,
+                    "level": self.level,
+                },
+            },
+            "handlers": {
+                "console_handler": {
+                    "formatter": "human_readable",
+                    "class": "logging.StreamHandler",
+                },
+                "root_handler": {
+                    "formatter": "human_readable",
+                    "class": "logging.StreamHandler",
+                },
+            },
+            "root": {"handlers": ["root_handler"], "level": self.level},
+        }
+
+
+def get_logger(component: str, log_level: str | None = None) -> Logger:
+    """
+    Get a logger instance for the given component.
+
+    Args:
+        component: Component name for the logger
+        log_level: Optional log level override (e.g., "DEBUG", "INFO")
+
+    Returns:
+        Configured logger instance
+    """
+    logging_settings = LoggingSettings()
+    dictConfig(logging_settings.config_dict)
+    logger = logging.getLogger(f"{component}_logger")
+    logger.setLevel(logging.INFO)
+    if log_level:
+        logger.setLevel(getattr(logging, log_level.upper(), logging.INFO))
+    return logger
+
+
+class AppSettings(BaseSettings):
+    """Application settings loaded from environment variables."""
+
+    model_config = SettingsConfigDict(
+        env_file=get_env_file_path(),
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+    app_name: str = Field(
+        default="NG chatguru Agent",
+        description="Application name",
+    )
+
+    # Application Configuration
+    debug: bool = Field(
+        default=False,
+        description="Enable debug mode",
+    )
+    log_level: str = Field(
+        default="INFO",
+        description="Logging level",
+    )
+
+
+class FastAPISettings(BaseSettings):
+    """FastAPI settings loaded from environment variables."""
+
+    model_config = SettingsConfigDict(
+        env_file=get_env_file_path(),
+        env_prefix="FASTAPI_",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+    host: str = Field(
+        default="0.0.0.0",  # noqa: S104
+        description="FastAPI host",
+    )
+    port: int = Field(
+        default=8000,
+        description="FastAPI port",
+    )
+    cors_origins: list[str] = Field(
+        default=["*"],
+        description="CORS allowed origins",
+    )
+    debug: bool = Field(
+        default=False,
+        description="Enable debug mode",
+    )
+    log_level: str = Field(
+        default="INFO",
+        description="Logging level",
+    )
+
+
+class LLMSettings(BaseSettings):
+    """LLM settings loaded from environment variables."""
+
+    model_config = SettingsConfigDict(
+        env_file=get_env_file_path(),
+        env_prefix="LLM_",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+    endpoint: str = Field(
+        default="",
+        description="LLM endpoint",
+    )
+    api_key: str = Field(
+        default="",
+        description="LLM API key",
+    )
+    api_version: str = Field(
+        default="2024-02-15-preview",
+        description="LLM API version",
+    )
+    deployment_name: str = Field(
+        default="",
+        description="LLM deployment name",
+    )
+    temperature: float = Field(
+        default=1,
+        description="LLM temperature",
+    )
+    embedding_deployment_name: str = Field(
+        default="text-embedding-ada-002",
+        description="Azure deployment name for embeddings model",
+    )
+    embedding_dimensions: int = Field(
+        default=1536,
+        description="Embedding vector dimensions (1536 for text-embedding-ada-002)",
+    )
+
+
+@lru_cache
+def get_fastapi_settings() -> FastAPISettings:
+    """Get FastAPI settings."""
+    return FastAPISettings()
+
+
+@lru_cache
+def get_app_settings() -> AppSettings:
+    """Get application settings."""
+    return AppSettings()
+
+
+class LangfuseSettings(BaseSettings):
+    """Langfuse observability settings loaded from environment variables."""
+
+    model_config = SettingsConfigDict(
+        env_file=get_env_file_path(),
+        env_prefix="LANGFUSE_",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+    public_key: str = Field(
+        default="",
+        description="Langfuse public key",
+    )
+    secret_key: str = Field(
+        default="",
+        description="Langfuse secret key",
+    )
+    host: str = Field(
+        default="https://cloud.langfuse.com",
+        description="Langfuse host URL",
+    )
+    enabled: bool = Field(
+        default=True,
+        description="Enable Langfuse tracing",
+    )
+
+
+@lru_cache
+def get_llm_settings() -> LLMSettings:
+    """Get LLM settings."""
+    return LLMSettings()
+
+
+@lru_cache
+def get_langfuse_settings() -> LangfuseSettings:
+    """Get Langfuse settings."""
+    return LangfuseSettings()
+
+
+class VectorDBSettings(BaseSettings):
+    """Vector database settings."""
+
+    model_config = SettingsConfigDict(
+        env_file=get_env_file_path(),
+        env_prefix="VECTOR_DB_",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+    # Database type: "sqlite" or "mongodb"
+    type: str = Field(
+        default="mongodb",
+        description="Database type: 'sqlite' or 'mongodb'",
+    )
+
+    # SQLite settings
+    sqlite_url: str = Field(
+        default="http://localhost:8001",
+        description="SQLite database service URL",
+    )
+
+    # MongoDB settings
+    mongodb_uri: str = Field(
+        default="mongodb://localhost:27017",
+        description="MongoDB connection URI (for Atlas: mongodb+srv://...)",
+    )
+    mongodb_api_url: str = Field(
+        default="http://localhost:8002",
+        description="MongoDB vector database API service URL (HTTP endpoint)",
+    )
+    mongodb_database: str = Field(
+        default="products",
+        description="MongoDB database name",
+    )
+    mongodb_collection: str = Field(
+        default="products",
+        description="MongoDB collection name",
+    )
+
+    # Common settings
+    timeout: int = Field(
+        default=30,
+        description="Request timeout in seconds",
+    )
+
+
+@lru_cache
+def get_vector_db_settings() -> VectorDBSettings:
+    """Get vector database settings."""
+    return VectorDBSettings()

@@ -1,0 +1,39 @@
+# Vector Database Service with sqlite-vec
+# Minimal container for semantic search
+# Use x86_64 platform to avoid sqlite-vec ARM64 binary bug.
+# See: https://github.com/asg017/sqlite-vec/issues/37 (ARM64 binaries fail to load due to missing symbols)
+
+FROM --platform=linux/amd64 python:3.12-slim
+
+# Install curl for healthcheck and uv installation
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+
+# Install uv (fast Python package installer)
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
+    mv /root/.local/bin/uv /bin/uv && \
+    mv /root/.local/bin/uvx /bin/uvx
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app/src
+
+WORKDIR /app
+
+# Copy dependency files
+COPY pyproject.toml uv.lock ./
+
+# Install dependencies using uv
+RUN uv sync --frozen --no-dev --no-install-project
+
+# Copy only what's needed for the database service
+COPY src/vector_db/ ./src/vector_db/
+COPY src/config.py ./src/config.py
+COPY src/rag/products.json ./data/products.json
+
+# Create data directory for SQLite
+RUN mkdir -p /data
+
+EXPOSE 8001
+
+# Run the FastAPI service
+CMD ["uv", "run", "uvicorn", "vector_db.api:app", "--host", "0.0.0.0", "--port", "8001"]

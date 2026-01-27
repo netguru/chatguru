@@ -1,0 +1,39 @@
+# MongoDB Vector Database Service (Local MongoDB with manual vector search)
+# Self-contained container for semantic search using local MongoDB
+
+FROM python:3.12-slim
+
+# Install curl for healthcheck and uv installation
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+
+# Install uv (fast Python package installer)
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
+    mv /root/.local/bin/uv /bin/uv && \
+    mv /root/.local/bin/uvx /bin/uvx
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app/src \
+    VECTOR_STORE_TYPE=mongodb
+
+WORKDIR /app
+
+# Copy dependency files
+COPY pyproject.toml uv.lock ./
+
+# Install dependencies using uv
+RUN uv sync --frozen --no-dev --no-install-project
+
+# Copy only what's needed for the MongoDB service
+COPY src/vector_db/api.py ./src/vector_db/api.py
+COPY src/vector_db/mongodb_store.py ./src/vector_db/mongodb_store.py
+COPY src/config.py ./src/config.py
+COPY src/rag/products.json ./data/products.json
+
+# Create empty __init__.py to make it a valid package
+RUN touch ./src/vector_db/__init__.py
+
+EXPOSE 8002
+
+# Run the FastAPI service (uses unified api.py with VECTOR_STORE_TYPE=mongodb)
+CMD ["uv", "run", "uvicorn", "vector_db.api:app", "--host", "0.0.0.0", "--port", "8002"]

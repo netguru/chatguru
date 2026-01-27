@@ -1,0 +1,27 @@
+description: "chatguru Agent LLM evaluation and testing"
+
+# Python provider that calls the Agent directly without Docker/app
+# Uses uv to run within the project's virtual environment
+providers:
+  - id: "file://provider.py"
+    label: "chatguru Agent"
+    config:
+      pythonExecutable: "../.venv/bin/python"
+
+# Prompts use the user's input from test vars
+prompts:
+  - "{{prompt}}"
+
+# Import test cases from separate files for better organization
+tests:
+  - tests/basic_greeting.yaml
+  - tests/helpfulness.yaml
+  - tests/edge_cases.yaml
+
+# Output configuration
+outputPath: results/promptfoo-results.json
+
+# Evaluation settings
+evaluateOptions:
+  maxConcurrency: 1  # Sequential to avoid agent initialization issues
+  showProgressBar: true

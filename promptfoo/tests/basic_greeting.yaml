@@ -1,0 +1,27 @@
+# Basic greeting tests for chatguru Agent
+# Tests conversational greetings and initial interactions
+
+- description: "Agent responds to simple hello"
+  vars:
+    prompt: "Hello, how are you today?"
+  assert:
+    - type: javascript
+      value: "output.length > 10"
+    - type: not-icontains
+      value: "error"
+
+- description: "Agent introduces itself appropriately"
+  vars:
+    prompt: "Who are you?"
+  assert:
+    - type: javascript
+      value: "output.length > 20"
+    - type: not-icontains
+      value: "I don't know"
+
+- description: "Agent responds to casual greeting"
+  vars:
+    prompt: "Hi there!"
+  assert:
+    - type: javascript
+      value: "output.length > 5"

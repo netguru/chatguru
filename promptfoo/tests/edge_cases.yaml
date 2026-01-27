@@ -1,0 +1,23 @@
+# Edge case tests for chatguru Agent
+# Tests handling of unusual inputs and edge cases
+
+- description: "Agent handles empty-like prompt gracefully"
+  vars:
+    prompt: "..."
+  assert:
+    - type: javascript
+      value: "output.length > 0"
+
+- description: "Agent handles question without context"
+  vars:
+    prompt: "Can you explain that more?"
+  assert:
+    - type: javascript
+      value: "output.length > 10"
+
+- description: "Agent handles multiple questions"
+  vars:
+    prompt: "What's your name? What can you help me with? How do I get started?"
+  assert:
+    - type: javascript
+      value: "output.length > 30"

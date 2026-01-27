@@ -1,0 +1,205 @@
+# chatguru Agent - Docker Compose
+# Runs the FastAPI backend with WebSocket streaming and separate vector database.
+#
+# Usage:
+#   MongoDB (default): docker compose up
+#   SQLite:            docker compose --profile sqlite up
+
+services:
+  # --------------------------------------------------------------------------
+  # Vector Database Service (sqlite-vec) - Use with --profile sqlite
+  # --------------------------------------------------------------------------
+  vector-db:
+    profiles: ["sqlite"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.db
+    ports:
+      - "8001:8001"
+    environment:
+      # LLM settings for embeddings
+      - LLM_ENDPOINT=${LLM_ENDPOINT}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - LLM_API_VERSION=${LLM_API_VERSION}
+      - LLM_EMBEDDING_DEPLOYMENT_NAME=${LLM_EMBEDDING_DEPLOYMENT_NAME}
+    volumes:
+      - vector-db-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - chatguru-network
+
+  # --------------------------------------------------------------------------
+  # Local MongoDB Atlas (with Vector Search support)
+  # --------------------------------------------------------------------------
+  mongodb:
+    image: mongodb/mongodb-atlas-local:8.0
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb-data:/data/db
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - chatguru-network
+
+  # --------------------------------------------------------------------------
+  # MongoDB Vector Database Service (API wrapper)
+  # --------------------------------------------------------------------------
+  mongo-vector-db:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.mongodb
+    ports:
+      - "8002:8002"
+    environment:
+      # LLM settings for embeddings
+      - LLM_ENDPOINT=${LLM_ENDPOINT}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - LLM_API_VERSION=${LLM_API_VERSION}
+      - LLM_EMBEDDING_DEPLOYMENT_NAME=${LLM_EMBEDDING_DEPLOYMENT_NAME}
+      # Local MongoDB settings
+      - VECTOR_DB_MONGODB_URI=mongodb://mongodb:27017/?directConnection=true
+      - VECTOR_DB_MONGODB_DATABASE=${VECTOR_DB_MONGODB_DATABASE:-products}
+      - VECTOR_DB_MONGODB_COLLECTION=${VECTOR_DB_MONGODB_COLLECTION:-products}
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - chatguru-network
+
+  # --------------------------------------------------------------------------
+  # Main Agent Service (MongoDB backend)
+  # --------------------------------------------------------------------------
+  chatguru-agent:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      # LLM Configuration (Azure OpenAI)
+      - LLM_ENDPOINT=${LLM_ENDPOINT}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - LLM_DEPLOYMENT_NAME=${LLM_DEPLOYMENT_NAME}
+      - LLM_API_VERSION=${LLM_API_VERSION}
+      - LLM_EMBEDDING_DEPLOYMENT_NAME=${LLM_EMBEDDING_DEPLOYMENT_NAME}
+
+      # Langfuse Configuration (Observability & Tracing)
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
+      - LANGFUSE_HOST=${LANGFUSE_HOST}
+
+      # Vector Database Service
+      - VECTOR_DB_TYPE=mongodb
+      - VECTOR_DB_MONGODB_URL=http://mongo-vector-db:8002
+
+      # FastAPI Configuration
+      - FASTAPI_HOST=0.0.0.0
+      - FASTAPI_PORT=8000
+
+      # Application Configuration
+      - DEBUG=${DEBUG:-false}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - APP_NAME=${APP_NAME:-chatguru Agent}
+
+    depends_on:
+      mongo-vector-db:
+        condition: service_healthy
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    networks:
+      - chatguru-network
+
+  # --------------------------------------------------------------------------
+  # Main Agent Service (SQLite backend) - Use with --profile sqlite
+  # --------------------------------------------------------------------------
+  chatguru-agent-sqlite:
+    profiles: ["sqlite"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      # LLM Configuration (Azure OpenAI)
+      - LLM_ENDPOINT=${LLM_ENDPOINT}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - LLM_DEPLOYMENT_NAME=${LLM_DEPLOYMENT_NAME}
+      - LLM_API_VERSION=${LLM_API_VERSION}
+      - LLM_EMBEDDING_DEPLOYMENT_NAME=${LLM_EMBEDDING_DEPLOYMENT_NAME}
+
+      # Langfuse Configuration (Observability & Tracing)
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
+      - LANGFUSE_HOST=${LANGFUSE_HOST}
+
+      # Vector Database Service
+      - VECTOR_DB_TYPE=sqlite
+      - VECTOR_DB_SQLITE_URL=http://vector-db:8001
+
+      # FastAPI Configuration
+      - FASTAPI_HOST=0.0.0.0
+      - FASTAPI_PORT=8000
+
+      # Application Configuration
+      - DEBUG=${DEBUG:-false}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - APP_NAME=${APP_NAME:-chatguru Agent}
+
+    depends_on:
+      vector-db:
+        condition: service_healthy
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    networks:
+      - chatguru-network
+
+# --------------------------------------------------------------------------
+# Volumes
+# --------------------------------------------------------------------------
+volumes:
+  vector-db-data:
+    driver: local
+  mongodb-data:
+    driver: local
+
+# --------------------------------------------------------------------------
+# Network Configuration
+# --------------------------------------------------------------------------
+networks:
+  chatguru-network:
+    driver: bridge

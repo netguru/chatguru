@@ -1,0 +1,164 @@
+# Project Rules - chatguru Agent
+
+These rules codify the design decisions and architectural patterns established during development. Follow these rules when making changes to the codebase.
+
+## Core Architecture Principles
+
+### 1. Async-First Design
+- **Rule**: All agent operations MUST be async-only. Never add synchronous methods to the Agent class.
+- **Rationale**: Prevents blocking operations, aligns with FastAPI's async nature, ensures consistent API surface.
+- **Implementation**: Use `async def` and `AsyncIterator` for all streaming operations.
+- **Example**: ✅ `async def astream(...) -> AsyncIterator[str]` | ❌ `def run(...) -> str`
+
+### 2. WebSocket for Real-Time Communication
+- **Rule**: Use WebSocket endpoints for streaming responses. HTTP POST endpoints are deprecated for chat functionality.
+- **Rationale**: Enables true real-time streaming, better UX, lower latency.
+- **Implementation**: All streaming endpoints use `@router.websocket("/ws")` pattern.
+- **Exception**: Health checks and static content can use HTTP GET.
+
+### 3. Session ID Handling
+- **Rule**: ALWAYS use `is not None` checks for `session_id` values, never truthiness checks.
+- **Rationale**: Preserves empty string values which are valid but falsy.
+- **Example**:
+  ```python
+  # ✅ Correct
+  session_id = value if value is not None else "default"
+
+  # ❌ Wrong - treats empty string as falsy
+  session_id = value or "default"
+  ```
+
+### 4. API Contract Consistency
+- **Rule**: ALL WebSocket responses (success, error, token, end) MUST include `session_id` field.
+- **Rationale**: Maintains API contract, enables client-side error recovery, better debugging.
+- **Implementation**: Extract `session_id` from raw JSON before validation fails, use "unknown" as fallback.
+
+### 5. Comprehensive Error Handling
+- **Rule**: All exceptions MUST be caught and converted to proper WebSocket error messages with `session_id`.
+- **Rationale**: Prevents unhandled exceptions, maintains connection, enables error recovery.
+- **Implementation**:
+  - Agent initialization inside try-except block
+  - Separate handlers for `json.JSONDecodeError`, `ValidationError`, `TypeError`
+  - All error responses follow: `{"type": "error", "content": "...", "session_id": "..."}`
+
+### 6. Type Validation Before Pydantic
+- **Rule**: Validate JSON structure (dict vs array/string) BEFORE passing to Pydantic models.
+- **Rationale**: Prevents `TypeError` from non-dict JSON, better error messages.
+- **Implementation**: Check `isinstance(message_data, dict)` before `ChatMessage(**message_data)`.
+
+### 7. Environment Variable Naming
+- **Rule**: Use `LLM_*` prefix for LLM configuration, not provider-specific names like `AZURE_OPENAI_*`.
+- **Rationale**: Generic naming allows provider switching, clearer separation of concerns.
+- **Allowed**: `LLM_ENDPOINT`, `LLM_API_KEY`, `LLM_DEPLOYMENT_NAME`, `LLM_API_VERSION`
+- **Deprecated**: `AZURE_OPENAI_*`, `BRAND_NAME` (use `APP_NAME`)
+
+### 8. WebSocket Message Protocol
+- **Rule**: Use explicit message types (`token`, `end`, `error`) in JSON format for all WebSocket messages.
+- **Rationale**: Clear message boundaries, easy parsing, extensible.
+- **Format**:
+  ```json
+  {"type": "token" | "end" | "error", "content": "...", "session_id": "..."}
+  ```
+- **Future**: Can extend with new types like `tool_call`, `metadata` without breaking changes.
+
+## Code Quality Rules
+
+### 9. Streaming Configuration
+- **Rule**: Enable streaming by default in LLM initialization (`streaming=True`).
+- **Rationale**: Streaming is the primary use case, consistent behavior.
+- **Implementation**: `AzureChatOpenAI(..., streaming=True)`
+
+### 10. Test Client Selection
+- **Rule**: Use FastAPI's `TestClient` for WebSocket testing, not `httpx.AsyncClient`.
+- **Rationale**: Simpler test code, synchronous WebSocket handling, consistent patterns.
+- **Implementation**: `TestClient(create_app())` for WebSocket tests.
+
+### 11. Docker Healthchecks
+- **Rule**: Include `curl` in Docker images for healthcheck functionality.
+- **Rationale**: Enables Docker healthchecks without additional dependencies.
+- **Implementation**: Install curl in Dockerfile, configure healthcheck in docker-compose.yml.
+
+## File Organization Rules
+
+### 12. HTML Templates Location
+- **Rule**: Serve HTML templates from `src/api/templates/` directory.
+- **Rationale**: Keeps templates with API code, simple deployment.
+- **Implementation**: `Path(__file__).parent / "templates" / "index.html"`
+
+### 13. Single Page Application at Root
+- **Rule**: Serve web chat interface at root route (`/`) for simplicity.
+- **Rationale**: Single application deployment, no CORS issues, easier development.
+- **Trade-off**: Can be replaced with separate frontend later if needed.
+
+## Error Handling Patterns
+
+### 14. Exception Handler Hierarchy
+- **Rule**: Use nested try-except blocks MUST preserve `session_id` in error responses.
+- **Pattern**:
+  ```python
+  try:
+      # Operation
+  except SpecificError:
+      # Send error with session_id
+      await websocket.send_json({"type": "error", "session_id": session_id, ...})
+      continue  # Don't break connection
+  ```
+
+### 15. Agent Initialization Error Handling
+- **Rule**: Agent initialization MUST be inside try-except block to catch credential/config errors.
+- **Rationale**: Prevents unhandled exceptions that close WebSocket without proper error message.
+- **Implementation**: `agent = Agent()` inside outer try block.
+
+## Validation Rules
+
+### 16. JSON Structure Validation
+- **Rule**: Validate JSON is dict before Pydantic validation, catch `TypeError` separately.
+- **Implementation**
+  ```python
+  if not isinstance(message_data, dict):
+      raise TypeError("Message must be a JSON object")
+  ```
+
+### 17. Session ID Extraction
+- **Rule**: Extract `session_id` from raw JSON before validation, handle all exceptions.
+- **Implementation**: `_extract_session_id()` function catches `JSONDecodeError`, `AttributeError`, `TypeError`.
+
+## Testing Rules
+
+### 18. Mock Patterns for Pydantic Models
+- **Rule**: Use `object.__setattr__()` to bypass Pydantic validation when mocking.
+- **Rationale**: Pydantic models don't allow arbitrary attribute assignment.
+- **Example**:
+  ```python
+  object.__setattr__(mock_instance, "bind_tools", lambda tools: None)
+  ```
+
+### 19. Test Coverage for Edge Cases
+- **Rule**: Tests MUST cover: empty string session_id, non-dict JSON, initialization failures.
+- **Rationale**: Ensures robustness and API contract compliance.
+
+## Documentation Rules
+
+### 20. Design Decision Documentation
+- **Rule**: All significant architectural decisions MUST be documented in `docs/design-decisions.md`.
+- **Rationale**: Maintains knowledge, explains trade-offs, guides future development.
+
+## Migration Rules
+
+### 21. Breaking Changes
+- **Rule**: Breaking changes (like removing `run()` method) MUST be documented in CHANGELOG.
+- **Rationale**: Helps developers understand migration path.
+
+## Summary
+
+When making changes:
+1. ✅ Use async-only patterns
+2. ✅ Preserve session_id in all responses
+3. ✅ Use explicit `is not None` checks
+4. ✅ Handle all exceptions gracefully
+5. ✅ Validate types before Pydantic
+6. ✅ Use `LLM_*` environment variables
+7. ✅ Follow WebSocket message protocol
+8. ✅ Document significant decisions
+
+These rules ensure consistency, maintainability, and robustness of the codebase.

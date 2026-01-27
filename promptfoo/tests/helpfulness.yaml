@@ -1,0 +1,23 @@
+# Helpfulness tests for chatguru Agent
+# Tests the agent's ability to assist users with various requests
+
+- description: "Agent offers help with product inquiry"
+  vars:
+    prompt: "I'm looking for a new laptop. Can you help me?"
+  assert:
+    - type: javascript
+      value: "output.length > 20"
+
+- description: "Agent handles support request professionally"
+  vars:
+    prompt: "I'm having trouble with my order. The tracking shows it's delayed."
+  assert:
+    - type: javascript
+      value: "output.length > 30"
+
+- description: "Agent responds to general knowledge question"
+  vars:
+    prompt: "What are some tips for online shopping?"
+  assert:
+    - type: javascript
+      value: "output.length > 15"

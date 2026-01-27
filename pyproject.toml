@@ -1,0 +1,140 @@
+[project]
+name = "chatguru-agent"
+version = "0.1.0"
+description = "Production-ready whitelabel chatbot with RAG capabilities and agentic commerce integration"
+readme = "README.md"
+requires-python = "<4.0.0,>=3.12.9"
+license = {text = "MIT"}
+authors = [
+    {name = "chatguru Agent Contributors"}
+]
+keywords = [
+    "chatbot",
+    "llm",
+    "langchain",
+    "fastapi",
+    "websocket",
+    "rag",
+    "azure-openai",
+    "langfuse",
+    "agentic-commerce",
+    "whitelabel",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Framework :: FastAPI",
+]
+dependencies = [
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "langchain>=0.1.0",
+    "langchain-openai>=0.0.5",
+    "langchain-community>=0.1.0",
+    "langfuse>=3.0.0",
+    "pydantic-settings>=2.0.0",
+    "sqlite-vec>=0.1.1",
+    "pymongo>=4.7.0",
+    "scikit-learn>=1.3.0",
+    "httpx>=0.25.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/netguru/chatguru"
+Documentation = "https://github.com/netguru/chatguru#readme"
+Repository = "https://github.com/netguru/chatguru"
+Issues = "https://github.com/netguru/chatguru/issues"
+Changelog = "https://github.com/netguru/chatguru/blob/main/CHANGELOG.md"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-mock>=3.12.0",
+    "mypy>=1.7.0",
+    "ruff>=0.1.0",
+    "pre-commit>=3.5.0",
+]
+
+[tool.ruff]
+src = ["src"]
+target-version = "py312"
+line-length = 140
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "ANN002",   # Missing type annotation for *args
+    "ANN003",   # Missing type annotation for **kwargs
+    "ANN401",   # Dynamically typed expressions (typing.Any) are disallowed in *args or **kwargs
+    "COM812",   # Trailing comma missing
+    "D",        # pydocstyle
+    "FIX002",   # Line contains TODO, consider resolving the issue
+    "ISC001",   # Implicitly concatenated string literals on one line
+    "RET",      # flake8-return
+    "TD",       # flake8-todos
+    "CPY001",   # Missing copyright notice at top of file
+]
+[tool.ruff.lint.per-file-ignores]
+"src/**/prompt.py" = ["ERA001", "N806", "E501", "S608"]
+"tests/**/*.py" = ["ALL"]
+
+[tool.ruff.lint.isort]
+# Treat flat modules under `src/` as first-party for import sorting
+known-first-party = ["api", "agent", "rag", "config", "product_db"]
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "."
+exclude = ["tests"]
+
+# Type checking settings
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+warn_return_any = true
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+
+# Allow Any attribute access
+allow_redefinition = true
+
+# Handle missing imports
+ignore_missing_imports = true
+
+# Ignore errors in specific modules
+[[tool.mypy.overrides]]
+module = [
+    "src.services.google_drive",
+    "src.services.google_slides_service",
+    "src.models.drive_file",
+    "src.settings"
+]
+ignore_errors = true
+
+
+[tool.pytest.ini_options]
+pythonpath = [
+    "src"
+]
+markers = [
+    "asyncio: mark test as an asyncio coroutine",
+    "performance: mark test as a performance benchmark test",
+    "memory: mark test as a memory usage test"
+]
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
+
+[dependency-groups]
+dev = [
+    "mypy>=1.19.1",
+    "ragas>=0.4.2",
+    "streamlit>=1.52.2",
+]
