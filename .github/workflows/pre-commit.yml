@@ -57,3 +57,79 @@ jobs:
       - name: Run tests
         run: |
           uv run pytest --verbose --color=yes
+  
+  sbom_scan:
+    name: Security & License Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Install dependencies
+        run: |
+          uv sync --extra dev
+
+      # 📌 Step 1: Generate SBOM (Syft)
+      - name: Install Syft
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+          syft version
+      - name: Verify Syft Installation
+        run: which syft
+
+      - name: Generate SBOM (Syft)
+        run: syft dir:. -o cyclonedx-json=sbom.json
+
+      # 📌 Step 2: Install Grype for Vulnerability Scanning
+      - name: Install Grype
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+          grype version
+
+      # 📌 Step 3: Scan SBOM for Vulnerabilities
+      - name: Scan for Vulnerabilities
+        run: grype sbom:sbom.json -o json > grype-report.json
+
+      # 📌 Step 6: ORT - Deep License & SBOM Scan (Using ORT GitHub Action)
+      - name: Use HTTPS instead of SSH for Git cloning
+        run: git config --global url.https://github.com/.insteadOf ssh://git@github.com/
+
+      - name: Checkout project
+        uses: actions/checkout@v3
+        with:
+          repository: 'jshttp/mime-types'
+
+      - name: Run GitHub Action for ORT
+        uses: oss-review-toolkit/ort-ci-github-action@v1
+        with:
+          allow-dynamic-versions: 'true'
+          ort-cli-args: '-P ort.analyzer.enabledPackageManagers=NPM,Yarn,Yarn2'
+
+      # 📌 Step 7: Upload Reports as Artifacts
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.json
+
+      - name: Upload Grype Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: grype-report
+          path: grype-report.json
+
+      - name: Upload ORT Reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: ort-reports
+          path: ort-results/
