@@ -6,11 +6,13 @@ on:
     paths:
       - '**/pyproject.toml'
       - '**/uv.lock'
+      - '.github/workflows/security-sbom.yml'
   pull_request:
     branches: [main, develop]
     paths:
       - '**/pyproject.toml'
       - '**/uv.lock'
+      - '.github/workflows/security-sbom.yml'
 
 jobs:
   sbom_scan:
