@@ -1,0 +1,77 @@
+name: Security Scanner 
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - '**/pyproject.toml'
+      - '**/uv.lock'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - '**/pyproject.toml'
+      - '**/uv.lock'
+
+jobs:
+  sbom_scan:
+    name: Security & License Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "0.10.12"
+
+      - name: Install dependencies
+        run: |
+          uv sync --extra dev
+
+      # 📌 Step 1: Generate SBOM (Syft)
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0.24.0
+        with:
+          path: .
+          format: 'cyclonedx-json'
+          output-file: './sbom.json'
+
+      # 📌 Step 2: Scan SBOM for Vulnerabilities
+      - name: Scan for Vulnerabilities
+        uses: anchore/scan-action@v7.3.2
+        with:
+          sbom: "./sbom.json"
+          output-format: json
+          output-file: "./grype-report.json"
+
+      # 📌 Step 3: ORT - Deep License & SBOM Scan (Using ORT GitHub Action)
+      - name: Run GitHub Action for ORT
+        uses: oss-review-toolkit/ort-ci-github-action@v1
+        with:
+          allow-dynamic-versions: 'false'
+          ort-cli-args: '-P ort.analyzer.enabledPackageManagers=Python'
+
+      # 📌 Step 4: Upload Reports as Artifacts
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.json
+
+      - name: Upload Grype Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: grype-report
+          path: grype-report.json
+
+      - name: Upload ORT Reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: ort-reports
+          path: ort-results/
