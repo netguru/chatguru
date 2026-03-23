@@ -1,4 +1,4 @@
-name: Security Scanner 
+name: Security Scanner
 
 on:
   push:
@@ -6,13 +6,13 @@ on:
     paths:
       - '**/pyproject.toml'
       - '**/uv.lock'
-      - '.github/workflows/security-sbom.yml'
+      - '.github/workflows/security-scanner.yml'
   pull_request:
     branches: [main, develop]
     paths:
       - '**/pyproject.toml'
       - '**/uv.lock'
-      - '.github/workflows/security-sbom.yml'
+      - '.github/workflows/security-scanner.yml'
 
 jobs:
   sbom_scan:
