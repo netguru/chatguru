@@ -6,7 +6,7 @@ A Software Bill of Materials (SBOM) is essentially a detailed inventory of all t
 
 ## Result
 
-Script return 3 artifacts:
-1. Syft SBOM result in json file
-2. Grype vulnerability scan results in json
+The script produces three artifacts:
+1. Syft SBOM result in JSON file
+2. Grype vulnerability scan results in JSON
 3. ORT report in HTML files
