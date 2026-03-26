@@ -1,0 +1,21 @@
+# ============================================================================
+# chatguru Agent - Frontend Dockerfile
+# ============================================================================
+# Development image with hot-reload via Vite dev server.
+
+FROM node:24-alpine
+
+WORKDIR /app
+
+# Copy package files first for better layer caching
+COPY frontend/package*.json ./
+
+# Install dependencies
+RUN npm install
+
+# Copy the rest of the frontend source
+COPY frontend/ .
+
+EXPOSE 5173
+
+CMD ["npm", "run", "dev"]

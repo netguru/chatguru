@@ -41,7 +41,7 @@ By participating in this project, you agree to maintain a respectful and inclusi
 - [uv](https://github.com/astral-sh/uv) package manager
 - Git
 
-> Note: The full React frontend now lives in a separate repository. This repo only contains the backend and a minimal HTML page for smoke testing.
+> Note: The React/Vite frontend lives in the `frontend/` directory.
 
 ### Initial Setup
 
@@ -128,7 +128,10 @@ make pre-commit
 
 ### Frontend Code Style
 
-The production frontend is maintained in a separate repository. Follow that project's guidelines for frontend contributions.
+Frontend code lives in `frontend/`. We use:
+
+- **Biome** for formatting and linting (`cd frontend && npx biome check .`)
+- **TypeScript** strict mode
 
 ## ✅ Testing Requirements
 
