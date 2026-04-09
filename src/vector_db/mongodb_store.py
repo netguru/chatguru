@@ -8,7 +8,12 @@ from langchain_openai import AzureOpenAIEmbeddings
 from pymongo import MongoClient, errors
 from pymongo.operations import SearchIndexModel
 
-from config import get_llm_settings, get_logger, get_vector_db_settings
+from config import (
+    get_llm_http_sync_client,
+    get_llm_settings,
+    get_logger,
+    get_vector_db_settings,
+)
 
 if TYPE_CHECKING:
     from pymongo.collection import Collection
@@ -90,12 +95,16 @@ class MongoVectorStore:
         ][self._collection_name]
 
         # Initialize embeddings model
-        self._embeddings = AzureOpenAIEmbeddings(
-            azure_deployment=llm_settings.embedding_deployment_name,
-            api_key=llm_settings.api_key,
-            azure_endpoint=llm_settings.endpoint,
-            api_version=llm_settings.api_version,
-        )
+        emb_kw: dict[str, Any] = {
+            "azure_deployment": llm_settings.embedding_deployment_name,
+            "api_key": llm_settings.api_key,
+            "azure_endpoint": llm_settings.endpoint,
+            "api_version": llm_settings.api_version,
+        }
+        http_client = get_llm_http_sync_client()
+        if http_client is not None:
+            emb_kw["http_client"] = http_client
+        self._embeddings = AzureOpenAIEmbeddings(**emb_kw)
 
         logger.info(
             "MongoVectorStore initialized: %s/%s",

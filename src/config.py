@@ -6,6 +6,7 @@ from logging import Logger
 from logging.config import dictConfig
 from pathlib import Path
 
+import httpx
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -179,6 +180,10 @@ class LLMSettings(BaseSettings):
         default=1536,
         description="Embedding vector dimensions (1536 for text-embedding-ada-002)",
     )
+    ssl_verify: bool = Field(
+        default=True,
+        description="Verify TLS certificates for LLM HTTP clients (set false only for local/dev gateways with mismatched certs)",
+    )
 
 
 @lru_cache
@@ -225,6 +230,24 @@ class LangfuseSettings(BaseSettings):
 def get_llm_settings() -> LLMSettings:
     """Get LLM settings."""
     return LLMSettings()
+
+
+def get_llm_http_sync_client() -> httpx.Client | None:
+    """Return a sync httpx client with TLS verification disabled, or None to use defaults."""
+    if get_llm_settings().ssl_verify:
+        return None
+    return httpx.Client(
+        verify=False  # noqa: S501
+    )  # — only when LLM_SSL_VERIFY=false (dev gateways)
+
+
+def get_llm_http_async_client() -> httpx.AsyncClient | None:
+    """Return an async httpx client with TLS verification disabled, or None to use defaults."""
+    if get_llm_settings().ssl_verify:
+        return None
+    return httpx.AsyncClient(
+        verify=False  # noqa: S501
+    )  # — only when LLM_SSL_VERIFY=false (dev gateways)
 
 
 @lru_cache

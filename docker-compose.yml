@@ -1,9 +1,11 @@
 # chatguru Agent - Docker Compose
 # Runs the FastAPI backend with WebSocket streaming and separate vector database.
 #
-# Usage:
-#   MongoDB (default): docker compose up
-#   SQLite:            docker compose --profile sqlite up
+# Usage (pick ONE profile — they are mutually exclusive):
+#   MongoDB stack:  docker compose --profile mongodb up --build
+#   SQLite stack:   docker compose --profile sqlite up --build
+#
+# Or: make docker-run / make docker-run-sqlite
 
 services:
   # --------------------------------------------------------------------------
@@ -22,6 +24,7 @@ services:
       - LLM_API_KEY=${LLM_API_KEY}
       - LLM_API_VERSION=${LLM_API_VERSION}
       - LLM_EMBEDDING_DEPLOYMENT_NAME=${LLM_EMBEDDING_DEPLOYMENT_NAME}
+      - LLM_SSL_VERIFY=${LLM_SSL_VERIFY:-true}
     volumes:
       - vector-db-data:/data
     restart: unless-stopped
@@ -38,6 +41,7 @@ services:
   # Local MongoDB Atlas (with Vector Search support)
   # --------------------------------------------------------------------------
   mongodb:
+    profiles: ["mongodb"]
     image: mongodb/mongodb-atlas-local:8.0
     ports:
       - "27017:27017"
@@ -57,6 +61,7 @@ services:
   # MongoDB Vector Database Service (API wrapper)
   # --------------------------------------------------------------------------
   mongo-vector-db:
+    profiles: ["mongodb"]
     build:
       context: .
       dockerfile: docker/Dockerfile.mongodb
@@ -68,6 +73,7 @@ services:
       - LLM_API_KEY=${LLM_API_KEY}
       - LLM_API_VERSION=${LLM_API_VERSION}
       - LLM_EMBEDDING_DEPLOYMENT_NAME=${LLM_EMBEDDING_DEPLOYMENT_NAME}
+      - LLM_SSL_VERIFY=${LLM_SSL_VERIFY:-true}
       # Local MongoDB settings
       - VECTOR_DB_MONGODB_URI=mongodb://mongodb:27017/?directConnection=true
       - VECTOR_DB_MONGODB_DATABASE=${VECTOR_DB_MONGODB_DATABASE:-products}
@@ -89,6 +95,7 @@ services:
   # Main Agent Service (MongoDB backend)
   # --------------------------------------------------------------------------
   chatguru-agent:
+    profiles: ["mongodb"]
     build:
       context: .
       dockerfile: docker/Dockerfile
@@ -101,6 +108,7 @@ services:
       - LLM_DEPLOYMENT_NAME=${LLM_DEPLOYMENT_NAME}
       - LLM_API_VERSION=${LLM_API_VERSION}
       - LLM_EMBEDDING_DEPLOYMENT_NAME=${LLM_EMBEDDING_DEPLOYMENT_NAME}
+      - LLM_SSL_VERIFY=${LLM_SSL_VERIFY:-true}
 
       # Langfuse Configuration (Observability & Tracing)
       - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
@@ -153,6 +161,7 @@ services:
       - LLM_DEPLOYMENT_NAME=${LLM_DEPLOYMENT_NAME}
       - LLM_API_VERSION=${LLM_API_VERSION}
       - LLM_EMBEDDING_DEPLOYMENT_NAME=${LLM_EMBEDDING_DEPLOYMENT_NAME}
+      - LLM_SSL_VERIFY=${LLM_SSL_VERIFY:-true}
 
       # Langfuse Configuration (Observability & Tracing)
       - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}

@@ -9,7 +9,7 @@
 #   2. make env-setup      # Copy environment template
 #   3. make dev            # Start backend development server
 
-.PHONY: help install setup test coverage rag-eval ragas-llm-eval rag_dashboard dev run docker-build docker-run docker-run-detached docker-stop docker-down docker-logs docker-logs-backend docker-clean pre-commit-install pre-commit promptfoo-eval promptfoo-view promptfoo-test env-setup version clean
+.PHONY: help install setup test coverage rag-eval ragas-llm-eval rag_dashboard dev run docker-build docker-run docker-run-sqlite docker-run-detached docker-stop docker-down docker-logs docker-logs-backend docker-logs-backend-sqlite docker-clean pre-commit-install pre-commit promptfoo-eval promptfoo-view promptfoo-test env-setup version clean
 
 # ============================================================================
 # Default Target
@@ -106,39 +106,47 @@ docker-build: ## Build backend Docker image
 	docker build -f docker/Dockerfile -t chatguru-agent .
 	@echo "✅ Backend image built successfully"
 
-docker-run: ## Run with Docker Compose (builds and starts in foreground)
-	@echo "🐳 Starting with Docker Compose..."
+docker-run: ## Run MongoDB stack with Docker Compose (foreground)
+	@echo "🐳 Starting MongoDB profile (docker compose --profile mongodb)..."
 	@echo "🔧 Backend API at http://localhost:8000"
 	@echo "📡 WebSocket endpoint at ws://localhost:8000/ws"
 	@echo "🧪 Minimal test UI at http://localhost:8000/"
-	docker-compose up --build
+	docker compose --profile mongodb up --build
 
-docker-run-detached: ## Run with Docker Compose in background (detached mode)
-	@echo "🐳 Starting with Docker Compose (detached)..."
-	docker-compose up --build -d
+docker-run-sqlite: ## Run SQLite vector stack with Docker Compose (foreground)
+	@echo "🐳 Starting SQLite profile (docker compose --profile sqlite)..."
+	@echo "🔧 Backend API at http://localhost:8000"
+	docker compose --profile sqlite up --build
+
+docker-run-detached: ## Run MongoDB stack with Docker Compose in background
+	@echo "🐳 Starting with Docker Compose (detached, MongoDB profile)..."
+	docker compose --profile mongodb up --build -d
 	@echo "🔧 Backend API at http://localhost:8000"
 	@echo "📡 WebSocket endpoint at ws://localhost:8000/ws"
 	@echo "🧪 Minimal test UI at http://localhost:8000/"
 
 docker-stop: ## Stop Docker Compose services (keeps containers)
 	@echo "🛑 Stopping Docker Compose services..."
-	docker-compose stop
+	docker compose --profile mongodb --profile sqlite stop
 
 docker-down: ## Stop and remove Docker Compose containers
 	@echo "🗑️  Stopping and removing Docker Compose containers..."
-	docker-compose down
+	docker compose --profile mongodb --profile sqlite down
 
 docker-logs: ## View all Docker Compose logs (follow mode)
 	@echo "📋 Viewing Docker Compose logs..."
-	docker-compose logs -f
+	docker compose --profile mongodb --profile sqlite logs -f
 
-docker-logs-backend: ## View backend service logs only
+docker-logs-backend: ## View chatguru-agent logs (MongoDB stack)
 	@echo "📋 Viewing backend logs..."
-	docker-compose logs -f chatguru-agent
+	docker compose --profile mongodb logs -f chatguru-agent
+
+docker-logs-backend-sqlite: ## View chatguru-agent-sqlite logs
+	docker compose --profile sqlite logs -f chatguru-agent-sqlite
 
 docker-clean: docker-down ## Clean Docker resources (containers, volumes, networks)
 	@echo "🧹 Cleaning Docker resources..."
-	@docker-compose down -v 2>/dev/null || true
+	@docker compose --profile mongodb --profile sqlite down -v 2>/dev/null || true
 	@echo "✅ Cleanup complete"
 
 # ============================================================================

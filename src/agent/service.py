@@ -17,7 +17,13 @@ from langfuse import Langfuse, get_client, propagate_attributes
 from langfuse.langchain import CallbackHandler as LangfuseCallbackHandler
 
 from agent.prompt import SYSTEM_PROMPT
-from config import get_langfuse_settings, get_llm_settings, get_logger
+from config import (
+    get_langfuse_settings,
+    get_llm_http_async_client,
+    get_llm_http_sync_client,
+    get_llm_settings,
+    get_logger,
+)
 from vector_db import VectorDatabase
 
 logger = get_logger("agent.service")
@@ -139,13 +145,21 @@ class Agent:
         # Initialize Langfuse tracing (singleton)
         _init_langfuse()
 
-        llm = AzureChatOpenAI(
-            azure_deployment=get_llm_settings().deployment_name,
-            api_key=get_llm_settings().api_key,
-            azure_endpoint=get_llm_settings().endpoint,
-            api_version=get_llm_settings().api_version,
-            streaming=True,
-        )
+        llm_settings = get_llm_settings()
+        llm_kw: dict[str, Any] = {
+            "azure_deployment": llm_settings.deployment_name,
+            "api_key": llm_settings.api_key,
+            "azure_endpoint": llm_settings.endpoint,
+            "api_version": llm_settings.api_version,
+            "streaming": True,
+        }
+        sync_client = get_llm_http_sync_client()
+        if sync_client is not None:
+            llm_kw["http_client"] = sync_client
+        async_client = get_llm_http_async_client()
+        if async_client is not None:
+            llm_kw["http_async_client"] = async_client
+        llm = AzureChatOpenAI(**llm_kw)
 
         # Create tools based on available backends
         self.tools: list[BaseTool] = []
