@@ -24,7 +24,7 @@ from typing import Any, cast
 import pandas as pd
 from datasets import Dataset
 from dotenv import load_dotenv
-from langchain_openai import AzureChatOpenAI, AzureOpenAIEmbeddings
+from langchain_openai import AzureChatOpenAI, AzureOpenAIEmbeddings, ChatOpenAI
 from openai import OpenAI
 from pydantic import SecretStr
 from ragas import evaluate
@@ -65,21 +65,41 @@ class RagasLLMEvaluator:
         llm_api_key = os.getenv("LLM_API_KEY")
         llm_api_version = os.getenv("LLM_API_VERSION")
         llm_deployment_name = os.getenv("LLM_DEPLOYMENT_NAME")
+        llm_compat_base = (os.getenv("LLM_OPENAI_BASE_URL") or "").strip()
         missing_vars_msg = "Missing required environment variables for LLM"
-        if not all([llm_endpoint, llm_api_key, llm_api_version, llm_deployment_name]):
+        if not all([llm_api_key, llm_deployment_name]):
             raise ValueError(missing_vars_msg)
-        self.gen_llm = AzureChatOpenAI(
-            azure_endpoint=str(llm_endpoint),
-            api_key=SecretStr(str(llm_api_key)),
-            api_version=str(llm_api_version),
-            azure_deployment=str(llm_deployment_name),
-            temperature=0,
-        )
+        self.gen_llm: ChatOpenAI | AzureChatOpenAI
+        if llm_compat_base:
+            endpoint_required_msg = (
+                "LLM_ENDPOINT is required for embeddings when using RAGAS eval"
+            )
+            if not llm_endpoint:
+                raise ValueError(endpoint_required_msg)
+            self.gen_llm = ChatOpenAI(
+                model=str(llm_deployment_name),
+                api_key=SecretStr(str(llm_api_key)),
+                base_url=llm_compat_base.rstrip("/"),
+                default_headers={"api-key": str(llm_api_key)},
+                temperature=0,
+            )
+            eval_base = llm_compat_base.rstrip("/")
+        else:
+            if not all([llm_endpoint, llm_api_version]):
+                raise ValueError(missing_vars_msg)
+            self.gen_llm = AzureChatOpenAI(
+                azure_endpoint=str(llm_endpoint),
+                api_key=SecretStr(str(llm_api_key)),
+                api_version=str(llm_api_version),
+                azure_deployment=str(llm_deployment_name),
+                temperature=0,
+            )
+            eval_base = f"{str(llm_endpoint).rstrip('/')}/openai/deployments/{llm_deployment_name}"
 
         # Initialize evaluation LLM (using RAGAS llm_factory for structured outputs)
         openai_client = OpenAI(
             api_key=str(llm_api_key),
-            base_url=f"{llm_endpoint!s}/openai/deployments/{llm_deployment_name!s}",
+            base_url=eval_base,
             default_headers={"api-key": str(llm_api_key)},
         )
         self.eval_llm = llm_factory(

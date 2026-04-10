@@ -167,6 +167,14 @@ class LLMSettings(BaseSettings):
         default="",
         description="LLM deployment name",
     )
+    openai_compat_base_url: str = Field(
+        default="",
+        description=(
+            "If set, chat uses OpenAI v1-compatible Chat Completions at this base URL "
+            "(e.g. Azure APIM .../plc/openai/v1). LLM_DEPLOYMENT_NAME is the model id. "
+            "Auth uses the api-key header (APIM subscription key)."
+        ),
+    )
     temperature: float = Field(
         default=1,
         description="LLM temperature",

@@ -12,13 +12,36 @@ from langchain_core.messages import (
 )
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, ToolException, tool
-from langchain_openai import AzureChatOpenAI
+from langchain_openai import AzureChatOpenAI, ChatOpenAI
 from langfuse import Langfuse, get_client, propagate_attributes
 from langfuse.langchain import CallbackHandler as LangfuseCallbackHandler
 
 from agent.prompt import SYSTEM_PROMPT
 from config import get_langfuse_settings, get_llm_settings, get_logger
 from vector_db import VectorDatabase
+
+
+def _build_chat_llm() -> AzureChatOpenAI | ChatOpenAI:
+    """Azure OpenAI resource or OpenAI v1-compatible base URL (e.g. APIM)."""
+    settings = get_llm_settings()
+    compat_base = settings.openai_compat_base_url.strip()
+    if compat_base:
+        return ChatOpenAI(
+            model=settings.deployment_name,
+            api_key=settings.api_key,
+            base_url=compat_base.rstrip("/"),
+            default_headers={"api-key": settings.api_key},
+            streaming=True,
+            temperature=settings.temperature,
+        )
+    return AzureChatOpenAI(
+        azure_deployment=settings.deployment_name,
+        api_key=settings.api_key,
+        azure_endpoint=settings.endpoint,
+        api_version=settings.api_version,
+        streaming=True,
+    )
+
 
 logger = get_logger("agent.service")
 
@@ -139,13 +162,7 @@ class Agent:
         # Initialize Langfuse tracing (singleton)
         _init_langfuse()
 
-        llm = AzureChatOpenAI(
-            azure_deployment=get_llm_settings().deployment_name,
-            api_key=get_llm_settings().api_key,
-            azure_endpoint=get_llm_settings().endpoint,
-            api_version=get_llm_settings().api_version,
-            streaming=True,
-        )
+        llm = _build_chat_llm()
 
         # Create tools based on available backends
         self.tools: list[BaseTool] = []
