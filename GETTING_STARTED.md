@@ -2,7 +2,7 @@
 
 This guide will walk you through setting up chatguru Agent from scratch, step by step.
 
-> Note: The full React frontend now lives in a separate repository. This repo only ships a minimal HTML page at `/` for smoke testing. Run your preferred frontend separately and point it to the backend WebSocket at `/ws`.
+> Note: The React/Vite frontend lives in the `frontend/` directory. Run `make frontend-dev` to start it at http://localhost:5173.
 
 ## 📋 Prerequisites
 
@@ -23,7 +23,11 @@ Before you begin, ensure you have the following installed on your system:
      ```
    - Verify: `uv --version`
 
-4. **Git**
+4. **Node.js 20+** (required by React 19)
+   - Check version: `node --version`
+   - Download: [nodejs.org](https://nodejs.org/)
+
+5. **Git**
    - Check version: `git --version`
    - Download: [git-scm.com](https://git-scm.com/downloads)
 
@@ -162,10 +166,16 @@ If tests fail, check:
 
 ### Step 6: Start the Development Servers
 
-You'll need a terminal window for the backend (the only component in this repo). An external/full frontend should be run separately (in its own repo/container) and pointed to this backend.
+Start the backend:
 
 ```bash
 make dev
+```
+
+Start the frontend in a separate terminal:
+
+```bash
+make frontend-dev
 ```
 
 **Expected output:**
@@ -180,6 +190,7 @@ INFO:     Uvicorn running on http://0.0.0.0:8000
 
 Open your browser and navigate to:
 
+- **Frontend**: http://localhost:5173
 - **Minimal test UI**: http://localhost:8000/ (smoke testing only)
 - **Backend API Docs**: http://localhost:8000/docs
 - **Backend Health Check**: http://localhost:8000/health
@@ -189,12 +200,15 @@ You should see the chat interface! Try sending a message to test the connection.
 ## ✅ Verification Checklist
 
 - [ ] Python 3.12+ installed and verified
+- [ ] Node.js 20+ installed and verified
 - [ ] uv installed and verified
 - [ ] Repository cloned successfully
 - [ ] Dependencies installed (`make setup`)
 - [ ] Environment variables configured (`.env` file)
 - [ ] Tests passing (`make test`)
 - [ ] Backend server running (`make dev`)
+- [ ] Frontend server running (`make frontend-dev`)
+- [ ] Can access frontend at http://localhost:5173
 - [ ] Can access API docs at http://localhost:8000/docs
 - [ ] Chat interface loads and responds
 
