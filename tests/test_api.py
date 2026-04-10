@@ -145,7 +145,7 @@ def test_websocket_chat_with_empty_string_session_id(async_app: TestClient) -> N
 
 def test_websocket_invalid_json(async_app: TestClient) -> None:
     """Test WebSocket with invalid JSON message."""
-    with patch("src.agent.service.AzureChatOpenAI"):
+    with patch("src.agent.service._build_chat_llm"):
         with async_app.websocket_connect("/ws") as websocket:
             # Send invalid JSON
             websocket.send_text("invalid json")
@@ -160,7 +160,7 @@ def test_websocket_invalid_json(async_app: TestClient) -> None:
 
 def test_websocket_non_dict_json(async_app: TestClient) -> None:
     """Test WebSocket with valid JSON that is not a dict (e.g., array or string)."""
-    with patch("src.agent.service.AzureChatOpenAI"):
+    with patch("src.agent.service._build_chat_llm"):
         with async_app.websocket_connect("/ws") as websocket:
             # Send valid JSON array (not a dict)
             websocket.send_text("[1, 2, 3]")
@@ -184,7 +184,7 @@ def test_websocket_non_dict_json(async_app: TestClient) -> None:
 
 def test_websocket_empty_message(async_app: TestClient) -> None:
     """Test WebSocket with empty message (should fail validation)."""
-    with patch("src.agent.service.AzureChatOpenAI"):
+    with patch("src.agent.service._build_chat_llm"):
         with async_app.websocket_connect("/ws") as websocket:
             websocket.send_json({"message": "", "session_id": "test-session"})
 
@@ -198,7 +198,7 @@ def test_websocket_empty_message(async_app: TestClient) -> None:
 
 def test_websocket_missing_message(async_app: TestClient) -> None:
     """Test WebSocket without message field (should fail validation)."""
-    with patch("src.agent.service.AzureChatOpenAI"):
+    with patch("src.agent.service._build_chat_llm"):
         with async_app.websocket_connect("/ws") as websocket:
             websocket.send_json({"session_id": "test-session"})
 
@@ -213,7 +213,7 @@ def test_websocket_message_too_long(async_app: TestClient) -> None:
     """Test WebSocket with message too long (should fail validation)."""
     long_message = "x" * 2001  # Exceeds 2000 character limit
 
-    with patch("src.agent.service.AzureChatOpenAI"):
+    with patch("src.agent.service._build_chat_llm"):
         with async_app.websocket_connect("/ws") as websocket:
             websocket.send_json({"message": long_message})
 
@@ -511,7 +511,7 @@ def test_websocket_error_response_includes_session_id(async_app: TestClient) -> 
 
 def test_websocket_validation_error_preserves_session_id(async_app: TestClient) -> None:
     """Test that validation errors preserve session_id from the request."""
-    with patch("src.agent.service.AzureChatOpenAI"):
+    with patch("src.agent.service._build_chat_llm"):
         with async_app.websocket_connect("/ws") as websocket:
             # Send invalid message (empty) but with valid session_id
             websocket.send_json(

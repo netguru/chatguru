@@ -12,12 +12,12 @@ from src.agent.service import Agent
 
 def test_create_agent() -> None:
     """Test that the agent is created correctly."""
-    with patch("src.agent.service.AzureChatOpenAI") as mock_class:
+    with patch("src.agent.service._build_chat_llm") as mock_build:
         mock_instance = GenericFakeChatModel(messages=iter([]))
         # Use object.__setattr__ to bypass Pydantic validation
         # bind_tools should return self for method chaining
         object.__setattr__(mock_instance, "bind_tools", lambda tools: mock_instance)
-        mock_class.return_value = mock_instance
+        mock_build.return_value = mock_instance
         agent = Agent()
         assert agent is not None
 
@@ -35,12 +35,12 @@ async def test_agent_astream() -> None:
             mock_chunk = AIMessageChunk(content=chunk)
             yield mock_chunk
 
-    with patch("src.agent.service.AzureChatOpenAI") as mock_class:
+    with patch("src.agent.service._build_chat_llm") as mock_build:
         mock_instance = GenericFakeChatModel(messages=iter([]))
         # Use object.__setattr__ to bypass Pydantic validation
         object.__setattr__(mock_instance, "bind_tools", lambda tools: mock_instance)
         object.__setattr__(mock_instance, "astream", mock_astream)
-        mock_class.return_value = mock_instance
+        mock_build.return_value = mock_instance
         agent = Agent()
 
         received_chunks = []
@@ -62,12 +62,12 @@ async def test_agent_astream_empty_response() -> None:
         mock_chunk = AIMessageChunk(content="")
         yield mock_chunk
 
-    with patch("src.agent.service.AzureChatOpenAI") as mock_class:
+    with patch("src.agent.service._build_chat_llm") as mock_build:
         mock_instance = GenericFakeChatModel(messages=iter([]))
         # Use object.__setattr__ to bypass Pydantic validation
         object.__setattr__(mock_instance, "bind_tools", lambda tools: mock_instance)
         object.__setattr__(mock_instance, "astream", mock_astream)
-        mock_class.return_value = mock_instance
+        mock_build.return_value = mock_instance
         agent = Agent()
 
         received_chunks = []
@@ -88,12 +88,12 @@ async def test_agent_astream_single_chunk() -> None:
         mock_chunk = AIMessageChunk(content="Single response")
         yield mock_chunk
 
-    with patch("src.agent.service.AzureChatOpenAI") as mock_class:
+    with patch("src.agent.service._build_chat_llm") as mock_build:
         mock_instance = GenericFakeChatModel(messages=iter([]))
         # Use object.__setattr__ to bypass Pydantic validation
         object.__setattr__(mock_instance, "bind_tools", lambda tools: mock_instance)
         object.__setattr__(mock_instance, "astream", mock_astream)
-        mock_class.return_value = mock_instance
+        mock_build.return_value = mock_instance
         agent = Agent()
 
         received_chunks = []
@@ -135,12 +135,12 @@ async def test_agent_with_tool_call() -> None:
     mock_db.search.return_value = []
     mock_db.format_products.return_value = "No products found."
 
-    with patch("src.agent.service.AzureChatOpenAI") as mock_class:
+    with patch("src.agent.service._build_chat_llm") as mock_build:
         mock_instance = GenericFakeChatModel(messages=iter([]))
         # Use object.__setattr__ to bypass Pydantic validation
         object.__setattr__(mock_instance, "bind_tools", lambda tools: mock_instance)
         object.__setattr__(mock_instance, "astream", mock_astream)
-        mock_class.return_value = mock_instance
+        mock_build.return_value = mock_instance
         agent = Agent(vector_database=mock_db)
 
         received_chunks = []

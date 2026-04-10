@@ -100,6 +100,7 @@ services:
       - LLM_API_KEY=${LLM_API_KEY}
       - LLM_DEPLOYMENT_NAME=${LLM_DEPLOYMENT_NAME}
       - LLM_API_VERSION=${LLM_API_VERSION}
+      - LLM_OPENAI_BASE_URL=${LLM_OPENAI_BASE_URL:-}
       - LLM_EMBEDDING_DEPLOYMENT_NAME=${LLM_EMBEDDING_DEPLOYMENT_NAME}
 
       # Langfuse Configuration (Observability & Tracing)
@@ -152,6 +153,7 @@ services:
       - LLM_API_KEY=${LLM_API_KEY}
       - LLM_DEPLOYMENT_NAME=${LLM_DEPLOYMENT_NAME}
       - LLM_API_VERSION=${LLM_API_VERSION}
+      - LLM_OPENAI_BASE_URL=${LLM_OPENAI_BASE_URL:-}
       - LLM_EMBEDDING_DEPLOYMENT_NAME=${LLM_EMBEDDING_DEPLOYMENT_NAME}
 
       # Langfuse Configuration (Observability & Tracing)
