@@ -43,9 +43,11 @@ RUN uv sync --frozen
 # ----------------------------------------------------------------------------
 # Application Code
 # ----------------------------------------------------------------------------
-# Copy application source code (including API templates)
+# Copy application source code (including API templates and Alembic migrations)
 # This is done after dependencies to leverage Docker layer caching
 COPY src/ ./src/
+COPY docker/entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
 # ----------------------------------------------------------------------------
 # Runtime Configuration
@@ -56,6 +58,7 @@ EXPOSE 8000
 # Set working directory to source code location
 WORKDIR /app/src
 
-# Run FastAPI application with uvicorn ASGI server
-# Host 0.0.0.0 allows external connections (required for Docker)
+# entrypoint.sh runs `alembic upgrade head` when PERSISTENCE_DATABASE_URL is set,
+# then execs the CMD below. Migrations are idempotent — safe to run on every start.
+ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["uv", "run", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -9,7 +9,7 @@
 #   2. make env-setup      # Copy environment template
 #   3. make dev            # Start backend development server
 
-.PHONY: help install setup test coverage rag-eval ragas-llm-eval rag_dashboard dev run docker-build docker-run docker-run-detached docker-stop docker-down docker-logs docker-logs-backend docker-clean pre-commit-install pre-commit promptfoo-eval promptfoo-view promptfoo-test env-setup version clean
+.PHONY: help install setup test coverage rag-eval ragas-llm-eval rag_dashboard dev run docker-build docker-run docker-run-detached docker-stop docker-down docker-logs docker-logs-backend docker-clean pre-commit-install pre-commit promptfoo-eval promptfoo-view promptfoo-test env-setup version clean migrate db-downgrade db-revision
 
 # ============================================================================
 # Default Target
@@ -69,6 +69,24 @@ run: ## Run the production server (no auto-reload)
 	@echo "📡 WebSocket streaming enabled at ws://localhost:8000/ws"
 	@echo "🌐 Web interface available at http://localhost:8000"
 	uv run python src/main.py
+
+# ============================================================================
+# Database migrations (Alembic — uses PERSISTENCE_DATABASE_URL from .env)
+# Schema columns/indexes: keep src/persistence/tables.py in sync with alembic/versions/.
+# ============================================================================
+
+ALEMBIC_INI := src/persistence/sqlalchemy/alembic.ini
+
+migrate: ## Apply all pending Alembic migrations (alembic upgrade head)
+	@echo "📦 Applying database migrations (PERSISTENCE_DATABASE_URL)..."
+	uv run alembic -c $(ALEMBIC_INI) upgrade head
+
+db-downgrade: ## Roll back one migration revision
+	uv run alembic -c $(ALEMBIC_INI) downgrade -1
+
+db-revision: ## Autogenerate a new revision from persistence/sqlalchemy/tables.py (requires MESSAGE=...)
+	@test -n "$(MESSAGE)" || (echo "Usage: make db-revision MESSAGE='describe change'" && exit 1)
+	uv run alembic -c $(ALEMBIC_INI) revision --autogenerate -m "$(MESSAGE)"
 
 # ============================================================================
 # Testing Commands
