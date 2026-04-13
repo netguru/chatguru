@@ -80,18 +80,16 @@ The system is designed to evolve from a simple chat interface to a full agentic 
 **Purpose**: Semantic product search with vector embeddings
 
 **Architecture**:
-- **Separate Container**: Runs as `product-db` service on port 8001
+- **Separate Container**: Runs as `vector-db` service on port 8001 (Docker Compose sqlite profile)
 - **sqlite-vec**: SQLite extension for vector similarity search
 - **Azure OpenAI Embeddings**: 1536-dimensional vectors (text-embedding-ada-002)
 
 **Components**:
-- `ProductStore`: Core database logic with embedding generation
-- `SQLiteProductDatabase`: HTTP client for agent to call the service
-- `ProductDatabase`: Abstract interface for future backends (MongoDB)
+- `VectorStore` / `vector_db/store.py`: Core SQLite + sqlite-vec logic and **inline DDL** for `products` and embedding tables
+- `SQLiteVectorDatabase`: HTTP client for the agent to call the service
+- Pluggable backends (e.g. MongoDB) via `VECTOR_DB_TYPE`
 
-**Database Schema**:
-- `products` table: Product data (id, name, category, brand, price, etc.)
-- `product_embeddings` virtual table: Vector embeddings for semantic search
+**Database schema (RAG):** Defined in application code (`vector_db/store.py`), not in Alembic. Chat history schema is separate (Alembic + `persistence/sqlalchemy/tables.py`). Whether those use the same physical SQLite file is a deployment choice; **where DDL lives in the repo** is documented in [design-decisions.md](design-decisions.md#database-schema-ownership).
 
 **Data Flow**:
 ```

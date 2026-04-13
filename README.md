@@ -291,6 +291,24 @@ The application uses environment variables for configuration. Copy `env.example`
 | `LOG_LEVEL` | Logging level | `INFO` |
 | `VECTOR_DB_TYPE` | Database type | `sqlite` |
 | `VECTOR_DB_SQLITE_URL` | SQLite service URL | `http://product-db:8001` |
+| `PERSISTENCE_DATABASE_URL` | Async SQLAlchemy URL for chat history storage | *(unset — disabled)* |
+
+#### Chat history persistence
+
+`PERSISTENCE_DATABASE_URL` is the single toggle for server-side chat history:
+
+- **Unset (default)** — persistence is disabled. The server is stateless: no database is required and no messages are stored. The `/history` and `/conversations` endpoints are not registered at all (they won't appear in `/docs` or return 404).
+- **Set** — persistence is enabled. Messages and conversations are stored per `visitor_id` / `session_id`. Run `make migrate` once after setting the URL to create the schema.
+
+```bash
+# SQLite (local dev / single-node)
+PERSISTENCE_DATABASE_URL=sqlite+aiosqlite:///data/chatguru.db
+
+# PostgreSQL
+PERSISTENCE_DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/chatguru
+```
+
+See [docs/persistence.md](docs/persistence.md) for the full architecture and instructions on adding new database adapters.
 
 See [env.example](env.example) for a complete template with detailed comments.
 
@@ -333,6 +351,13 @@ Responses are streamed as JSON messages:
 - **Health Check**: `GET /health`
 - **API Documentation**: `GET /docs` (Swagger UI)
 - **OpenAPI Schema**: `GET /openapi.json`
+
+The following endpoints are only registered when `PERSISTENCE_DATABASE_URL` is set:
+
+- **`GET /history`** — returns stored messages for a `visitor_id` + `session_id` pair, oldest first.
+  - Query params: `visitor_id` (required), `session_id` (default: `"default"`)
+- **`GET /conversations`** — returns all conversations for a `visitor_id`, newest first.
+  - Query params: `visitor_id` (required)
 
 ## 🛠️ Development
 
@@ -625,7 +650,7 @@ We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for:
 - [ ] **Authentication**: JWT-based API authentication
 - [ ] **Rate Limiting**: API rate limiting and quotas
 - [x] **Session Management**: Client-side persistent conversation history (localStorage) ✅
-- [ ] **Server-side Sessions**: Backend-persisted conversation history
+- [x] **Server-side Sessions**: Backend-persisted conversation history via `PERSISTENCE_DATABASE_URL` (opt-in) ✅
 - [ ] **Multi-tenancy**: Database-backed tenant configuration
 
 ## 📄 License
