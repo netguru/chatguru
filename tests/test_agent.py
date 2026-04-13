@@ -44,7 +44,7 @@ async def test_agent_astream() -> None:
         agent = Agent()
 
         received_chunks = []
-        async for chunk in agent.astream("Hello"):
+        async for chunk in agent.astream([{"role": "user", "content": "Hello"}]):
             received_chunks.append(chunk)
 
         assert len(received_chunks) == len(chunks)
@@ -71,7 +71,7 @@ async def test_agent_astream_empty_response() -> None:
         agent = Agent()
 
         received_chunks = []
-        async for chunk in agent.astream("Hello"):
+        async for chunk in agent.astream([{"role": "user", "content": "Hello"}]):
             received_chunks.append(chunk)
 
         # Empty content should be filtered out
@@ -97,7 +97,7 @@ async def test_agent_astream_single_chunk() -> None:
         agent = Agent()
 
         received_chunks = []
-        async for chunk in agent.astream("Hello"):
+        async for chunk in agent.astream([{"role": "user", "content": "Hello"}]):
             received_chunks.append(chunk)
 
         assert len(received_chunks) == 1
@@ -144,7 +144,9 @@ async def test_agent_with_tool_call() -> None:
         agent = Agent(vector_database=mock_db)
 
         received_chunks = []
-        async for chunk in agent.astream("Show me red jeans"):
+        async for chunk in agent.astream(
+            [{"role": "user", "content": "Show me red jeans"}]
+        ):
             received_chunks.append(chunk)
 
         # Verify the agentic loop worked correctly

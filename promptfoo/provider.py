@@ -69,15 +69,17 @@ async def _run_agent(prompt: str, history: list[dict[str, str]] | None = None) -
 
     Args:
         prompt: The user's message to send to the agent
-        history: Optional conversation history
+        history: Optional prior turns (``role`` / ``content``); combined with ``prompt`` as one transcript
 
     Returns:
         The complete agent response as a string
     """
-    # Create a new Agent instance for each call
-    agent = Agent()
+    transcript: list[dict[str, str]] = []
+    if history:
+        transcript.extend(history)
+    transcript.append({"role": "user", "content": prompt})
 
-    # Collect all streamed chunks into a single response using async comprehension
-    response_chunks = [chunk async for chunk in agent.astream(prompt, history=history)]
+    agent = Agent()
+    response_chunks = [chunk async for chunk in agent.astream(transcript)]
 
     return "".join(response_chunks)

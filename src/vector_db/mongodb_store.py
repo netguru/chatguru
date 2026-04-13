@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from langchain_openai import AzureOpenAIEmbeddings
+from langchain_openai import OpenAIEmbeddings
 from pymongo import MongoClient, errors
 from pymongo.operations import SearchIndexModel
 
@@ -90,11 +90,15 @@ class MongoVectorStore:
         ][self._collection_name]
 
         # Initialize embeddings model
-        self._embeddings = AzureOpenAIEmbeddings(
-            azure_deployment=llm_settings.embedding_deployment_name,
-            api_key=llm_settings.api_key,
-            azure_endpoint=llm_settings.endpoint,
-            api_version=llm_settings.api_version,
+        # OPENAI_EMBEDDINGS_ENDPOINT overrides OPENAI_ENDPOINT when set (e.g. a dedicated
+        # embeddings deployment on a different endpoint).
+        embeddings_base_url = llm_settings.embeddings_endpoint or llm_settings.endpoint
+        embeddings_api_key = llm_settings.embeddings_api_key or llm_settings.api_key
+        self._embeddings = OpenAIEmbeddings(
+            model=llm_settings.embedding_deployment_name,
+            api_key=embeddings_api_key,
+            base_url=embeddings_base_url.rstrip("/"),
+            default_headers={"api-key": embeddings_api_key},
         )
 
         logger.info(

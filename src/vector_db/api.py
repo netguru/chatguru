@@ -5,7 +5,7 @@ import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Annotated, Any, Protocol
 
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
@@ -93,10 +93,11 @@ def _create_store() -> VectorStoreProtocol:
         store: VectorStoreProtocol = MongoVectorStore()
         return store
 
-    # Default to SQLite
+    # Default to SQLite — same default file as chat persistence (see env.example)
     from vector_db.store import VectorStore  # noqa: PLC0415
 
-    sqlite_store: VectorStoreProtocol = VectorStore(db_path="/data/products.db")
+    db_path = os.getenv("VECTOR_SQLITE_DB_PATH", "/data/chatguru.db")
+    sqlite_store: VectorStoreProtocol = VectorStore(db_path=db_path)
     return sqlite_store
 
 
@@ -134,7 +135,7 @@ app = FastAPI(
 )
 
 
-@app.get("/health", response_model=HealthResponse)
+@app.get("/health")
 def health() -> HealthResponse:
     """Health check endpoint."""
     store = get_store()
@@ -144,17 +145,17 @@ def health() -> HealthResponse:
     return HealthResponse(status="healthy", product_count=store.count())
 
 
-@app.get("/count", response_model=CountResponse)
+@app.get("/count")
 def count() -> CountResponse:
     """Get total product count."""
     store = get_store()
     return CountResponse(count=store.count())
 
 
-@app.get("/search", response_model=SearchResponse)
+@app.get("/search")
 def search(
-    q: str = Query(..., description="Search query"),
-    limit: int = Query(10, ge=1, le=50, description="Max results"),
+    q: Annotated[str, Query(description="Search query")],
+    limit: Annotated[int, Query(ge=1, le=50, description="Max results")] = 10,
 ) -> SearchResponse:
     """Semantic search."""
     store = get_store()

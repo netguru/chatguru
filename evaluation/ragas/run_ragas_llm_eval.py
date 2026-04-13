@@ -24,7 +24,7 @@ from typing import Any, cast
 import pandas as pd
 from datasets import Dataset
 from dotenv import load_dotenv
-from langchain_openai import AzureChatOpenAI, AzureOpenAIEmbeddings, ChatOpenAI
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from openai import OpenAI
 from pydantic import SecretStr
 from ragas import evaluate
@@ -61,45 +61,25 @@ class RagasLLMEvaluator:
         self.vector_db = self._setup_vector_db() if use_vector_db else None
 
         # Initialize generation LLM (for answer generation)
-        llm_endpoint = os.getenv("LLM_ENDPOINT")
+        openai_endpoint = (os.getenv("OPENAI_ENDPOINT") or "").strip()
         llm_api_key = os.getenv("LLM_API_KEY")
-        llm_api_version = os.getenv("LLM_API_VERSION")
         llm_deployment_name = os.getenv("LLM_DEPLOYMENT_NAME")
-        llm_compat_base = (os.getenv("LLM_OPENAI_BASE_URL") or "").strip()
-        missing_vars_msg = "Missing required environment variables for LLM"
-        if not all([llm_api_key, llm_deployment_name]):
+        missing_vars_msg = "Missing required environment variables: OPENAI_ENDPOINT, LLM_API_KEY, LLM_DEPLOYMENT_NAME"
+        if not all([openai_endpoint, llm_api_key, llm_deployment_name]):
             raise ValueError(missing_vars_msg)
-        self.gen_llm: ChatOpenAI | AzureChatOpenAI
-        if llm_compat_base:
-            endpoint_required_msg = (
-                "LLM_ENDPOINT is required for embeddings when using RAGAS eval"
-            )
-            if not llm_endpoint:
-                raise ValueError(endpoint_required_msg)
-            self.gen_llm = ChatOpenAI(
-                model=str(llm_deployment_name),
-                api_key=SecretStr(str(llm_api_key)),
-                base_url=llm_compat_base.rstrip("/"),
-                default_headers={"api-key": str(llm_api_key)},
-                temperature=0,
-            )
-            eval_base = llm_compat_base.rstrip("/")
-        else:
-            if not all([llm_endpoint, llm_api_version]):
-                raise ValueError(missing_vars_msg)
-            self.gen_llm = AzureChatOpenAI(
-                azure_endpoint=str(llm_endpoint),
-                api_key=SecretStr(str(llm_api_key)),
-                api_version=str(llm_api_version),
-                azure_deployment=str(llm_deployment_name),
-                temperature=0,
-            )
-            eval_base = f"{str(llm_endpoint).rstrip('/')}/openai/deployments/{llm_deployment_name}"
+        base_url = openai_endpoint.rstrip("/")
+        self.gen_llm = ChatOpenAI(
+            model=str(llm_deployment_name),
+            api_key=SecretStr(str(llm_api_key)),
+            base_url=base_url,
+            default_headers={"api-key": str(llm_api_key)},
+            temperature=0,
+        )
 
         # Initialize evaluation LLM (using RAGAS llm_factory for structured outputs)
         openai_client = OpenAI(
             api_key=str(llm_api_key),
-            base_url=eval_base,
+            base_url=base_url,
             default_headers={"api-key": str(llm_api_key)},
         )
         self.eval_llm = llm_factory(
@@ -107,18 +87,22 @@ class RagasLLMEvaluator:
             client=openai_client,
         )
 
-        # Initialize embeddings for RAGAS metrics using Azure
+        # Initialize embeddings for RAGAS metrics
+        embeddings_endpoint = (
+            os.getenv("OPENAI_EMBEDDINGS_ENDPOINT") or openai_endpoint
+        ).rstrip("/")
+        embeddings_api_key = os.getenv("OPENAI_EMBEDDINGS_API_KEY") or str(llm_api_key)
         llm_embedding_deployment_name = os.getenv("LLM_EMBEDDING_DEPLOYMENT_NAME")
         missing_embedding_msg = "Missing LLM_EMBEDDING_DEPLOYMENT_NAME"
         if not llm_embedding_deployment_name:
             raise ValueError(missing_embedding_msg)
-        azure_embeddings = AzureOpenAIEmbeddings(
-            azure_endpoint=str(llm_endpoint),
-            api_key=SecretStr(str(llm_api_key)),
-            api_version=str(llm_api_version),
-            azure_deployment=str(llm_embedding_deployment_name),
+        oa_embeddings = OpenAIEmbeddings(
+            model=str(llm_embedding_deployment_name),
+            api_key=SecretStr(embeddings_api_key),
+            base_url=embeddings_endpoint,
+            default_headers={"api-key": embeddings_api_key},
         )
-        self.embeddings = LangchainEmbeddingsWrapper(azure_embeddings)
+        self.embeddings = LangchainEmbeddingsWrapper(oa_embeddings)
 
         logger.info("Initialized RAGAS LLM evaluator")
 
