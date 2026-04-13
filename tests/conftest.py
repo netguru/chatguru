@@ -5,38 +5,50 @@ from collections.abc import Iterator
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.engine.url import URL
 
-from src.api.main import create_app
+from config import get_persistence_settings
+from api.main import create_app
+from persistence import upgrade_head
 
 
 @pytest.fixture(scope="session")
-def test_env_vars() -> Iterator[dict[str, str]]:
+def test_env_vars(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, str]]:
     """Set up test environment variables."""
+    get_persistence_settings.cache_clear()
+    persist_dir = tmp_path_factory.mktemp("persistence")
+    db_file = persist_dir / "chat_history.db"
+    database_url = str(URL.create("sqlite+aiosqlite", database=str(db_file.resolve())))
     test_vars = {
-        "LLM_ENDPOINT": "https://test.openai.azure.com/",
+        "OPENAI_ENDPOINT": "https://test.openai.azure.com/v1",
         "LLM_API_KEY": "test-api-key",
         "LLM_DEPLOYMENT_NAME": "gpt-4",
-        "LLM_API_VERSION": "2024-02-15-preview",
         "DEBUG": "true",
+        "PERSISTENCE_DATABASE_URL": database_url,
     }
 
     for key, value in test_vars.items():
         os.environ[key] = value
+
+    upgrade_head()
 
     yield test_vars
 
     # Cleanup
     for key in test_vars:
         os.environ.pop(key, None)
+    get_persistence_settings.cache_clear()
 
 
 @pytest.fixture
-def app(test_env_vars: dict[str, str]) -> TestClient:
-    """Create test FastAPI application."""
-    return TestClient(create_app())
+def app(test_env_vars: dict[str, str]) -> Iterator[TestClient]:
+    """Create test FastAPI application (lifespan runs so persistence is initialized)."""
+    with TestClient(create_app()) as client:
+        yield client
 
 
 @pytest.fixture
-def async_app(test_env_vars: dict[str, str]) -> TestClient:
+def async_app(test_env_vars: dict[str, str]) -> Iterator[TestClient]:
     """Create test client for WebSocket testing."""
-    return TestClient(create_app())
+    with TestClient(create_app()) as client:
+        yield client

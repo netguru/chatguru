@@ -1,13 +1,31 @@
 """API endpoint tests."""
 
-import json
-from collections.abc import AsyncIterator
+import asyncio
+from collections.abc import AsyncIterator, Callable
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
-from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
-from langchain_core.messages import AIMessage, AIMessageChunk
+
+from unittest.mock import AsyncMock
+
+from api.main import create_app
+from persistence import get_chat_history_repository
+
+
+def _mock_astream(chunks: list[str]) -> Callable[..., AsyncIterator[str]]:
+    """Create a mock async generator matching ``Agent.astream`` signature."""
+
+    async def _gen(
+        messages: list[dict[str, str]],
+        *,
+        session_id: str | None = None,
+        visitor_id: str | None = None,
+    ) -> AsyncIterator[str]:
+        for chunk in chunks:
+            yield chunk
+
+    return _gen
 
 
 def test_health_endpoint(app: TestClient) -> None:
@@ -34,29 +52,18 @@ def test_websocket_chat_success(async_app: TestClient) -> None:
     """Test successful WebSocket chat request."""
     chunks = ["Hello! ", "How can I ", "help you today?"]
 
-    # Patch Agent class to return a mock instance
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
-
-        # Make astream an async generator that yields our test chunks
-        async def astream_gen(
-            message: str,
-            history: list[dict[str, str]] | None = None,
-            session_id: str | None = None,
-            user_id: str | None = None,
-        ) -> AsyncIterator[str]:
-            for chunk in chunks:
-                yield chunk
-
-        mock_agent_instance.astream = astream_gen
+        mock_agent_instance.astream = _mock_astream(chunks)
         mock_agent_class.return_value = mock_agent_instance
 
         with async_app.websocket_connect("/ws") as websocket:
-            # Send message
+            # Send message (full transcript; last entry is current user turn)
             websocket.send_json(
                 {
-                    "message": "Hello, how are you?",
                     "session_id": "test-session-123",
+                    "visitor_id": "visitor-chat-success",
+                    "messages": [{"role": "user", "content": "Hello, how are you?"}],
                 }
             )
 
@@ -81,24 +88,18 @@ def test_websocket_chat_success(async_app: TestClient) -> None:
 def test_websocket_chat_without_session_id(async_app: TestClient) -> None:
     """Test WebSocket chat request without session ID."""
 
-    # Patch Agent class to return a mock instance
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
-
-        # Make astream an async generator that yields test content
-        async def astream_gen(
-            message: str,
-            history: list[dict[str, str]] | None = None,
-            session_id: str | None = None,
-            user_id: str | None = None,
-        ) -> AsyncIterator[str]:
-            yield "Hello!"
-
-        mock_agent_instance.astream = astream_gen
+        mock_agent_instance.astream = _mock_astream(["Hello!"])
         mock_agent_class.return_value = mock_agent_instance
 
         with async_app.websocket_connect("/ws") as websocket:
-            websocket.send_json({"message": "Hello!"})
+            websocket.send_json(
+                {
+                    "visitor_id": "visitor-no-session",
+                    "messages": [{"role": "user", "content": "Hello!"}],
+                }
+            )
 
             received_end = False
             while not received_end:
@@ -113,24 +114,19 @@ def test_websocket_chat_without_session_id(async_app: TestClient) -> None:
 def test_websocket_chat_with_empty_string_session_id(async_app: TestClient) -> None:
     """Test WebSocket chat request with empty string session ID (should preserve empty string)."""
 
-    # Patch Agent class to return a mock instance
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
-
-        # Make astream an async generator that yields test content
-        async def astream_gen(
-            message: str,
-            history: list[dict[str, str]] | None = None,
-            session_id: str | None = None,
-            user_id: str | None = None,
-        ) -> AsyncIterator[str]:
-            yield "Hello!"
-
-        mock_agent_instance.astream = astream_gen
+        mock_agent_instance.astream = _mock_astream(["Hello!"])
         mock_agent_class.return_value = mock_agent_instance
 
         with async_app.websocket_connect("/ws") as websocket:
-            websocket.send_json({"message": "Hello!", "session_id": ""})
+            websocket.send_json(
+                {
+                    "visitor_id": "visitor-empty-session",
+                    "session_id": "",
+                    "messages": [{"role": "user", "content": "Hello!"}],
+                }
+            )
 
             received_end = False
             while not received_end:
@@ -186,9 +182,14 @@ def test_websocket_empty_message(async_app: TestClient) -> None:
     """Test WebSocket with empty message (should fail validation)."""
     with patch("src.agent.service._build_chat_llm"):
         with async_app.websocket_connect("/ws") as websocket:
-            websocket.send_json({"message": "", "session_id": "test-session"})
+            websocket.send_json(
+                {
+                    "messages": [{"role": "user", "content": ""}],
+                    "session_id": "test-session",
+                }
+            )
 
-            # Should receive validation error since message has min_length=1
+            # Should receive validation error since last user content must be 1–2000 chars
             data = websocket.receive_json()
             assert data["type"] == "error"
             assert "Invalid message format or validation failed" in data["content"]
@@ -215,7 +216,9 @@ def test_websocket_message_too_long(async_app: TestClient) -> None:
 
     with patch("src.agent.service._build_chat_llm"):
         with async_app.websocket_connect("/ws") as websocket:
-            websocket.send_json({"message": long_message})
+            websocket.send_json(
+                {"messages": [{"role": "user", "content": long_message}]}
+            )
 
             # Should receive error message
             data = websocket.receive_json()
@@ -226,26 +229,18 @@ def test_websocket_streaming_multiple_chunks(async_app: TestClient) -> None:
     """Test WebSocket streaming with multiple chunks."""
     chunks = ["Hello", " ", "world", "!"]
 
-    # Patch Agent class to return a mock instance
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
-
-        # Make astream an async generator that yields our test chunks
-        # Accept all parameters to match new signature
-        async def astream_gen(
-            message: str,
-            history: list[dict[str, str]] | None = None,
-            session_id: str | None = None,
-            user_id: str | None = None,
-        ) -> AsyncIterator[str]:
-            for chunk in chunks:
-                yield chunk
-
-        mock_agent_instance.astream = astream_gen
+        mock_agent_instance.astream = _mock_astream(chunks)
         mock_agent_class.return_value = mock_agent_instance
 
         with async_app.websocket_connect("/ws") as websocket:
-            websocket.send_json({"message": "Hello"})
+            websocket.send_json(
+                {
+                    "visitor_id": "visitor-streaming",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                }
+            )
 
             received_chunks = []
             received_end = False
@@ -302,19 +297,19 @@ def test_websocket_agent_initialization_failure(async_app: TestClient) -> None:
 def test_websocket_chat_with_conversation_history(async_app: TestClient) -> None:
     """Test WebSocket chat with conversation history is passed to agent."""
     chunks = ["I remember you asked about weather!"]
-    received_history = None
+    received_messages: list[dict[str, str]] | None = None
 
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
 
         async def astream_gen(
-            message: str,
-            history: list[dict[str, str]] | None = None,
+            messages: list[dict[str, str]],
+            *,
             session_id: str | None = None,
-            user_id: str | None = None,
+            visitor_id: str | None = None,
         ) -> AsyncIterator[str]:
-            nonlocal received_history
-            received_history = history
+            nonlocal received_messages
+            received_messages = messages
             for chunk in chunks:
                 yield chunk
 
@@ -322,14 +317,15 @@ def test_websocket_chat_with_conversation_history(async_app: TestClient) -> None
         mock_agent_class.return_value = mock_agent_instance
 
         with async_app.websocket_connect("/ws") as websocket:
-            # Send message with conversation history
+            # Full transcript; last user message is the current turn
             websocket.send_json(
                 {
-                    "message": "What did I ask about?",
                     "session_id": "test-session",
+                    "visitor_id": "visitor-history",
                     "messages": [
                         {"role": "user", "content": "What's the weather like?"},
                         {"role": "assistant", "content": "The weather is sunny today!"},
+                        {"role": "user", "content": "What did I ask about?"},
                     ],
                 }
             )
@@ -342,89 +338,34 @@ def test_websocket_chat_with_conversation_history(async_app: TestClient) -> None
                 elif data["type"] == "error":
                     pytest.fail(f"Received error: {data['content']}")
 
-            # Verify history was passed to agent
-            assert received_history is not None
-            assert len(received_history) == 2
-            assert received_history[0]["role"] == "user"
-            assert received_history[0]["content"] == "What's the weather like?"
-            assert received_history[1]["role"] == "assistant"
-            assert received_history[1]["content"] == "The weather is sunny today!"
+            # Full transcript passed to agent (including current user turn)
+            assert received_messages is not None
+            assert len(received_messages) == 3
+            assert received_messages[0]["content"] == "What's the weather like?"
+            assert received_messages[1]["content"] == "The weather is sunny today!"
+            assert received_messages[2]["content"] == "What did I ask about?"
 
 
-def test_websocket_chat_with_empty_history(async_app: TestClient) -> None:
-    """Test WebSocket chat with empty conversation history array."""
-    chunks = ["Hello!"]
-    received_history: list[dict[str, str]] | None | str = "NOT_SET"  # Sentinel
-
-    with patch("api.routes.chat.Agent") as mock_agent_class:
-        mock_agent_instance = MagicMock()
-
-        async def astream_gen(
-            message: str,
-            history: list[dict[str, str]] | None = None,
-            session_id: str | None = None,
-            user_id: str | None = None,
-        ) -> AsyncIterator[str]:
-            nonlocal received_history
-            received_history = history
-            for chunk in chunks:
-                yield chunk
-
-        mock_agent_instance.astream = astream_gen
-        mock_agent_class.return_value = mock_agent_instance
-
+def test_websocket_chat_messages_empty_array(async_app: TestClient) -> None:
+    """Test WebSocket with empty messages array (should fail validation)."""
+    with patch("src.agent.service.ChatOpenAI"):
         with async_app.websocket_connect("/ws") as websocket:
-            # Send message with empty history array
-            websocket.send_json(
-                {"message": "Hello!", "session_id": "test-session", "messages": []}
-            )
+            websocket.send_json({"session_id": "ws-empty-messages", "messages": []})
 
-            while True:
-                data = websocket.receive_json()
-                if data["type"] == "end":
-                    break
-                elif data["type"] == "error":
-                    pytest.fail(f"Received error: {data['content']}")
-
-            # Empty array should be converted to None (empty list is falsy)
-            assert received_history is None or received_history == []
+            data = websocket.receive_json()
+            assert data["type"] == "error"
+            assert "session_id" in data
 
 
-def test_websocket_chat_without_history_field(async_app: TestClient) -> None:
-    """Test WebSocket chat without messages field (no history)."""
-    chunks = ["Hello!"]
-    received_history: list[dict[str, str]] | None | str = "NOT_SET"  # Sentinel
-
-    with patch("api.routes.chat.Agent") as mock_agent_class:
-        mock_agent_instance = MagicMock()
-
-        async def astream_gen(
-            message: str,
-            history: list[dict[str, str]] | None = None,
-            session_id: str | None = None,
-            user_id: str | None = None,
-        ) -> AsyncIterator[str]:
-            nonlocal received_history
-            received_history = history
-            for chunk in chunks:
-                yield chunk
-
-        mock_agent_instance.astream = astream_gen
-        mock_agent_class.return_value = mock_agent_instance
-
+def test_websocket_chat_without_messages_field(async_app: TestClient) -> None:
+    """Test WebSocket chat without messages field (should fail validation)."""
+    with patch("src.agent.service.ChatOpenAI"):
         with async_app.websocket_connect("/ws") as websocket:
-            # Send message without history field
-            websocket.send_json({"message": "Hello!", "session_id": "test-session"})
+            websocket.send_json({"session_id": "ws-no-messages-field"})
 
-            while True:
-                data = websocket.receive_json()
-                if data["type"] == "end":
-                    break
-                elif data["type"] == "error":
-                    pytest.fail(f"Received error: {data['content']}")
-
-            # No messages field should result in None history
-            assert received_history is None
+            data = websocket.receive_json()
+            assert data["type"] == "error"
+            assert data["session_id"] == "ws-no-messages-field"
 
 
 def test_websocket_session_id_preserved_across_messages(async_app: TestClient) -> None:
@@ -433,23 +374,17 @@ def test_websocket_session_id_preserved_across_messages(async_app: TestClient) -
 
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
-
-        async def astream_gen(
-            message: str,
-            history: list[dict[str, str]] | None = None,
-            session_id: str | None = None,
-            user_id: str | None = None,
-        ) -> AsyncIterator[str]:
-            for chunk in chunks:
-                yield chunk
-
-        mock_agent_instance.astream = astream_gen
+        mock_agent_instance.astream = _mock_astream(chunks)
         mock_agent_class.return_value = mock_agent_instance
 
         with async_app.websocket_connect("/ws") as websocket:
             # First message with session_id
             websocket.send_json(
-                {"message": "First message", "session_id": "persistent-session-123"}
+                {
+                    "session_id": "persistent-session-123",
+                    "visitor_id": "visitor-persistent",
+                    "messages": [{"role": "user", "content": "First message"}],
+                }
             )
 
             # Receive first response
@@ -459,14 +394,15 @@ def test_websocket_session_id_preserved_across_messages(async_app: TestClient) -
                     assert data["session_id"] == "persistent-session-123"
                     break
 
-            # Second message with same session_id
+            # Second message: full transcript ending with current user turn
             websocket.send_json(
                 {
-                    "message": "Second message",
                     "session_id": "persistent-session-123",
+                    "visitor_id": "visitor-persistent",
                     "messages": [
                         {"role": "user", "content": "First message"},
                         {"role": "assistant", "content": "Response"},
+                        {"role": "user", "content": "Second message"},
                     ],
                 }
             )
@@ -484,12 +420,11 @@ def test_websocket_error_response_includes_session_id(async_app: TestClient) -> 
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
 
-        # Make astream raise an exception during streaming
         async def astream_gen(
-            message: str,
-            history: list[dict[str, str]] | None = None,
+            messages: list[dict[str, str]],
+            *,
             session_id: str | None = None,
-            user_id: str | None = None,
+            visitor_id: str | None = None,
         ) -> AsyncIterator[str]:
             raise Exception("Simulated streaming error")
             yield  # Make it a generator  # noqa: B027
@@ -499,7 +434,11 @@ def test_websocket_error_response_includes_session_id(async_app: TestClient) -> 
 
         with async_app.websocket_connect("/ws") as websocket:
             websocket.send_json(
-                {"message": "Cause an error", "session_id": "error-test-session"}
+                {
+                    "session_id": "error-test-session",
+                    "visitor_id": "visitor-error-test",
+                    "messages": [{"role": "user", "content": "Cause an error"}],
+                }
             )
 
             # Should receive error with session_id preserved
@@ -513,11 +452,11 @@ def test_websocket_validation_error_preserves_session_id(async_app: TestClient) 
     """Test that validation errors preserve session_id from the request."""
     with patch("src.agent.service._build_chat_llm"):
         with async_app.websocket_connect("/ws") as websocket:
-            # Send invalid message (empty) but with valid session_id
+            # Invalid: last user content empty
             websocket.send_json(
                 {
-                    "message": "",  # Invalid: min_length=1
                     "session_id": "validation-error-session",
+                    "messages": [{"role": "user", "content": ""}],
                 }
             )
 
@@ -529,19 +468,19 @@ def test_websocket_validation_error_preserves_session_id(async_app: TestClient) 
 def test_websocket_history_with_multiple_turns(async_app: TestClient) -> None:
     """Test conversation history with multiple conversation turns."""
     chunks = ["Based on our conversation..."]
-    received_history = None
+    received_messages: list[dict[str, str]] | None = None
 
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
 
         async def astream_gen(
-            message: str,
-            history: list[dict[str, str]] | None = None,
+            messages: list[dict[str, str]],
+            *,
             session_id: str | None = None,
-            user_id: str | None = None,
+            visitor_id: str | None = None,
         ) -> AsyncIterator[str]:
-            nonlocal received_history
-            received_history = history
+            nonlocal received_messages
+            received_messages = messages
             for chunk in chunks:
                 yield chunk
 
@@ -549,11 +488,11 @@ def test_websocket_history_with_multiple_turns(async_app: TestClient) -> None:
         mock_agent_class.return_value = mock_agent_instance
 
         with async_app.websocket_connect("/ws") as websocket:
-            # Send message with multiple turns of history
+            # Full transcript; last user message is the current turn
             websocket.send_json(
                 {
-                    "message": "Summarize our conversation",
                     "session_id": "multi-turn-session",
+                    "visitor_id": "visitor-multi-turn",
                     "messages": [
                         {"role": "user", "content": "Hello"},
                         {"role": "assistant", "content": "Hi there!"},
@@ -567,6 +506,7 @@ def test_websocket_history_with_multiple_turns(async_app: TestClient) -> None:
                             "role": "assistant",
                             "content": "Here are 3 shirts under $50...",
                         },
+                        {"role": "user", "content": "Summarize our conversation"},
                     ],
                 }
             )
@@ -578,11 +518,184 @@ def test_websocket_history_with_multiple_turns(async_app: TestClient) -> None:
                 elif data["type"] == "error":
                     pytest.fail(f"Received error: {data['content']}")
 
-            # Verify full history was passed
-            assert received_history is not None
-            assert len(received_history) == 6
-            # Verify alternating user/assistant pattern
-            assert received_history[0]["role"] == "user"
-            assert received_history[1]["role"] == "assistant"
-            assert received_history[4]["role"] == "user"
-            assert received_history[5]["role"] == "assistant"
+            assert received_messages is not None
+            assert len(received_messages) == 7
+            assert received_messages[0]["role"] == "user"
+            assert received_messages[1]["role"] == "assistant"
+            assert received_messages[4]["role"] == "user"
+            assert received_messages[5]["role"] == "assistant"
+            assert received_messages[6]["role"] == "user"
+            assert received_messages[6]["content"] == "Summarize our conversation"
+
+
+def test_websocket_missing_visitor_id_returns_error(async_app: TestClient) -> None:
+    """When persistence is enabled, omitting visitor_id returns an error message."""
+    with patch("api.routes.chat.Agent") as mock_agent_class:
+        mock_agent_instance = MagicMock()
+        mock_agent_instance.astream = _mock_astream(["Hello!"])
+        mock_agent_class.return_value = mock_agent_instance
+
+        with async_app.websocket_connect("/ws") as websocket:
+            websocket.send_json(
+                {
+                    "session_id": "no-visitor-session",
+                    "messages": [{"role": "user", "content": "Hello!"}],
+                }
+            )
+
+            data = websocket.receive_json()
+            assert data["type"] == "error"
+            assert "visitor_id" in data["content"]
+            assert data["session_id"] == "no-visitor-session"
+
+
+# ============================================================================
+# History Endpoint Tests
+# ============================================================================
+
+
+def test_history_endpoint_returns_persisted_messages(app: TestClient) -> None:
+    """Test GET /history returns messages previously written via the repository."""
+    repo = get_chat_history_repository()
+    vid, sid = "hist-visitor", "hist-session"
+
+    async def _seed() -> None:
+        await repo.append_message(
+            visitor_id=vid, session_id=sid, role="user", content="ping"
+        )
+        await repo.append_message(
+            visitor_id=vid, session_id=sid, role="assistant", content="pong"
+        )
+
+    asyncio.run(_seed())
+
+    response = app.get("/history", params={"visitor_id": vid, "session_id": sid})
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 2
+    assert data[0] == {"role": "user", "content": "ping"}
+    assert data[1] == {"role": "assistant", "content": "pong"}
+
+
+def test_history_endpoint_empty_for_unknown_visitor(app: TestClient) -> None:
+    """Test GET /history returns empty list for unknown visitor."""
+    response = app.get(
+        "/history", params={"visitor_id": "nonexistent", "session_id": "none"}
+    )
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_history_endpoint_requires_visitor_id(app: TestClient) -> None:
+    """Test GET /history returns 422 when visitor_id is missing."""
+    response = app.get("/history")
+    assert response.status_code == 422
+
+
+# ============================================================================
+# Conversations Endpoint Tests
+# ============================================================================
+
+
+def test_conversations_endpoint_returns_list(app: TestClient) -> None:
+    """GET /conversations returns conversations seeded via repository."""
+    repo = get_chat_history_repository()
+    vid = "conv-visitor-1"
+
+    async def _seed() -> None:
+        await repo.create_conversation(
+            visitor_id=vid, session_id="sess-a", title="First chat"
+        )
+        await repo.create_conversation(
+            visitor_id=vid, session_id="sess-b", title="Second chat"
+        )
+
+    asyncio.run(_seed())
+
+    response = app.get("/conversations", params={"visitor_id": vid})
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 2
+    # Newest first
+    assert data[0]["title"] == "Second chat"
+    assert data[0]["session_id"] == "sess-b"
+    assert data[1]["title"] == "First chat"
+    assert "created_at" in data[0]
+
+
+def test_conversations_endpoint_empty_for_unknown_visitor(app: TestClient) -> None:
+    """GET /conversations returns empty list when visitor has no conversations."""
+    response = app.get("/conversations", params={"visitor_id": "nobody"})
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_conversations_endpoint_requires_visitor_id(app: TestClient) -> None:
+    """GET /conversations returns 422 when visitor_id is missing."""
+    response = app.get("/conversations")
+    assert response.status_code == 422
+
+
+def test_conversations_endpoint_isolated_by_visitor(app: TestClient) -> None:
+    """Conversations from different visitors don't bleed into each other."""
+    repo = get_chat_history_repository()
+
+    async def _seed() -> None:
+        await repo.create_conversation(
+            visitor_id="iso-v1", session_id="s1", title="V1 chat"
+        )
+        await repo.create_conversation(
+            visitor_id="iso-v2", session_id="s2", title="V2 chat"
+        )
+
+    asyncio.run(_seed())
+
+    r1 = app.get("/conversations", params={"visitor_id": "iso-v1"}).json()
+    r2 = app.get("/conversations", params={"visitor_id": "iso-v2"}).json()
+    assert len(r1) == 1 and r1[0]["title"] == "V1 chat"
+    assert len(r2) == 1 and r2[0]["title"] == "V2 chat"
+
+
+# ============================================================================
+# No-persistence visitor_id fallback
+# ============================================================================
+
+
+def test_websocket_omitted_visitor_id_succeeds_without_persistence() -> None:
+    """When persistence is disabled, omitting visitor_id mints a per-connection UUID
+    and the turn succeeds rather than returning an error.
+
+    Rather than manipulating env vars (which are also read from the .env file via
+    pydantic-settings), we patch ``is_persistence_enabled`` at both call sites and
+    stub out the lifecycle helpers so no real DB interaction occurs.
+    """
+    with (
+        patch("api.main.is_persistence_enabled", return_value=False),
+        patch("api.main.init_persistence", new=AsyncMock()),
+        patch("api.main.shutdown_persistence", new=AsyncMock()),
+        patch("api.routes.chat.is_persistence_enabled", return_value=False),
+        patch("api.routes.chat.get_chat_history_repository", return_value=None),
+        patch("api.routes.chat.Agent") as mock_agent_class,
+    ):
+        mock_agent_instance = MagicMock()
+        mock_agent_instance.astream = _mock_astream(["Hi!"])
+        mock_agent_class.return_value = mock_agent_instance
+
+        with TestClient(create_app()) as no_persist_client:
+            with no_persist_client.websocket_connect("/ws") as websocket:
+                websocket.send_json(
+                    {
+                        "session_id": "s1",
+                        "messages": [{"role": "user", "content": "Hello!"}],
+                    }
+                )
+
+                received_end = False
+                while not received_end:
+                    data = websocket.receive_json()
+                    assert (
+                        data["type"] != "error"
+                    ), f"Unexpected error: {data['content']}"
+                    if data["type"] == "end":
+                        assert data["session_id"] == "s1"
+                        received_end = True
