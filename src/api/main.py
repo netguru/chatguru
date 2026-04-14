@@ -11,6 +11,7 @@ from fastapi.responses import HTMLResponse
 from api.routes.chat import await_background_tasks, persistence_router
 from api.routes.chat import router as chat_router
 from config import get_app_settings, get_fastapi_settings, get_llm_settings, get_logger
+from document_rag import init_document_rag, shutdown_document_rag
 from persistence import init_persistence, is_persistence_enabled, shutdown_persistence
 from title_generation import init_title_generation, shutdown_title_generation
 
@@ -39,12 +40,14 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     )
 
     await init_persistence()
+    await init_document_rag()
     await init_title_generation()
 
     yield
 
     await await_background_tasks()
     await shutdown_persistence()
+    await shutdown_document_rag()
     await shutdown_title_generation()
     logger.info("Shutting down API server...")
 

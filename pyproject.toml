@@ -46,6 +46,7 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0.0",
     "aiosqlite>=0.20.0",
     "alembic>=1.13.0",
+    "docling>=2.88.0",
 ]
 
 [project.urls]
@@ -86,13 +87,14 @@ ignore = [
 ]
 [tool.ruff.lint.per-file-ignores]
 "src/**/prompt.py" = ["ERA001", "N806", "E501", "S608"]
+"src/document_rag/ingestion/cli.py" = ["BLE001", "C901", "PLR0912", "PLR0913", "PLR0914", "PLC0415", "S324", "T201", "UP038"]
 "tests/**/*.py" = ["ALL"]
 "alembic/**/*.py" = ["INP001", "TCH002"]
 "src/**/alembic/**/*.py" = ["INP001", "TCH002"]
 
 [tool.ruff.lint.isort]
 # Treat flat modules under `src/` as first-party for import sorting
-known-first-party = ["api", "agent", "rag", "config", "product_db", "persistence", "title_generation"]
+known-first-party = ["api", "agent", "rag", "config", "product_db", "persistence", "title_generation", "document_rag"]
 [tool.mypy]
 python_version = "3.12"
 mypy_path = "."

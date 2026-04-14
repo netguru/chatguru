@@ -9,7 +9,7 @@
 #   2. make env-setup      # Copy environment template
 #   3. make dev            # Start backend development server
 
-.PHONY: help install setup test coverage rag-eval ragas-llm-eval rag_dashboard dev run docker-build docker-run docker-run-detached docker-stop docker-down docker-logs docker-logs-backend docker-clean pre-commit-install pre-commit promptfoo-eval promptfoo-view promptfoo-test env-setup version clean migrate db-downgrade db-revision
+.PHONY: help install setup test coverage rag-eval ragas-llm-eval rag_dashboard dev run docker-build docker-run docker-run-detached docker-stop docker-down docker-logs docker-logs-backend docker-clean pre-commit-install pre-commit promptfoo-eval promptfoo-view promptfoo-test env-setup version clean migrate db-downgrade db-revision ingest-docs
 
 # ============================================================================
 # Default Target
@@ -112,6 +112,10 @@ ragas-llm-eval: ## Run LLM-based Ragas evaluation (requires OpenAI API, takes lo
 rag-dashboard: ## Launch Streamlit dashboard to visualize RAG evaluation results
 	@echo "📊 Launching RAG evaluation dashboard..."
 	uv run streamlit run evaluation/rag_eval/streamlit_rag_eval.py
+
+ingest-docs: ## Ingest local docs into configured document RAG backend (usage: make ingest-docs SOURCE_DIR=./docs [BACKEND=mongodb COLLECTION=documents FULL_REPLACE=1])
+	@test -n "$(SOURCE_DIR)" || (echo "Usage: make ingest-docs SOURCE_DIR=./docs" && exit 1)
+	PYTHONPATH=src uv run python -m document_rag.ingestion.cli --source-dir "$(SOURCE_DIR)" $(if $(BACKEND),--backend "$(BACKEND)",) $(if $(MONGODB_URI),--mongodb-uri "$(MONGODB_URI)",) $(if $(DATABASE),--database "$(DATABASE)",) $(if $(COLLECTION),--collection "$(COLLECTION)",) $(if $(INDEX_NAME),--index-name "$(INDEX_NAME)",) $(if $(FULL_REPLACE),--full-replace,) $(if $(DRY_RUN),--dry-run,)
 
 # ============================================================================
 # Docker Commands

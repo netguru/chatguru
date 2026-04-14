@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.engine.url import URL
 
-from config import get_persistence_settings
+from config import get_document_rag_settings, get_persistence_settings
 from api.main import create_app
 from persistence import upgrade_head
 
@@ -15,6 +15,7 @@ from persistence import upgrade_head
 @pytest.fixture(scope="session")
 def test_env_vars(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, str]]:
     """Set up test environment variables."""
+    get_document_rag_settings.cache_clear()
     get_persistence_settings.cache_clear()
     persist_dir = tmp_path_factory.mktemp("persistence")
     db_file = persist_dir / "chat_history.db"
@@ -25,6 +26,7 @@ def test_env_vars(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str
         "LLM_DEPLOYMENT_NAME": "gpt-4",
         "DEBUG": "true",
         "PERSISTENCE_DATABASE_URL": database_url,
+        "DOCUMENT_RAG_ENABLED": "false",
     }
 
     for key, value in test_vars.items():
@@ -37,6 +39,7 @@ def test_env_vars(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str
     # Cleanup
     for key in test_vars:
         os.environ.pop(key, None)
+    get_document_rag_settings.cache_clear()
     get_persistence_settings.cache_clear()
 
 

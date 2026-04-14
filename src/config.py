@@ -366,3 +366,66 @@ class TitleGenerationSettings(BaseSettings):
 def get_title_generation_settings() -> TitleGenerationSettings:
     """Get title generation settings."""
     return TitleGenerationSettings()
+
+
+class DocumentRagSettings(BaseSettings):
+    """Document RAG repository settings."""
+
+    model_config = SettingsConfigDict(
+        env_file=get_env_file_path(),
+        env_prefix="DOCUMENT_RAG_",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+    enabled: bool = Field(
+        default=False,
+        description="Enable document RAG repository bootstrap.",
+    )
+    backend: str = Field(
+        default="mongodb",
+        description="Document RAG backend. Currently supported: mongodb.",
+    )
+    mongodb_uri: str = Field(
+        default="mongodb://localhost:27017",
+        description="MongoDB URI for document RAG.",
+    )
+    mongodb_database: str = Field(
+        default="chatguru",
+        description="MongoDB database for document RAG documents.",
+    )
+    mongodb_collection: str = Field(
+        default="documents",
+        description="MongoDB collection for document chunks.",
+    )
+    mongodb_index_name: str = Field(
+        default="document_vector_index",
+        description="MongoDB vector search index name for document retrieval.",
+    )
+    search_limit_default: int = Field(
+        default=5,
+        description="Default result count for document search.",
+    )
+    mongodb_connection_timeout_ms: int = Field(
+        default=5000,
+        description="MongoDB server selection timeout in milliseconds.",
+    )
+    embedding_provider: str = Field(
+        default="openai",
+        description="Embedding provider for document retrieval: openai or custom.",
+    )
+    embedding_custom_class: str = Field(
+        default="",
+        description="Custom embedding provider class path (module.path:ClassName).",
+    )
+    mongodb_files_bucket: str = Field(
+        default="document_sources",
+        description="MongoDB GridFS bucket name for storing full source documents.",
+    )
+
+
+@lru_cache
+def get_document_rag_settings() -> DocumentRagSettings:
+    """Get document RAG settings."""
+    return DocumentRagSettings()
