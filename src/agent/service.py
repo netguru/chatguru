@@ -24,7 +24,7 @@ from vector_db import VectorDatabase
 def _build_chat_llm() -> AzureChatOpenAI | ChatOpenAI:
     """Azure OpenAI resource or OpenAI v1-compatible base URL (e.g. APIM)."""
     settings = get_llm_settings()
-    compat_base = settings.openai_compat_base_url.strip()
+    compat_base = settings.openai_base_url.strip()
     if compat_base:
         return ChatOpenAI(
             model=settings.deployment_name,
