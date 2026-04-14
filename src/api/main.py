@@ -12,6 +12,7 @@ from api.routes.chat import await_background_tasks, persistence_router
 from api.routes.chat import router as chat_router
 from config import get_app_settings, get_fastapi_settings, get_llm_settings, get_logger
 from persistence import init_persistence, is_persistence_enabled, shutdown_persistence
+from title_generation import init_title_generation, shutdown_title_generation
 
 logger = get_logger(__name__)
 app_settings = get_app_settings()
@@ -29,26 +30,22 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Debug mode: %s", app_settings.debug)
 
     llm = get_llm_settings()
-    _min_key_len = 8
-    masked_key = (
-        f"{llm.api_key[:4]}***{llm.api_key[-4:]}"
-        if len(llm.api_key) > _min_key_len
-        else "***"
-    )
     logger.info(
-        "LLM config — endpoint: %s | deployment: %s | api_version: %s | api_key: %s",
+        "LLM config — endpoint: %s | deployment: %s | api_version: %s | api_key_configured: %s",
         llm.endpoint,
         llm.deployment_name,
         llm.api_version,
-        masked_key,
+        bool(llm.api_key),
     )
 
     await init_persistence()
+    await init_title_generation()
 
     yield
 
     await await_background_tasks()
     await shutdown_persistence()
+    await shutdown_title_generation()
     logger.info("Shutting down API server...")
 
 

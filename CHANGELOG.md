@@ -24,6 +24,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   OpenAI-compatible base URL (ending in `/v1`) rather than the raw Azure
   resource endpoint.
 
+- **`agent.title_service` removed** — Title generation has been extracted into
+  the new provider-based module under `title_generation`. Update imports:
+
+  ```python
+  # Before
+  from agent.title_service import generate_title, truncate_title
+
+  # After
+  from title_generation import generate_title, truncate_title
+  ```
+
 ### Added
 
 - **Server-side chat history persistence** via `PERSISTENCE_DATABASE_URL` (opt-in).

@@ -111,11 +111,17 @@ This command will:
 3. **Fill in required variables:**
 
    ```bash
-   # Azure OpenAI Configuration (REQUIRED)
-   LLM_ENDPOINT=https://your-resource.openai.azure.com/
+   # OpenAI-compatible LLM configuration (REQUIRED)
+   OPENAI_ENDPOINT=https://your-resource.openai.azure.com/openai/v1
    LLM_API_KEY=your-api-key-here
    LLM_DEPLOYMENT_NAME=gpt-4o-mini
-   LLM_API_VERSION=2024-02-15-preview
+
+   # Optional for native Azure OpenAI routing
+   # LLM_API_VERSION=2024-02-15-preview
+
+   # Optional title generation provider
+   # TITLE_GENERATION_PROVIDER=openai
+   # TITLE_GENERATION_CUSTOM_CLASS=my_project.titlegen:MyTitleGenerator
 
    # Langfuse Configuration (REQUIRED)
    LANGFUSE_PUBLIC_KEY=pk-lf-...
@@ -124,7 +130,7 @@ This command will:
    ```
 
    **Important Notes:**
-   - `LLM_ENDPOINT` must end with a trailing slash `/`
+   - `OPENAI_ENDPOINT` must point to the full OpenAI-compatible base URL ending in `/v1`
    - `LLM_DEPLOYMENT_NAME` must match your Azure deployment exactly
    - Keep your `.env` file secure - never commit it to git
 
@@ -134,7 +140,7 @@ Test that your configuration is correct:
 
 ```bash
 # Check that environment variables are loaded
-python -c "from src.config import settings; print('Config loaded successfully')"
+python -c "from config import get_llm_settings; print(get_llm_settings().deployment_name)"
 ```
 
 If you see an error, check your `.env` file for typos or missing variables.
@@ -236,10 +242,10 @@ uv sync
 - `Invalid API key` messages
 
 **Solution:**
-- Verify `LLM_ENDPOINT` ends with `/`
+- Verify `OPENAI_ENDPOINT` points to an OpenAI-compatible `/v1` base URL
 - Check `LLM_API_KEY` is correct (no extra spaces)
 - Ensure `LLM_DEPLOYMENT_NAME` matches Azure deployment
-- Verify `LLM_API_VERSION` is supported (e.g., `2024-02-15-preview`)
+- If using native Azure OpenAI routing, verify `LLM_API_VERSION` is supported (e.g., `2024-02-15-preview`)
 
 ### Issue 5: Langfuse connection errors
 

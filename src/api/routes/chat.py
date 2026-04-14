@@ -10,10 +10,15 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from agent.service import Agent
-from agent.title_service import generate_title, truncate_title
-from api.errors import InvalidMessageFormatError
+from api.errors import (
+    InvalidJSONError,
+    InvalidMessageFormatError,
+    ValidationFailedError,
+    WebSocketErrorType,
+)
 from config import get_app_settings, get_logger
 from persistence import get_chat_history_repository, is_persistence_enabled
+from title_generation import generate_title, truncate_title
 from vector_db import VectorDatabase, create_vector_database
 
 logger = get_logger(__name__)
@@ -41,7 +46,7 @@ class ChatMessage(BaseModel):
     )
     visitor_id: str | None = Field(
         None,
-        description="Stable ID for persisted history (per device or user); omit for a server default",
+        description="Stable ID for persisted history (per device or user); required when persistence is enabled, otherwise a per-connection default is generated",
     )
     messages: list[HistoryMessage] = Field(
         default_factory=list,
@@ -76,6 +81,24 @@ async def await_background_tasks() -> None:
     """Await all pending background tasks (call during shutdown)."""
     if _background_tasks:
         await asyncio.gather(*_background_tasks, return_exceptions=True)
+
+
+async def _send_error(
+    websocket: WebSocket,
+    *,
+    session_id: str,
+    error_type: WebSocketErrorType,
+    content: str,
+) -> None:
+    """Send a standardized WebSocket error frame."""
+    await websocket.send_json(
+        {
+            "type": "error",
+            "error_type": error_type.value,
+            "content": content,
+            "session_id": session_id,
+        }
+    )
 
 
 def _extract_session_id(data: str) -> str:
@@ -210,6 +233,10 @@ async def _update_title_in_background(
 ) -> None:
     """Generate an LLM title and patch the conversation record. Never raises."""
     try:
+        logger.info(
+            "Starting background title generation (session_id=%s)",
+            session_id,
+        )
         title = await generate_title(first_message)
         repo = get_chat_history_repository()
         if repo is None:
@@ -219,7 +246,11 @@ async def _update_title_in_background(
             session_id=session_id,
             title=title,
         )
-        logger.debug("Title updated for session %s: %r", session_id, title)
+        logger.info(
+            "Title updated for session %s: %r",
+            session_id,
+            title,
+        )
     except Exception:
         logger.exception("Background title update failed (session_id=%s)", session_id)
 
@@ -246,6 +277,7 @@ async def _handle_chat_turn(
             visitor_id=visitor_id, session_id=session_id
         )
         if is_first_message:
+            fallback_title = truncate_title(current_user_content)
             try:
                 await repo.create_conversation(
                     visitor_id=visitor_id,
@@ -253,7 +285,12 @@ async def _handle_chat_turn(
                     # Store a fast fallback title immediately so the sidebar shows
                     # something right away. The background task below will replace
                     # it with an LLM-generated title once the call completes.
-                    title=truncate_title(current_user_content),
+                    title=fallback_title,
+                )
+                logger.info(
+                    "Created conversation with fallback title (session_id=%s, title=%r)",
+                    session_id,
+                    fallback_title,
                 )
             except Exception:
                 logger.exception(
@@ -269,6 +306,7 @@ async def _handle_chat_turn(
             )
             _background_tasks.add(task)
             task.add_done_callback(_background_tasks.discard)
+            logger.info("Scheduled background title update (session_id=%s)", session_id)
 
         try:
             await repo.append_message(
@@ -279,12 +317,11 @@ async def _handle_chat_turn(
             )
         except Exception:
             logger.exception("Failed to persist user message")
-            await websocket.send_json(
-                {
-                    "type": "error",
-                    "content": "Could not save your message. Please try again.",
-                    "session_id": session_id,
-                }
+            await _send_error(
+                websocket,
+                session_id=session_id,
+                error_type=WebSocketErrorType.PERSISTENCE_WRITE_FAILED,
+                content="Could not save your message. Please try again.",
             )
             await websocket.send_json(
                 {"type": "end", "content": "", "session_id": session_id}
@@ -346,21 +383,29 @@ async def _parse_message(
         _validate_message_format(message_data)
         return ChatMessage(**message_data)
     except json.JSONDecodeError:
-        await websocket.send_json(
-            {
-                "type": "error",
-                "content": "Invalid JSON format",
-                "session_id": session_id,
-            }
+        error = InvalidJSONError()
+        await _send_error(
+            websocket,
+            session_id=session_id,
+            error_type=error.error_type,
+            content=error.content,
         )
         logger.exception("Invalid JSON format")
-    except (ValidationError, InvalidMessageFormatError):
-        await websocket.send_json(
-            {
-                "type": "error",
-                "content": "Invalid message format or validation failed",
-                "session_id": session_id,
-            }
+    except InvalidMessageFormatError as invalid_message_error:
+        await _send_error(
+            websocket,
+            session_id=session_id,
+            error_type=invalid_message_error.error_type,
+            content=invalid_message_error.content,
+        )
+        logger.exception("Message validation failed")
+    except ValidationError:
+        validation_error = ValidationFailedError()
+        await _send_error(
+            websocket,
+            session_id=session_id,
+            error_type=validation_error.error_type,
+            content=validation_error.content,
         )
         logger.exception("Message validation failed")
     return None
@@ -382,12 +427,11 @@ async def _resolve_visitor_id(
     if chat_message.visitor_id is not None:
         return chat_message.visitor_id, connection_visitor_id
     if is_persistence_enabled():
-        await websocket.send_json(
-            {
-                "type": "error",
-                "content": "visitor_id is required when chat history persistence is enabled",
-                "session_id": session_id,
-            }
+        await _send_error(
+            websocket,
+            session_id=session_id,
+            error_type=WebSocketErrorType.MISSING_VISITOR_ID,
+            content="visitor_id is required when chat history persistence is enabled",
         )
         return None, connection_visitor_id
     fallback = connection_visitor_id or str(uuid.uuid4())
@@ -427,9 +471,9 @@ async def websocket_chat(websocket: WebSocket) -> None:
 
         while True:
             data = await websocket.receive_text()
-            logger.info("Received websocket message: %s", data)
-
             session_id = _extract_session_id(data)
+            logger.info("Received websocket message, session_id: %s", session_id)
+
             chat_message = await _parse_message(websocket, data, session_id)
             if chat_message is None:
                 continue
@@ -457,12 +501,11 @@ async def websocket_chat(websocket: WebSocket) -> None:
                     if app_settings.debug
                     else "An error occurred while processing your request."
                 )
-                await websocket.send_json(
-                    {
-                        "type": "error",
-                        "content": error_content,
-                        "session_id": session_id,
-                    }
+                await _send_error(
+                    websocket,
+                    session_id=session_id,
+                    error_type=WebSocketErrorType.INTERNAL_ERROR,
+                    content=error_content,
                 )
 
     except WebSocketDisconnect:

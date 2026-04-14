@@ -271,10 +271,9 @@ The application uses environment variables for configuration. Copy `env.example`
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `LLM_ENDPOINT` | Azure OpenAI endpoint URL | `https://your-resource.openai.azure.com/` |
+| `OPENAI_ENDPOINT` | OpenAI-compatible base URL for chat + embeddings | `https://your-resource.openai.azure.com/openai/v1` |
 | `LLM_API_KEY` | Azure OpenAI API key | `your-api-key-here` |
 | `LLM_DEPLOYMENT_NAME` | Azure OpenAI deployment name | `gpt-4o-mini` |
-| `LLM_API_VERSION` | Azure OpenAI API version | `2024-02-15-preview` |
 | `LANGFUSE_PUBLIC_KEY` | Langfuse public key | `pk-lf-...` |
 | `LANGFUSE_SECRET_KEY` | Langfuse secret key | `sk-lf-...` |
 | `LANGFUSE_HOST` | Langfuse host URL | `https://cloud.langfuse.com` |
@@ -292,6 +291,9 @@ The application uses environment variables for configuration. Copy `env.example`
 | `VECTOR_DB_TYPE` | Database type | `sqlite` |
 | `VECTOR_DB_SQLITE_URL` | SQLite service URL | `http://product-db:8001` |
 | `PERSISTENCE_DATABASE_URL` | Async SQLAlchemy URL for chat history storage | *(unset — disabled)* |
+| `LLM_API_VERSION` | API version for native Azure OpenAI setups | *(empty)* |
+| `TITLE_GENERATION_PROVIDER` | Title provider: `openai`, `fallback`, `custom` | `openai` |
+| `TITLE_GENERATION_CUSTOM_CLASS` | Custom class path (`module.path:ClassName`) when provider is `custom` | *(empty)* |
 
 #### Chat history persistence
 
@@ -595,10 +597,10 @@ make install
 #### 3. Azure OpenAI authentication errors
 
 **Solution**:
-- Verify `LLM_ENDPOINT` includes trailing slash
+- Verify `OPENAI_ENDPOINT` is a full OpenAI-compatible base URL ending in `/v1`
 - Check `LLM_API_KEY` is correct
 - Ensure `LLM_DEPLOYMENT_NAME` matches your Azure deployment
-- Verify `LLM_API_VERSION` is supported
+- If using native Azure OpenAI routing, verify `LLM_API_VERSION` is supported
 
 #### 4. Langfuse connection errors
 

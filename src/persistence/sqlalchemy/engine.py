@@ -28,11 +28,9 @@ def resolve_sqlite_path(url: URL) -> str | None:
     db = url.database
     if db is None or db in {"", ":memory:"}:
         return None
-    path = Path(db)
+    path = Path(db).expanduser()
     path = (
-        (_PROJECT_ROOT / path).resolve()
-        if not path.is_absolute()
-        else path.expanduser().resolve()
+        (_PROJECT_ROOT / path).resolve() if not path.is_absolute() else path.resolve()
     )
     return str(path)
 
@@ -66,7 +64,7 @@ def create_async_engine_from_settings(settings: PersistenceSettings) -> AsyncEng
 
     resolved_path = resolve_sqlite_path(url)
     engine_url = (
-        str(URL.create(url.drivername, database=resolved_path))
+        str(url.set(database=resolved_path))
         if resolved_path is not None
         else settings.database_url
     )

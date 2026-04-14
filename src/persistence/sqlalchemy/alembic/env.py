@@ -38,7 +38,6 @@ if config.config_file_name is not None:
 def get_database_url() -> str:
     """Resolved URL for migrations (relative SQLite paths become absolute)."""
     from sqlalchemy.engine import make_url  # noqa: PLC0415
-    from sqlalchemy.engine.url import URL as SaURL  # noqa: N811, PLC0415
 
     raw = get_persistence_settings().database_url
     if raw is None:
@@ -50,7 +49,7 @@ def get_database_url() -> str:
     url = make_url(raw)
     resolved = resolve_sqlite_path(url)
     if resolved is not None:
-        return str(SaURL.create(url.drivername, database=resolved))
+        return str(url.set(database=resolved))
     return str(raw)
 
 
