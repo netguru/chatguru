@@ -334,3 +334,35 @@ class PersistenceSettings(BaseSettings):
 def get_persistence_settings() -> PersistenceSettings:
     """Get persistence settings."""
     return PersistenceSettings()
+
+
+class TitleGenerationSettings(BaseSettings):
+    """Conversation title generation provider settings."""
+
+    model_config = SettingsConfigDict(
+        env_file=get_env_file_path(),
+        env_prefix="TITLE_GENERATION_",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+    provider: str = Field(
+        default="openai",
+        description=(
+            "Title generation provider: openai, fallback, or custom. "
+            "Use fallback to disable external model calls."
+        ),
+    )
+    custom_class: str = Field(
+        default="",
+        description=(
+            "When provider is custom, class path in module.path:ClassName format."
+        ),
+    )
+
+
+@lru_cache
+def get_title_generation_settings() -> TitleGenerationSettings:
+    """Get title generation settings."""
+    return TitleGenerationSettings()

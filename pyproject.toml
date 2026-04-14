@@ -92,7 +92,7 @@ ignore = [
 
 [tool.ruff.lint.isort]
 # Treat flat modules under `src/` as first-party for import sorting
-known-first-party = ["api", "agent", "rag", "config", "product_db", "persistence"]
+known-first-party = ["api", "agent", "rag", "config", "product_db", "persistence", "title_generation"]
 [tool.mypy]
 python_version = "3.12"
 mypy_path = "."
