@@ -30,18 +30,12 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Debug mode: %s", app_settings.debug)
 
     llm = get_llm_settings()
-    _min_key_len = 8
-    masked_key = (
-        f"{llm.api_key[:4]}***{llm.api_key[-4:]}"
-        if len(llm.api_key) > _min_key_len
-        else "***"
-    )
     logger.info(
-        "LLM config — endpoint: %s | deployment: %s | api_version: %s | api_key: %s",
+        "LLM config — endpoint: %s | deployment: %s | api_version: %s | api_key_configured: %s",
         llm.endpoint,
         llm.deployment_name,
         llm.api_version,
-        masked_key,
+        bool(llm.api_key),
     )
 
     await init_persistence()

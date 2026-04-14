@@ -1,6 +1,6 @@
 """Process-wide chat history repository (FastAPI app lifespan)."""
 
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import DBAPIError
 
 from config import get_logger, get_persistence_settings
 from persistence.factory import build_chat_history_repository
@@ -11,6 +11,24 @@ logger = get_logger(__name__)
 _chat_history_repository: ChatHistoryRepository | None = None
 
 _MISSING_TABLE_HINT = "Chat history tables are missing. " "Run:  make migrate"
+
+
+def _is_missing_table_error(exc: DBAPIError) -> bool:
+    """Return True when the wrapped DB error indicates missing chat history tables."""
+    orig = getattr(exc, "orig", None)
+    sqlstate = getattr(orig, "pgcode", None) or getattr(orig, "sqlstate", None)
+    if sqlstate == "42P01":  # PostgreSQL undefined_table
+        return True
+
+    error_text = " ".join(
+        part.lower()
+        for part in (str(exc), str(orig) if orig is not None else "")
+        if part
+    )
+    return any(
+        marker in error_text
+        for marker in ("no such table", "does not exist", "undefined table")
+    )
 
 
 def is_persistence_enabled() -> bool:
@@ -35,11 +53,8 @@ async def init_persistence() -> None:
         return
     try:
         _chat_history_repository = await build_chat_history_repository()
-    except OperationalError as exc:
-        exc_str = str(
-            exc
-        ).lower()  # SQLite: "no such table"; PostgreSQL: "relation ... does not exist"
-        if "no such table" in exc_str or "does not exist" in exc_str:
+    except DBAPIError as exc:
+        if _is_missing_table_error(exc):
             raise RuntimeError(_MISSING_TABLE_HINT) from exc
         raise
     logger.info("Chat history persistence initialized")
