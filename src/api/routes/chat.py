@@ -3,11 +3,16 @@
 import asyncio
 import contextlib
 import json
+import mimetypes
 import uuid
-from typing import Annotated, Self
+from typing import Annotated, Any, Self
 
-from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi.responses import Response
+from gridfs import GridFSBucket
+from gridfs.errors import NoFile
 from pydantic import BaseModel, Field, ValidationError, model_validator
+from pymongo import MongoClient
 
 from agent.service import Agent
 from api.errors import (
@@ -16,7 +21,8 @@ from api.errors import (
     ValidationFailedError,
     WebSocketErrorType,
 )
-from config import get_app_settings, get_logger
+from config import get_app_settings, get_document_rag_settings, get_logger
+from document_rag import get_document_rag_repository
 from persistence import get_chat_history_repository, is_persistence_enabled
 from title_generation import generate_title, truncate_title
 from vector_db import VectorDatabase, create_vector_database
@@ -46,7 +52,10 @@ class ChatMessage(BaseModel):
     )
     visitor_id: str | None = Field(
         None,
-        description="Stable ID for persisted history (per device or user); required when persistence is enabled, otherwise a per-connection default is generated",
+        description=(
+            "Stable ID for persisted history (per device or user); required when "
+            "persistence is enabled, otherwise a per-connection default is generated"
+        ),
     )
     messages: list[HistoryMessage] = Field(
         default_factory=list,
@@ -175,6 +184,44 @@ async def _initialize_vector_database() -> VectorDatabase | None:
     # after a transient startup failure (e.g., vector-db container not ready yet).
     _vector_database_initialized = _vector_database_cache is not None
     return _vector_database_cache
+
+
+@router.get("/documents/{source_path:path}")
+async def get_document_source(source_path: str) -> Response:
+    """Serve full source document bytes from MongoDB GridFS."""
+    settings = get_document_rag_settings()
+    if not source_path.strip():
+        raise HTTPException(status_code=400, detail="Invalid document path")
+    if source_path.startswith("/") or ".." in source_path.split("/"):
+        raise HTTPException(status_code=400, detail="Invalid document path")
+
+    client: MongoClient[dict[str, Any]] = MongoClient(
+        settings.mongodb_uri,
+        serverSelectionTimeoutMS=settings.mongodb_connection_timeout_ms,
+        connectTimeoutMS=settings.mongodb_connection_timeout_ms,
+    )
+    with client:
+        database = client[settings.mongodb_database]
+        bucket = GridFSBucket(database, bucket_name=settings.mongodb_files_bucket)
+
+        try:
+            stream = bucket.open_download_stream_by_name(source_path)
+        except NoFile as exc:
+            raise HTTPException(status_code=404, detail="Document not found") from exc
+
+        with stream:
+            metadata = dict(stream.metadata or {})
+            media_type = metadata.get("content_type")
+            if not media_type:
+                guessed, _ = mimetypes.guess_type(source_path)
+                media_type = guessed or "application/octet-stream"
+
+            headers = {
+                "Content-Disposition": f'inline; filename="{stream.filename}"',
+            }
+            return Response(
+                content=stream.read(), media_type=media_type, headers=headers
+            )
 
 
 @persistence_router.get("/conversations")
@@ -328,26 +375,20 @@ async def _handle_chat_turn(
             )
             return
 
-    full_response = ""
-    async for chunk in agent.astream(
+    structured = await agent.arun_structured(
         transcript,
         session_id=session_id,
         visitor_id=visitor_id,
-    ):
-        full_response += chunk
-        await websocket.send_json(
-            {
-                "type": "token",
-                "content": chunk,
-                "session_id": session_id,
-            }
-        )
+    )
+    resolved_answer = structured.response
+    sources = [s.model_dump() for s in structured.sources]
 
     await websocket.send_json(
         {
             "type": "end",
-            "content": full_response,
+            "content": resolved_answer,
             "session_id": session_id,
+            "sources": sources,
         }
     )
     logger.info("Streaming completed for session: %s", session_id)
@@ -358,7 +399,7 @@ async def _handle_chat_turn(
                 visitor_id=visitor_id,
                 session_id=session_id,
                 role="assistant",
-                content=full_response,
+                content=resolved_answer,
             )
         except Exception:
             # The response has already been delivered to the client via the "end"
@@ -466,7 +507,8 @@ async def websocket_chat(websocket: WebSocket) -> None:
 
     try:
         vector_db = await _initialize_vector_database()
-        agent = Agent(vector_database=vector_db)
+        document_repo = get_document_rag_repository()
+        agent = Agent(vector_database=vector_db, document_repository=document_repo)
         connection_visitor_id: str | None = None
 
         while True:

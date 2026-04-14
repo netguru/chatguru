@@ -699,3 +699,41 @@ def test_websocket_omitted_visitor_id_succeeds_without_persistence() -> None:
                     if data["type"] == "end":
                         assert data["session_id"] == "s1"
                         received_end = True
+
+
+def test_document_source_endpoint_serves_pdf(async_app: TestClient) -> None:
+    mock_settings = MagicMock()
+    mock_settings.mongodb_uri = "mongodb://localhost:27017"
+    mock_settings.mongodb_connection_timeout_ms = 5000
+    mock_settings.mongodb_database = "chatguru"
+    mock_settings.mongodb_files_bucket = "document_sources"
+
+    mock_stream = MagicMock()
+    mock_stream.filename = "guide.pdf"
+    mock_stream.metadata = {"content_type": "application/pdf"}
+    mock_stream.read.return_value = b"%PDF-1.4\n%mock\n"
+    mock_stream.__enter__.return_value = mock_stream
+    mock_stream.__exit__.return_value = None
+
+    mock_bucket = MagicMock()
+    mock_bucket.open_download_stream_by_name.return_value = mock_stream
+
+    with (
+        patch("api.routes.chat.get_document_rag_settings", return_value=mock_settings),
+        patch("api.routes.chat.MongoClient") as mock_client_cls,
+        patch("api.routes.chat.GridFSBucket", return_value=mock_bucket),
+    ):
+        mock_client = MagicMock()
+        mock_client.__enter__.return_value = mock_client
+        mock_client.__exit__.return_value = None
+        mock_client_cls.return_value = mock_client
+        response = async_app.get("/documents/guide.pdf")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/pdf")
+
+
+def test_document_source_endpoint_blocks_path_traversal(async_app: TestClient) -> None:
+    response = async_app.get("/documents/../secrets.txt")
+
+    assert response.status_code == 400

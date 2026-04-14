@@ -1,6 +1,8 @@
 """Agent component tests."""
 
+import json
 from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch, AsyncMock
 
 import pytest
@@ -8,6 +10,32 @@ from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessageChunk
 
 from src.agent.service import Agent
+
+if TYPE_CHECKING:
+    from document_rag.models import DocumentRetrievalHit
+
+
+class _FakeDocumentRepository:
+    async def connect(self) -> None:
+        return
+
+    async def search(self, query: str, limit: int = 5) -> list[DocumentRetrievalHit]:
+        from document_rag.models import DocumentRetrievalHit, DocumentSourceReference
+
+        return [
+            DocumentRetrievalHit(
+                snippet=f"Snippet for {query}",
+                score=0.91,
+                source=DocumentSourceReference(
+                    source_id="doc-42",
+                    source_uri="docs/guide.md",
+                    title="Guide",
+                ),
+            )
+        ]
+
+    async def close(self) -> None:
+        return
 
 
 def test_create_agent() -> None:
@@ -158,6 +186,70 @@ async def test_agent_with_tool_call() -> None:
         mock_db.search.assert_called_once()
         # Verify we got multiple iterations (initial + after tool call)
         assert call_count["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_document_tool_returns_snippet_with_source_reference() -> None:
+    tool = Agent._create_document_rag_tool(_FakeDocumentRepository())
+    payload = await tool.ainvoke({"query": "install"})
+    data = json.loads(payload)
+    assert data["hits"][0]["snippet"] == "Snippet for install"
+    assert data["hits"][0]["source"]["source_id"] == "doc-42"
+    assert data["hits"][0]["source"]["source_uri"] == "docs/guide.md"
+
+
+@pytest.mark.asyncio
+async def test_agent_collects_structured_sources_from_document_tool() -> None:
+    call_count = {"count": 0}
+
+    async def mock_astream(
+        messages: list, *, config: dict | None = None
+    ) -> AsyncIterator[AIMessageChunk]:
+        call_count["count"] += 1
+        if call_count["count"] == 1:
+            chunk = AIMessageChunk(content="Checking docs...")
+            chunk.tool_calls = [
+                {
+                    "name": "search_documents",
+                    "args": {"query": "setup", "limit": 3},
+                    "id": "doc_call_1",
+                }
+            ]
+            yield chunk
+        else:
+            yield AIMessageChunk(content="Done")
+
+    with patch("src.agent.service._build_chat_llm") as mock_build:
+        mock_instance = GenericFakeChatModel(messages=iter([]))
+        object.__setattr__(mock_instance, "bind_tools", lambda tools: mock_instance)
+        object.__setattr__(mock_instance, "astream", mock_astream)
+        mock_build.return_value = mock_instance
+        agent = Agent(document_repository=_FakeDocumentRepository())
+
+        _ = [
+            chunk
+            async for chunk in agent.astream([{"role": "user", "content": "help"}])
+        ]
+
+    sources = agent.get_last_used_sources()
+    assert len(sources) == 1
+    assert sources[0]["source_id"] == "doc-42"
+
+
+def test_agent_registers_both_document_and_product_tools() -> None:
+    mock_db = MagicMock()
+    with patch("src.agent.service._build_chat_llm") as mock_build:
+        mock_instance = GenericFakeChatModel(messages=iter([]))
+        object.__setattr__(mock_instance, "bind_tools", lambda tools: mock_instance)
+        mock_build.return_value = mock_instance
+
+        agent = Agent(
+            vector_database=mock_db,
+            document_repository=_FakeDocumentRepository(),
+        )
+
+    assert "search_products" in agent.tool_registry
+    assert "search_documents" in agent.tool_registry
 
 
 class TestExtractProductQuery:
