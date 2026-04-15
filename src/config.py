@@ -167,7 +167,7 @@ class LLMSettings(BaseSettings):
         default="",
         description="LLM deployment name",
     )
-    openai_compat_base_url: str = Field(
+    openai_base_url: str = Field(
         default="",
         description=(
             "If set, chat uses OpenAI v1-compatible Chat Completions at this base URL "
