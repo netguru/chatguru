@@ -286,6 +286,7 @@ The application uses environment variables for configuration. Copy `env.example`
 | `VECTOR_DB_SQLITE_URL` | SQLite service URL | `http://product-db:8001` |
 | `PERSISTENCE_DATABASE_URL` | Async SQLAlchemy URL for chat history storage | *(unset — disabled)* |
 | `LLM_API_VERSION` | API version for native Azure OpenAI setups | *(empty)* |
+| `LLM_OPENAI_BASE_URL` | OpenAI v1-compatible chat base URL; when set, chat uses `ChatOpenAI` instead of native Azure routing | *(empty)* |
 | `TITLE_GENERATION_PROVIDER` | Title provider: `openai`, `fallback`, `custom` | `openai` |
 | `TITLE_GENERATION_CUSTOM_CLASS` | Custom class path (`module.path:ClassName`) when provider is `custom` | *(empty)* |
 
@@ -305,6 +306,8 @@ PERSISTENCE_DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/chatguru
 ```
 
 See [docs/persistence.md](docs/persistence.md) for the full architecture and instructions on adding new database adapters.
+
+**LLM URL modes:** `LLM_OPENAI_BASE_URL` (universal OpenAI-compatible API) vs. `OPENAI_ENDPOINT` with empty `LLM_OPENAI_BASE_URL` (native Azure OpenAI client) is documented in [docs/design-decisions.md](docs/design-decisions.md#llm-endpoint-modes).
 
 See [env.example](env.example) for a complete template with detailed comments.
 

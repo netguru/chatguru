@@ -37,7 +37,8 @@ def _build_chat_llm() -> ChatOpenAI | AzureChatOpenAI:
     return AzureChatOpenAI(
         azure_deployment=settings.deployment_name,
         api_key=settings.api_key,
-        base_url=settings.endpoint.rstrip("/"),
+        azure_endpoint=settings.endpoint.rstrip("/"),
+        api_version=settings.api_version,
         default_headers={"api-key": settings.api_key},
         streaming=True,
         temperature=settings.temperature,
