@@ -172,6 +172,14 @@ class LLMSettings(BaseSettings):
         default="",
         description="Model / deployment name (LLM_DEPLOYMENT_NAME).",
     )
+    openai_base_url: str = Field(
+        default="",
+        description=(
+            "If set, chat uses OpenAI v1-compatible Chat Completions at this base URL "
+            "(e.g. Azure APIM .../plc/openai/v1). LLM_DEPLOYMENT_NAME is the model id. "
+            "Auth uses the api-key header (APIM subscription key)."
+        ),
+    )
     temperature: float = Field(
         default=1,
         description="Sampling temperature (LLM_TEMPERATURE).",
@@ -180,16 +188,14 @@ class LLMSettings(BaseSettings):
         default="",
         validation_alias=AliasChoices("OPENAI_EMBEDDINGS_ENDPOINT"),
         description=(
-            "OpenAI-compatible base URL for the embeddings model. "
-            "Defaults to OPENAI_ENDPOINT when empty."
+            "OpenAI-compatible base URL for the embeddings model. Defaults to OPENAI_ENDPOINT when empty."
         ),
     )
     embeddings_api_key: str = Field(
         default="",
         validation_alias=AliasChoices("OPENAI_EMBEDDINGS_API_KEY"),
         description=(
-            "API key for the embeddings endpoint. "
-            "Defaults to LLM_API_KEY when empty."
+            "API key for the embeddings endpoint. Defaults to LLM_API_KEY when empty."
         ),
     )
     embedding_deployment_name: str = Field(
@@ -350,8 +356,7 @@ class TitleGenerationSettings(BaseSettings):
     provider: str = Field(
         default="openai",
         description=(
-            "Title generation provider: openai, fallback, or custom. "
-            "Use fallback to disable external model calls."
+            "Title generation provider: openai, fallback, or custom. Use fallback to disable external model calls."
         ),
     )
     custom_class: str = Field(

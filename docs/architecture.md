@@ -2,7 +2,7 @@
 
 ## Overview
 
-chatguru Agent is a whitelabel chatbot designed for agentic commerce with RAG capabilities. The production-grade frontend now lives in a separate repository; this repo only contains the backend and a minimal HTML page at `/` for smoke testing. The architecture is built for maintainability, scalability, and easy customization across different brands and tenants.
+chatguru Agent is a whitelabel chatbot designed for agentic commerce with RAG capabilities. The React/Vite frontend lives in the `frontend/` directory and communicates with the backend via WebSocket. The architecture is built for maintainability, scalability, and easy customization across different brands and tenants.
 
 ## System Architecture
 
@@ -11,7 +11,7 @@ Simple, modular architecture designed for whitelabel deployment:
 ```mermaid
 graph LR
     subgraph "Current Implementation"
-        EXT_UI[External Frontend<br/>(separate repo)] -->|WebSocket /ws| API[FastAPI API]
+        UI[React/Vite Frontend<br/>frontend/] -->|WebSocket /ws| API[FastAPI API]
         API --> AGENT[Agent Service]
         AGENT --> LLM[Azure OpenAI]
         AGENT -->|RAG Tool| PRODUCTDB[Product DB<br/>sqlite-vec]
@@ -119,10 +119,10 @@ Agent → HTTP GET /search?q=... → product-db container → sqlite-vec → Res
 ### 1. Chat Request Flow
 
 ```
-External Frontend (separate repo) → WebSocket /ws → Agent Service → Azure OpenAI → Streamed Tokens
-       ↓                               ↓              ↓                ↓
-  Sends {message, messages[],      Validation     Direct LLM      Langfuse
-        session_id} payloads       & Routing      Call            Tracing
+React/Vite Frontend (frontend/) → WebSocket /ws → Agent Service → Azure OpenAI → Streamed Tokens
+       ↓                              ↓              ↓                ↓
+  Sends {message, messages[],     Validation     Direct LLM      Langfuse
+        session_id} payloads      & Routing      Call            Tracing
 ```
 
 ### 2. Current Implementation
