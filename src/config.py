@@ -6,7 +6,7 @@ from logging import Logger
 from logging.config import dictConfig
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -153,19 +153,24 @@ class LLMSettings(BaseSettings):
     )
     endpoint: str = Field(
         default="",
-        description="LLM endpoint",
+        validation_alias=AliasChoices("OPENAI_ENDPOINT"),
+        description=(
+            "OpenAI-compatible base URL for chat and embeddings "
+            "(e.g. https://api.openai.com/v1 or an Azure APIM proxy). "
+            "The chat client appends /chat/completions; the embeddings client appends /embeddings."
+        ),
     )
     api_key: str = Field(
         default="",
-        description="LLM API key",
+        description="API key (LLM_API_KEY).",
     )
     api_version: str = Field(
-        default="2024-02-15-preview",
-        description="LLM API version",
+        default="",
+        description="API version string, required only for native Azure OpenAI (LLM_API_VERSION).",
     )
     deployment_name: str = Field(
         default="",
-        description="LLM deployment name",
+        description="Model / deployment name (LLM_DEPLOYMENT_NAME).",
     )
     openai_base_url: str = Field(
         default="",
@@ -177,15 +182,29 @@ class LLMSettings(BaseSettings):
     )
     temperature: float = Field(
         default=1,
-        description="LLM temperature",
+        description="Sampling temperature (LLM_TEMPERATURE).",
+    )
+    embeddings_endpoint: str = Field(
+        default="",
+        validation_alias=AliasChoices("OPENAI_EMBEDDINGS_ENDPOINT"),
+        description=(
+            "OpenAI-compatible base URL for the embeddings model. Defaults to OPENAI_ENDPOINT when empty."
+        ),
+    )
+    embeddings_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("OPENAI_EMBEDDINGS_API_KEY"),
+        description=(
+            "API key for the embeddings endpoint. Defaults to LLM_API_KEY when empty."
+        ),
     )
     embedding_deployment_name: str = Field(
         default="text-embedding-ada-002",
-        description="Azure deployment name for embeddings model",
+        description="Embeddings model / deployment name (LLM_EMBEDDING_DEPLOYMENT_NAME).",
     )
     embedding_dimensions: int = Field(
         default=1536,
-        description="Embedding vector dimensions (1536 for text-embedding-ada-002)",
+        description="Embedding vector dimensions (LLM_EMBEDDING_DIMENSIONS).",
     )
 
 
@@ -293,3 +312,62 @@ class VectorDBSettings(BaseSettings):
 def get_vector_db_settings() -> VectorDBSettings:
     """Get vector database settings."""
     return VectorDBSettings()
+
+
+class PersistenceSettings(BaseSettings):
+    """Chat history persistence (async SQLAlchemy engine URL)."""
+
+    model_config = SettingsConfigDict(
+        env_file=get_env_file_path(),
+        env_prefix="PERSISTENCE_",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+    database_url: str | None = Field(
+        default=None,
+        description=(
+            "Async SQLAlchemy URL: ``<dialect>+<async_driver>://…`` "
+            "(e.g. sqlite+aiosqlite, postgresql+asyncpg, mysql+aiomysql). "
+            "When unset, chat history persistence is disabled and no messages are stored. "
+            "Run ``make migrate`` after setting or changing this value."
+        ),
+    )
+
+
+@lru_cache
+def get_persistence_settings() -> PersistenceSettings:
+    """Get persistence settings."""
+    return PersistenceSettings()
+
+
+class TitleGenerationSettings(BaseSettings):
+    """Conversation title generation provider settings."""
+
+    model_config = SettingsConfigDict(
+        env_file=get_env_file_path(),
+        env_prefix="TITLE_GENERATION_",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+    provider: str = Field(
+        default="openai",
+        description=(
+            "Title generation provider: openai, fallback, or custom. Use fallback to disable external model calls."
+        ),
+    )
+    custom_class: str = Field(
+        default="",
+        description=(
+            "When provider is custom, class path in module.path:ClassName format."
+        ),
+    )
+
+
+@lru_cache
+def get_title_generation_settings() -> TitleGenerationSettings:
+    """Get title generation settings."""
+    return TitleGenerationSettings()

@@ -5,27 +5,34 @@ import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Annotated, Any, Protocol
 
+import anyio
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("vector_db.api")
 
+SEARCH_LIMIT_DEFAULT = 10
+SEARCH_LIMIT_MIN = 1
+SEARCH_LIMIT_MAX = 50
+VECTOR_SQLITE_DB_PATH_ENV = "VECTOR_SQLITE_DB_PATH"
+VECTOR_SQLITE_DB_PATH_DEFAULT = "/data/chatguru.db"
+
 
 class VectorStoreProtocol(Protocol):
     """Protocol for vector store implementations."""
 
-    def search(self, query: str, limit: int = 10) -> list[dict[str, Any]]: ...
+    def search(
+        self, query: str, limit: int = SEARCH_LIMIT_DEFAULT
+    ) -> list[dict[str, Any]]: ...
 
     def get_product(self, product_id: str) -> dict[str, Any] | None: ...
 
     def count(self) -> int: ...
 
     def load_products(self, json_path: str | Path) -> int: ...
-
-    def is_healthy(self) -> bool: ...
 
 
 # Global store instance
@@ -93,10 +100,11 @@ def _create_store() -> VectorStoreProtocol:
         store: VectorStoreProtocol = MongoVectorStore()
         return store
 
-    # Default to SQLite
+    # Default to SQLite — same default file as chat persistence (see env.example)
     from vector_db.store import VectorStore  # noqa: PLC0415
 
-    sqlite_store: VectorStoreProtocol = VectorStore(db_path="/data/products.db")
+    db_path = os.getenv(VECTOR_SQLITE_DB_PATH_ENV, VECTOR_SQLITE_DB_PATH_DEFAULT)
+    sqlite_store: VectorStoreProtocol = VectorStore(db_path=db_path)
     return sqlite_store
 
 
@@ -112,7 +120,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
 
     # Load products if not already loaded
     products_path = Path("/app/data/products.json")
-    if products_path.exists():
+    if await anyio.Path(products_path).exists():
         count = _store.load_products(products_path)
         if count > 0:
             logger.info("Loaded %d products", count)
@@ -134,27 +142,35 @@ app = FastAPI(
 )
 
 
-@app.get("/health", response_model=HealthResponse)
+@app.get("/health")
 def health() -> HealthResponse:
     """Health check endpoint."""
     store = get_store()
     # Check health for MongoDB, SQLite store doesn't have is_healthy
-    if hasattr(store, "is_healthy") and not store.is_healthy():
+    health_check = getattr(store, "is_healthy", None)
+    if callable(health_check) and not health_check():
         raise HTTPException(status_code=503, detail="Database connection unhealthy")
     return HealthResponse(status="healthy", product_count=store.count())
 
 
-@app.get("/count", response_model=CountResponse)
+@app.get("/count")
 def count() -> CountResponse:
     """Get total product count."""
     store = get_store()
     return CountResponse(count=store.count())
 
 
-@app.get("/search", response_model=SearchResponse)
+@app.get("/search")
 def search(
-    q: str = Query(..., description="Search query"),
-    limit: int = Query(10, ge=1, le=50, description="Max results"),
+    q: Annotated[str, Query(description="Search query")],
+    limit: Annotated[
+        int,
+        Query(
+            ge=SEARCH_LIMIT_MIN,
+            le=SEARCH_LIMIT_MAX,
+            description="Max results",
+        ),
+    ] = SEARCH_LIMIT_DEFAULT,
 ) -> SearchResponse:
     """Semantic search."""
     store = get_store()

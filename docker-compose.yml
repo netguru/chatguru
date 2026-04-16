@@ -22,6 +22,8 @@ services:
       - LLM_API_KEY=${LLM_API_KEY}
       - LLM_API_VERSION=${LLM_API_VERSION}
       - LLM_EMBEDDING_DEPLOYMENT_NAME=${LLM_EMBEDDING_DEPLOYMENT_NAME}
+      # Same file as main app chat persistence (shared volume below)
+      - VECTOR_SQLITE_DB_PATH=/data/chatguru.db
     volumes:
       - vector-db-data:/data
     restart: unless-stopped
@@ -112,6 +114,14 @@ services:
       - VECTOR_DB_TYPE=mongodb
       - VECTOR_DB_MONGODB_URL=http://mongo-vector-db:8002
 
+      # Chat history persistence (optional).
+      # Unset = disabled (stateless). Set to enable; migrations run automatically on startup.
+      # For SQLite add a volume mount (e.g. chatguru-data:/data) and use:
+      #   PERSISTENCE_DATABASE_URL=sqlite+aiosqlite:////data/chatguru.db
+      # For PostgreSQL (external DB, no volume needed):
+      #   PERSISTENCE_DATABASE_URL=postgresql+asyncpg://user:pass@host:5432/chatguru
+      - PERSISTENCE_DATABASE_URL=${PERSISTENCE_DATABASE_URL:-}
+
       # FastAPI Configuration
       - FASTAPI_HOST=0.0.0.0
       - FASTAPI_PORT=8000
@@ -165,6 +175,9 @@ services:
       - VECTOR_DB_TYPE=sqlite
       - VECTOR_DB_SQLITE_URL=http://vector-db:8001
 
+      # Chat + Alembic (same SQLite file as vector-db service)
+      - PERSISTENCE_DATABASE_URL=sqlite+aiosqlite:////data/chatguru.db
+
       # FastAPI Configuration
       - FASTAPI_HOST=0.0.0.0
       - FASTAPI_PORT=8000
@@ -179,6 +192,9 @@ services:
         condition: service_healthy
 
     restart: unless-stopped
+
+    volumes:
+      - vector-db-data:/data
 
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]

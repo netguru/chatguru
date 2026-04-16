@@ -8,7 +8,7 @@ These rules codify the design decisions and architectural patterns established d
 - **Rule**: All agent operations MUST be async-only. Never add synchronous methods to the Agent class.
 - **Rationale**: Prevents blocking operations, aligns with FastAPI's async nature, ensures consistent API surface.
 - **Implementation**: Use `async def` and `AsyncIterator` for all streaming operations.
-- **Example**: ✅ `async def astream(...) -> AsyncIterator[str]` | ❌ `def run(...) -> str`
+- **Example**: ✅ `async def astream(messages: list[dict[str, str]], ...) -> AsyncIterator[str]` | ❌ `def run(...) -> str`
 
 ### 2. WebSocket for Real-Time Communication
 - **Rule**: Use WebSocket endpoints for streaming responses. HTTP POST endpoints are deprecated for chat functionality.
@@ -47,10 +47,10 @@ These rules codify the design decisions and architectural patterns established d
 - **Implementation**: Check `isinstance(message_data, dict)` before `ChatMessage(**message_data)`.
 
 ### 7. Environment Variable Naming
-- **Rule**: Use `LLM_*` prefix for LLM configuration, not provider-specific names like `AZURE_OPENAI_*`.
-- **Rationale**: Generic naming allows provider switching, clearer separation of concerns.
-- **Allowed**: `LLM_ENDPOINT`, `LLM_API_KEY`, `LLM_DEPLOYMENT_NAME`, `LLM_API_VERSION`
-- **Deprecated**: `AZURE_OPENAI_*`, `BRAND_NAME` (use `APP_NAME`)
+- **Rule**: Use `LLM_*` prefix for model/key/version settings. The endpoint uses `OPENAI_ENDPOINT` (and `OPENAI_EMBEDDINGS_ENDPOINT`) because the application targets any OpenAI-compatible API, not just Azure.
+- **Rationale**: Generic naming allows provider switching (true OpenAI, Azure APIM, Azure direct, etc.) without changing code.
+- **Allowed**: `OPENAI_ENDPOINT`, `LLM_API_KEY`, `LLM_DEPLOYMENT_NAME`, `LLM_API_VERSION`, `OPENAI_EMBEDDINGS_ENDPOINT`, `OPENAI_EMBEDDINGS_API_KEY`
+- **Deprecated**: `LLM_ENDPOINT` (replaced by `OPENAI_ENDPOINT`), `AZURE_OPENAI_*`, `BRAND_NAME` (use `APP_NAME`)
 
 ### 8. WebSocket Message Protocol
 - **Rule**: Use explicit message types (`token`, `end`, `error`) in JSON format for all WebSocket messages.
@@ -60,6 +60,7 @@ These rules codify the design decisions and architectural patterns established d
   {"type": "token" | "end" | "error", "content": "...", "session_id": "..."}
   ```
 - **Future**: Can extend with new types like `tool_call`, `metadata` without breaking changes.
+- **Client request (incoming JSON)**: Required `messages` array — full conversation for the request; **last entry must be the current user turn** (`role: user`). Optional `session_id`, `visitor_id`. No separate top-level `message` field.
 
 ## Code Quality Rules
 
@@ -157,7 +158,7 @@ When making changes:
 3. ✅ Use explicit `is not None` checks
 4. ✅ Handle all exceptions gracefully
 5. ✅ Validate types before Pydantic
-6. ✅ Use `LLM_*` environment variables
+6. ✅ Use `OPENAI_ENDPOINT` / `LLM_*` environment variables
 7. ✅ Follow WebSocket message protocol
 8. ✅ Document significant decisions
 

@@ -21,8 +21,8 @@ from config import get_langfuse_settings, get_llm_settings, get_logger
 from vector_db import VectorDatabase
 
 
-def _build_chat_llm() -> AzureChatOpenAI | ChatOpenAI:
-    """Azure OpenAI resource or OpenAI v1-compatible base URL (e.g. APIM)."""
+def _build_chat_llm() -> ChatOpenAI | AzureChatOpenAI:
+    """Build a ChatOpenAI client pointed at OPENAI_ENDPOINT."""
     settings = get_llm_settings()
     compat_base = settings.openai_base_url.strip()
     if compat_base:
@@ -37,9 +37,11 @@ def _build_chat_llm() -> AzureChatOpenAI | ChatOpenAI:
     return AzureChatOpenAI(
         azure_deployment=settings.deployment_name,
         api_key=settings.api_key,
-        azure_endpoint=settings.endpoint,
+        azure_endpoint=settings.endpoint.rstrip("/"),
         api_version=settings.api_version,
+        default_headers={"api-key": settings.api_key},
         streaming=True,
+        temperature=settings.temperature,
     )
 
 
@@ -173,8 +175,7 @@ class Agent:
         else:
             logger.info("Agent initialized without RAG tool")
 
-        # Bind tools and create tool registry for execution lookup
-        self.agent = llm.bind_tools(self.tools)
+        self.llm = llm.bind_tools(self.tools)
         self.tool_registry: dict[str, BaseTool] = {
             tool.name: tool for tool in self.tools
         }
@@ -269,14 +270,12 @@ class Agent:
         return query.strip() or message
 
     @staticmethod
-    def _build_messages(
-        message: str, history: list[dict[str, str]] | None
+    def _build_messages_from_transcript(
+        transcript: list[dict[str, str]],
     ) -> list[BaseMessage]:
-        """Build the initial message list with system prompt, history, and user message."""
+        """Build LangChain messages: system prompt + full conversation transcript."""
         messages: list[BaseMessage] = [SystemMessage(content=SYSTEM_PROMPT.strip())]
-        if history:
-            messages.extend(_convert_history_to_messages(history))
-        messages.append(HumanMessage(content=message))
+        messages.extend(_convert_history_to_messages(transcript))
         return messages
 
     @staticmethod
@@ -305,10 +304,10 @@ class Agent:
 
     async def astream(
         self,
-        message: str,
-        history: list[dict[str, str]] | None = None,
+        messages: list[dict[str, str]],
+        *,
         session_id: str | None = None,
-        user_id: str | None = None,
+        visitor_id: str | None = None,
     ) -> AsyncIterator[str]:
         """
         Stream agent responses asynchronously with conversation context.
@@ -320,20 +319,20 @@ class Agent:
         4. Continues until LLM provides final answer
 
         Args:
-            message: Current user message
-            history: Optional list of previous messages with 'role' and 'content' keys
+            messages: Full conversation for this turn: ``role`` / ``content`` dicts
+                (typically ends with the current user message).
             session_id: Optional session ID for Langfuse tracing
-            user_id: Optional user ID for Langfuse tracing
+            visitor_id: Optional visitor ID for Langfuse tracing
 
         Yields:
             Response chunks as strings (including tool call notifications)
         """
-        messages = Agent._build_messages(message, history)
+        lc_messages = Agent._build_messages_from_transcript(messages)
         config = Agent._build_config()
 
         # Propagate session_id and user_id to all Langfuse traces (when provided)
-        with propagate_attributes(session_id=session_id, user_id=user_id):
-            async for chunk in self._run_agentic_loop(messages, config):
+        with propagate_attributes(session_id=session_id, user_id=visitor_id):
+            async for chunk in self._run_agentic_loop(lc_messages, config):
                 yield chunk
 
             # Flush Langfuse events at the end of the request
@@ -350,7 +349,7 @@ class Agent:
         for iteration in range(MAX_TOOL_ITERATIONS):
             full_response: AIMessageChunk | None = None
 
-            async for chunk in self.agent.astream(messages, config=config):
+            async for chunk in self.llm.astream(messages, config=config):
                 chunk_msg = chunk if isinstance(chunk, AIMessageChunk) else None
                 if chunk_msg:
                     full_response = (

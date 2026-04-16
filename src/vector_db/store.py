@@ -7,13 +7,12 @@ from pathlib import Path
 from typing import Any
 
 import sqlite_vec
-from langchain_openai import AzureOpenAIEmbeddings
+from langchain_openai import OpenAIEmbeddings
 
 from config import get_llm_settings, get_logger
 
 logger = get_logger("vector_db.store")
 
-# Azure OpenAI text-embedding-3-small produces 1536-dimensional vectors
 EMBEDDING_DIM = 1536
 
 
@@ -26,13 +25,11 @@ class VectorStore:
     """
     Vector store with semantic search using sqlite-vec.
 
-    Simple, single-file implementation that:
-    1. Stores data in SQLite
-    2. Generates embeddings via Azure OpenAI
-    3. Performs vector similarity search with sqlite-vec
+    Stores data in SQLite, generates embeddings via the configured OpenAI-compatible
+    endpoint, and performs vector similarity search with sqlite-vec.
     """
 
-    def __init__(self, db_path: str = "data/products.db") -> None:
+    def __init__(self, db_path: str = "data/chatguru.db") -> None:
         """
         Initialize the vector store.
 
@@ -44,11 +41,13 @@ class VectorStore:
 
         # Initialize embeddings model
         llm_settings = get_llm_settings()
-        self._embeddings = AzureOpenAIEmbeddings(
-            azure_deployment=llm_settings.embedding_deployment_name,
-            api_key=llm_settings.api_key,
-            azure_endpoint=llm_settings.endpoint,
-            api_version=llm_settings.api_version,
+        embeddings_base_url = llm_settings.embeddings_endpoint or llm_settings.endpoint
+        embeddings_api_key = llm_settings.embeddings_api_key or llm_settings.api_key
+        self._embeddings = OpenAIEmbeddings(
+            model=llm_settings.embedding_deployment_name,
+            api_key=embeddings_api_key,
+            base_url=embeddings_base_url.rstrip("/"),
+            default_headers={"api-key": embeddings_api_key},
         )
 
         # Setup database

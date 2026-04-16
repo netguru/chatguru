@@ -265,10 +265,9 @@ The application uses environment variables for configuration. Copy `env.example`
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `LLM_ENDPOINT` | Azure OpenAI endpoint URL | `https://your-resource.openai.azure.com/` |
+| `OPENAI_ENDPOINT` | OpenAI-compatible base URL for chat + embeddings | `https://your-resource.openai.azure.com/openai/v1` |
 | `LLM_API_KEY` | Azure OpenAI API key | `your-api-key-here` |
 | `LLM_DEPLOYMENT_NAME` | Azure OpenAI deployment name | `gpt-4o-mini` |
-| `LLM_API_VERSION` | Azure OpenAI API version | `2024-02-15-preview` |
 | `LANGFUSE_PUBLIC_KEY` | Langfuse public key | `pk-lf-...` |
 | `LANGFUSE_SECRET_KEY` | Langfuse secret key | `sk-lf-...` |
 | `LANGFUSE_HOST` | Langfuse host URL | `https://cloud.langfuse.com` |
@@ -285,6 +284,30 @@ The application uses environment variables for configuration. Copy `env.example`
 | `LOG_LEVEL` | Logging level | `INFO` |
 | `VECTOR_DB_TYPE` | Database type | `sqlite` |
 | `VECTOR_DB_SQLITE_URL` | SQLite service URL | `http://product-db:8001` |
+| `PERSISTENCE_DATABASE_URL` | Async SQLAlchemy URL for chat history storage | *(unset — disabled)* |
+| `LLM_API_VERSION` | API version for native Azure OpenAI setups | *(empty)* |
+| `LLM_OPENAI_BASE_URL` | OpenAI v1-compatible chat base URL; when set, chat uses `ChatOpenAI` instead of native Azure routing | *(empty)* |
+| `TITLE_GENERATION_PROVIDER` | Title provider: `openai`, `fallback`, `custom` | `openai` |
+| `TITLE_GENERATION_CUSTOM_CLASS` | Custom class path (`module.path:ClassName`) when provider is `custom` | *(empty)* |
+
+#### Chat history persistence
+
+`PERSISTENCE_DATABASE_URL` is the single toggle for server-side chat history:
+
+- **Unset (default)** — persistence is disabled. The server is stateless: no database is required and no messages are stored. The `/history` and `/conversations` endpoints are not registered at all (they won't appear in `/docs` or return 404).
+- **Set** — persistence is enabled. Messages and conversations are stored per `visitor_id` / `session_id`. Run `make migrate` once after setting the URL to create the schema.
+
+```bash
+# SQLite (local dev / single-node)
+PERSISTENCE_DATABASE_URL=sqlite+aiosqlite:///data/chatguru.db
+
+# PostgreSQL
+PERSISTENCE_DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/chatguru
+```
+
+See [docs/persistence.md](docs/persistence.md) for the full architecture and instructions on adding new database adapters.
+
+**LLM URL modes:** `LLM_OPENAI_BASE_URL` (universal OpenAI-compatible API) vs. `OPENAI_ENDPOINT` with empty `LLM_OPENAI_BASE_URL` (native Azure OpenAI client) is documented in [docs/design-decisions.md](docs/design-decisions.md#llm-endpoint-modes).
 
 See [env.example](env.example) for a complete template with detailed comments.
 
@@ -327,6 +350,13 @@ Responses are streamed as JSON messages:
 - **Health Check**: `GET /health`
 - **API Documentation**: `GET /docs` (Swagger UI)
 - **OpenAPI Schema**: `GET /openapi.json`
+
+The following endpoints are only registered when `PERSISTENCE_DATABASE_URL` is set:
+
+- **`GET /history`** — returns stored messages for a `visitor_id` + `session_id` pair, oldest first.
+  - Query params: `visitor_id` (required), `session_id` (default: `"default"`)
+- **`GET /conversations`** — returns all conversations for a `visitor_id`, newest first.
+  - Query params: `visitor_id` (required)
 
 ## 🛠️ Development
 
@@ -519,10 +549,10 @@ make install
 #### 3. Azure OpenAI authentication errors
 
 **Solution**:
-- Verify `LLM_ENDPOINT` includes trailing slash
+- Verify `OPENAI_ENDPOINT` is a full OpenAI-compatible base URL ending in `/v1`
 - Check `LLM_API_KEY` is correct
 - Ensure `LLM_DEPLOYMENT_NAME` matches your Azure deployment
-- Verify `LLM_API_VERSION` is supported
+- If using native Azure OpenAI routing, verify `LLM_API_VERSION` is supported
 
 #### 4. Langfuse connection errors
 
@@ -574,7 +604,7 @@ We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for:
 - [ ] **Authentication**: JWT-based API authentication
 - [ ] **Rate Limiting**: API rate limiting and quotas
 - [x] **Session Management**: Client-side persistent conversation history (localStorage) ✅
-- [ ] **Server-side Sessions**: Backend-persisted conversation history
+- [x] **Server-side Sessions**: Backend-persisted conversation history via `PERSISTENCE_DATABASE_URL` (opt-in) ✅
 - [ ] **Multi-tenancy**: Database-backed tenant configuration
 
 ## 📄 License

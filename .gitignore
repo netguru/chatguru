@@ -15,6 +15,9 @@ wheels/
 promptfoo/results/*.json
 !promptfoo/results/.gitkeep
 
+# Local SQLite persistence (default PERSISTENCE_SQLITE_PATH)
+data/
+
 #cursor
 .cursor/worktrees.json
 .DS_Store

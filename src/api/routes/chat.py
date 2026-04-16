@@ -1,39 +1,104 @@
 """Chat API routes."""
 
+import asyncio
 import contextlib
 import json
+import uuid
+from typing import Annotated, Self
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel, Field, ValidationError
+from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from agent.service import Agent
-from api.errors import InvalidMessageFormatError
+from api.errors import (
+    InvalidJSONError,
+    InvalidMessageFormatError,
+    ValidationFailedError,
+    WebSocketErrorType,
+)
 from config import get_app_settings, get_logger
+from persistence import get_chat_history_repository, is_persistence_enabled
+from title_generation import generate_title, truncate_title
 from vector_db import VectorDatabase, create_vector_database
 
 logger = get_logger(__name__)
+
+
+_MAX_CONTENT_LENGTH = 8000
+_MAX_TRANSCRIPT_MESSAGES = 200
+_MAX_LAST_USER_MESSAGE_LENGTH = 2000
 
 
 class HistoryMessage(BaseModel):
     """Individual message in conversation history."""
 
     role: str = Field(..., description="Message role: 'user' or 'assistant'")
-    content: str = Field(..., description="Message content")
+    content: str = Field(
+        ..., max_length=_MAX_CONTENT_LENGTH, description="Message content"
+    )
 
 
 class ChatMessage(BaseModel):
-    """Message model for websocket chat."""
+    """WebSocket chat payload: full transcript including the current user turn last."""
 
-    message: str = Field(..., description="User message", min_length=1, max_length=2000)
     session_id: str | None = Field(
         None, description="Session ID for conversation continuity"
     )
-    messages: list[HistoryMessage] | None = Field(
-        None, description="Conversation history for context awareness"
+    visitor_id: str | None = Field(
+        None,
+        description="Stable ID for persisted history (per device or user); required when persistence is enabled, otherwise a per-connection default is generated",
     )
+    messages: list[HistoryMessage] = Field(
+        default_factory=list,
+        max_length=_MAX_TRANSCRIPT_MESSAGES,
+        description="Full conversation for this request; last entry must be the current user message",
+    )
+
+    @model_validator(mode="after")
+    def ensure_messages_valid(self) -> Self:
+        if not self.messages:
+            msg = "'messages' must be a non-empty array"
+            raise ValueError(msg)
+
+        last = self.messages[-1]
+        if last.role != "user":
+            msg = 'Last message in messages must have role "user" (current turn)'
+            raise ValueError(msg)
+        if len(last.content) < 1 or len(last.content) > _MAX_LAST_USER_MESSAGE_LENGTH:
+            msg = "Last user message content must be between 1 and 2000 characters"
+            raise ValueError(msg)
+        return self
 
 
 router = APIRouter(tags=["chat"])
+persistence_router = APIRouter(tags=["history"])
+
+# Strong references to background tasks so they aren't garbage-collected before completion.
+_background_tasks: set[asyncio.Task] = set()
+
+
+async def await_background_tasks() -> None:
+    """Await all pending background tasks (call during shutdown)."""
+    if _background_tasks:
+        await asyncio.gather(*_background_tasks, return_exceptions=True)
+
+
+async def _send_error(
+    websocket: WebSocket,
+    *,
+    session_id: str,
+    error_type: WebSocketErrorType,
+    content: str,
+) -> None:
+    """Send a standardized WebSocket error frame."""
+    await websocket.send_json(
+        {
+            "type": "error",
+            "error_type": error_type.value,
+            "content": content,
+            "session_id": session_id,
+        }
+    )
 
 
 def _extract_session_id(data: str) -> str:
@@ -105,8 +170,272 @@ async def _initialize_vector_database() -> VectorDatabase | None:
         logger.exception("Failed to initialize vector database")
         _vector_database_cache = None
 
-    _vector_database_initialized = True
+    # Only mark as initialized when the database is actually reachable.
+    # This intentionally allows retries on subsequent WebSocket connections
+    # after a transient startup failure (e.g., vector-db container not ready yet).
+    _vector_database_initialized = _vector_database_cache is not None
     return _vector_database_cache
+
+
+@persistence_router.get("/conversations")
+async def get_conversations(
+    visitor_id: Annotated[
+        str, Query(min_length=1, max_length=512, description="Visitor ID")
+    ],
+) -> list[dict[str, str]]:
+    """Return all conversations for a visitor, newest first.
+
+    Note: visitor_id is client-supplied and not authenticated. This endpoint
+    is intended for internal / single-tenant deployments. In multi-tenant
+    scenarios, add an authentication layer before exposing this route.
+    """
+    repo = get_chat_history_repository()
+    if repo is None:
+        msg = "persistence router registered but repository is not initialised"
+        raise RuntimeError(msg)
+    convos = await repo.list_conversations(visitor_id=visitor_id)
+    return [
+        {
+            "session_id": c.session_id,
+            "title": c.title,
+            "created_at": c.created_at.isoformat(),
+        }
+        for c in convos
+    ]
+
+
+@persistence_router.get("/history")
+async def get_history(
+    visitor_id: Annotated[
+        str, Query(min_length=1, max_length=512, description="Visitor ID")
+    ],
+    session_id: Annotated[str, Query(description="Session ID")] = "default",
+) -> list[dict[str, str]]:
+    """Return persisted messages for a visitor+session pair, oldest first.
+
+    Note: visitor_id is client-supplied and not authenticated. This endpoint
+    is intended for internal / single-tenant deployments. In multi-tenant
+    scenarios, add an authentication layer before exposing this route.
+    """
+    repo = get_chat_history_repository()
+    if repo is None:
+        msg = "persistence router registered but repository is not initialised"
+        raise RuntimeError(msg)
+    messages = await repo.list_messages(visitor_id=visitor_id, session_id=session_id)
+    return [{"role": m.role, "content": m.content} for m in messages]
+
+
+async def _update_title_in_background(
+    *,
+    visitor_id: str,
+    session_id: str,
+    first_message: str,
+) -> None:
+    """Generate an LLM title and patch the conversation record. Never raises."""
+    try:
+        logger.info(
+            "Starting background title generation (session_id=%s)",
+            session_id,
+        )
+        title = await generate_title(first_message)
+        repo = get_chat_history_repository()
+        if repo is None:
+            return
+        await repo.update_conversation_title(
+            visitor_id=visitor_id,
+            session_id=session_id,
+            title=title,
+        )
+        logger.info(
+            "Title updated for session %s: %r",
+            session_id,
+            title,
+        )
+    except Exception:
+        logger.exception("Background title update failed (session_id=%s)", session_id)
+
+
+async def _handle_chat_turn(
+    websocket: WebSocket,
+    agent: Agent,
+    chat_message: ChatMessage,
+    session_id: str,
+    visitor_id: str,
+) -> None:
+    """Stream one assistant reply, persisting turns when persistence is enabled."""
+    repo = get_chat_history_repository()  # None when PERSISTENCE_DATABASE_URL is unset
+    current_user_content = chat_message.messages[-1].content
+    transcript = [{"role": m.role, "content": m.content} for m in chat_message.messages]
+
+    if repo is not None:
+        # Check server-side whether a conversation record already exists for this
+        # session.  This is authoritative regardless of how many messages the client
+        # sends in the transcript, and prevents redundant title-generation calls when
+        # clients reconnect without full history.  A lightweight SELECT 1 is used
+        # instead of fetching all stored messages.
+        is_first_message = not await repo.conversation_exists(
+            visitor_id=visitor_id, session_id=session_id
+        )
+        if is_first_message:
+            fallback_title = truncate_title(current_user_content)
+            try:
+                await repo.create_conversation(
+                    visitor_id=visitor_id,
+                    session_id=session_id,
+                    # Store a fast fallback title immediately so the sidebar shows
+                    # something right away. The background task below will replace
+                    # it with an LLM-generated title once the call completes.
+                    title=fallback_title,
+                )
+                logger.info(
+                    "Created conversation with fallback title (session_id=%s, title=%r)",
+                    session_id,
+                    fallback_title,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to create conversation record (session_id=%s)", session_id
+                )
+
+            task = asyncio.create_task(
+                _update_title_in_background(
+                    visitor_id=visitor_id,
+                    session_id=session_id,
+                    first_message=current_user_content,
+                )
+            )
+            _background_tasks.add(task)
+            task.add_done_callback(_background_tasks.discard)
+            logger.info("Scheduled background title update (session_id=%s)", session_id)
+
+        try:
+            await repo.append_message(
+                visitor_id=visitor_id,
+                session_id=session_id,
+                role="user",
+                content=current_user_content,
+            )
+        except Exception:
+            logger.exception("Failed to persist user message")
+            await _send_error(
+                websocket,
+                session_id=session_id,
+                error_type=WebSocketErrorType.PERSISTENCE_WRITE_FAILED,
+                content="Could not save your message. Please try again.",
+            )
+            await websocket.send_json(
+                {"type": "end", "content": "", "session_id": session_id}
+            )
+            return
+
+    full_response = ""
+    async for chunk in agent.astream(
+        transcript,
+        session_id=session_id,
+        visitor_id=visitor_id,
+    ):
+        full_response += chunk
+        await websocket.send_json(
+            {
+                "type": "token",
+                "content": chunk,
+                "session_id": session_id,
+            }
+        )
+
+    await websocket.send_json(
+        {
+            "type": "end",
+            "content": full_response,
+            "session_id": session_id,
+        }
+    )
+    logger.info("Streaming completed for session: %s", session_id)
+
+    if repo is not None:
+        try:
+            await repo.append_message(
+                visitor_id=visitor_id,
+                session_id=session_id,
+                role="assistant",
+                content=full_response,
+            )
+        except Exception:
+            # The response has already been delivered to the client via the "end"
+            # frame. Sending another frame here would violate the protocol contract
+            # (clients treat "end" as terminal). Log and move on.
+            logger.exception(
+                "Failed to persist assistant message (session_id=%s); response already delivered",
+                session_id,
+            )
+
+
+async def _parse_message(
+    websocket: WebSocket, data: str, session_id: str
+) -> ChatMessage | None:
+    """Parse and validate a raw WebSocket payload.
+
+    Sends an error frame and returns ``None`` on any parsing failure so the
+    caller can ``continue`` the receive loop without extra branches.
+    """
+    try:
+        message_data = json.loads(data)
+        _validate_message_format(message_data)
+        return ChatMessage(**message_data)
+    except json.JSONDecodeError:
+        error = InvalidJSONError()
+        await _send_error(
+            websocket,
+            session_id=session_id,
+            error_type=error.error_type,
+            content=error.content,
+        )
+        logger.exception("Invalid JSON format")
+    except InvalidMessageFormatError as invalid_message_error:
+        await _send_error(
+            websocket,
+            session_id=session_id,
+            error_type=invalid_message_error.error_type,
+            content=invalid_message_error.content,
+        )
+        logger.exception("Message validation failed")
+    except ValidationError:
+        validation_error = ValidationFailedError()
+        await _send_error(
+            websocket,
+            session_id=session_id,
+            error_type=validation_error.error_type,
+            content=validation_error.content,
+        )
+        logger.exception("Message validation failed")
+    return None
+
+
+async def _resolve_visitor_id(
+    websocket: WebSocket,
+    chat_message: ChatMessage,
+    connection_visitor_id: str | None,
+    session_id: str,
+) -> tuple[str | None, str | None]:
+    """Return ``(visitor_id, updated_connection_visitor_id)``.
+
+    ``visitor_id`` is ``None`` when an error frame was sent and the caller
+    should ``continue`` the receive loop.  When persistence is disabled and
+    the client omits ``visitor_id``, a stable per-connection UUID is minted
+    on first use and returned as the updated ``connection_visitor_id``.
+    """
+    if chat_message.visitor_id is not None:
+        return chat_message.visitor_id, connection_visitor_id
+    if is_persistence_enabled():
+        await _send_error(
+            websocket,
+            session_id=session_id,
+            error_type=WebSocketErrorType.MISSING_VISITOR_ID,
+            content="visitor_id is required when chat history persistence is enabled",
+        )
+        return None, connection_visitor_id
+    fallback = connection_visitor_id or str(uuid.uuid4())
+    return fallback, fallback
 
 
 @router.websocket("/ws")
@@ -116,11 +445,12 @@ async def websocket_chat(websocket: WebSocket) -> None:
 
     Expected message format (JSON):
     {
-        "message": "User message here",
         "session_id": "optional-session-id",
-        "messages": [  // Optional conversation history
-            {"role": "user", "content": "previous user message"},
-            {"role": "assistant", "content": "previous assistant response"}
+        "visitor_id": "optional-stable-id-for-persistence",
+        "messages": [
+            {"role": "user", "content": "..."},
+            {"role": "assistant", "content": "..."},
+            {"role": "user", "content": "current user message (required last)"}
         ]
     }
 
@@ -135,37 +465,17 @@ async def websocket_chat(websocket: WebSocket) -> None:
     logger.info("WebSocket connection accepted")
 
     try:
-        # Initialize vector database (sqlite-vec service)
         vector_db = await _initialize_vector_database()
         agent = Agent(vector_database=vector_db)
+        connection_visitor_id: str | None = None
 
         while True:
             data = await websocket.receive_text()
-            logger.info("Received websocket message: %s", data)
-
             session_id = _extract_session_id(data)
+            logger.info("Received websocket message, session_id: %s", session_id)
 
-            try:
-                message_data = json.loads(data)
-                _validate_message_format(message_data)
-                chat_message = ChatMessage(**message_data)
-            except json.JSONDecodeError:
-                error_msg = {
-                    "type": "error",
-                    "content": "Invalid JSON format",
-                    "session_id": session_id,
-                }
-                await websocket.send_json(error_msg)
-                logger.exception("Invalid JSON format")
-                continue
-            except (ValidationError, InvalidMessageFormatError):
-                error_msg = {
-                    "type": "error",
-                    "content": "Invalid message format or validation failed",
-                    "session_id": session_id,
-                }
-                await websocket.send_json(error_msg)
-                logger.exception("Message validation failed")
+            chat_message = await _parse_message(websocket, data, session_id)
+            if chat_message is None:
                 continue
 
             session_id = (
@@ -173,45 +483,16 @@ async def websocket_chat(websocket: WebSocket) -> None:
                 if chat_message.session_id is not None
                 else "default"
             )
+            visitor_id, connection_visitor_id = await _resolve_visitor_id(
+                websocket, chat_message, connection_visitor_id, session_id
+            )
+            if visitor_id is None:
+                continue
 
             try:
-                # Convert history to list of dicts for agent
-                history = None
-                if chat_message.messages:
-                    history = [
-                        {"role": msg.role, "content": msg.content}
-                        for msg in chat_message.messages
-                    ]
-
-                # Accumulate full response while streaming
-                full_response = ""
-
-                async for chunk in agent.astream(
-                    chat_message.message,
-                    history=history,
-                    session_id=session_id,
-                ):
-                    full_response += chunk
-                    await websocket.send_json(
-                        {
-                            "type": "token",
-                            "content": chunk,
-                            "session_id": session_id,
-                        }
-                    )
-
-                # Send end signal with complete response as safety measure
-                # This ensures the client has the full message even if some
-                # token events were missed due to race conditions
-                await websocket.send_json(
-                    {
-                        "type": "end",
-                        "content": full_response,
-                        "session_id": session_id,
-                    }
+                await _handle_chat_turn(
+                    websocket, agent, chat_message, session_id, visitor_id
                 )
-                logger.info("Streaming completed for session: %s", session_id)
-
             except Exception as e:
                 logger.exception("Error during streaming:")
                 app_settings = get_app_settings()
@@ -220,12 +501,12 @@ async def websocket_chat(websocket: WebSocket) -> None:
                     if app_settings.debug
                     else "An error occurred while processing your request."
                 )
-                error_msg = {
-                    "type": "error",
-                    "content": error_content,
-                    "session_id": session_id,
-                }
-                await websocket.send_json(error_msg)
+                await _send_error(
+                    websocket,
+                    session_id=session_id,
+                    error_type=WebSocketErrorType.INTERNAL_ERROR,
+                    content=error_content,
+                )
 
     except WebSocketDisconnect:
         logger.info("WebSocket client disconnected")
