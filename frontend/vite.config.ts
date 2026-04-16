@@ -2,6 +2,9 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
+const backendTarget =
+  process.env.API_PROXY_TARGET ?? process.env.WS_PROXY_TARGET ?? "http://localhost:8000";
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   test: {
@@ -17,8 +20,16 @@ export default defineConfig({
       // so that `docker compose up frontend` can point to chatguru-agent:8000
       // while local dev defaults to localhost:8000.
       "/ws": {
-        target: process.env.WS_PROXY_TARGET ?? "http://localhost:8000",
+        target: backendTarget,
         ws: true,
+        changeOrigin: true,
+      },
+      "/conversations": {
+        target: backendTarget,
+        changeOrigin: true,
+      },
+      "/history": {
+        target: backendTarget,
         changeOrigin: true,
       },
     },

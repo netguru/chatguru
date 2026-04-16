@@ -8,6 +8,7 @@ export interface Session {
   title: string;
   createdAt: string;
   messages: ChatMessage[];
+  isHydrated: boolean;
   /**
    * Parallel history array sent as context to the backend WS.
    * Separate from `messages` (which is the UI list) because the backend
@@ -26,6 +27,7 @@ function createSession(): Session {
     title: "New conversation",
     createdAt: new Date().toISOString(),
     messages: [],
+    isHydrated: true,
     history: [],
   };
 }
@@ -76,6 +78,9 @@ interface AppState {
   loadSession: (id: string) => void;
   /** Clear messages in the current session and reset its WS session id */
   clearCurrentSession: () => void;
+  replaceSessions: (sessions: Session[]) => void;
+  hydrateSessionHistory: (sessionId: string, history: HistoryMessage[]) => void;
+  updateSessionTitle: (sessionId: string, title: string) => void;
 }
 
 // ─── Store ───────────────────────────────────────────────────────────────────
@@ -192,6 +197,38 @@ export const useAppStore = create<AppState>((set) => ({
     set((state) => ({
       sessions: state.sessions.filter((s) => s.id !== state.currentSessionId),
       currentSessionId: null,
+    })),
+
+  replaceSessions: (sessions) =>
+    set((state) => ({
+      sessions,
+      currentSessionId:
+        state.currentSessionId && sessions.some((s) => s.id === state.currentSessionId)
+          ? state.currentSessionId
+          : sessions[0]?.id ?? null,
+    })),
+
+  hydrateSessionHistory: (sessionId, history) =>
+    set((state) => ({
+      sessions: state.sessions.map((s) => {
+        if (s.id !== sessionId) return s;
+        const hydratedMessages: ChatMessage[] = history.map((entry) => ({
+          id: crypto.randomUUID(),
+          role: entry.role,
+          content: entry.content,
+        }));
+        return {
+          ...s,
+          messages: hydratedMessages,
+          history,
+          isHydrated: true,
+        };
+      }),
+    })),
+
+  updateSessionTitle: (sessionId, title) =>
+    set((state) => ({
+      sessions: state.sessions.map((s) => (s.id === sessionId ? { ...s, title } : s)),
     })),
 }));
 
