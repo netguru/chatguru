@@ -22,7 +22,8 @@ export interface ChatMessage {
   isStreaming?: boolean;
 }
 
-// Outbound WebSocket message
+// Outbound WebSocket message — matches backend ChatMessage schema.
+// `messages` must be the full conversation with the current user turn as the last entry.
 export interface WsOutboundMessage {
   session_id?: string;
   visitor_id: string;

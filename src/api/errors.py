@@ -11,6 +11,7 @@ class WebSocketErrorType(StrEnum):
     VALIDATION_ERROR = "validation_error"
     PERSISTENCE_WRITE_FAILED = "persistence_write_failed"
     MISSING_VISITOR_ID = "missing_visitor_id"
+    RATE_LIMIT_EXCEEDED = "rate_limit_exceeded"
     INTERNAL_ERROR = "internal_error"
 
 

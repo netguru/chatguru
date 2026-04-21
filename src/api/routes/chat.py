@@ -16,8 +16,9 @@ from api.errors import (
     ValidationFailedError,
     WebSocketErrorType,
 )
-from config import get_app_settings, get_logger
+from config import get_app_settings, get_logger, get_rate_limit_settings
 from persistence import get_chat_history_repository, is_persistence_enabled
+from rate_limiting import check_rate_limit, record_ai_response
 from title_generation import generate_title, truncate_title
 from vector_db import VectorDatabase, create_vector_database
 
@@ -152,6 +153,25 @@ def _validate_message_format(message_data: object) -> None:
     if not isinstance(message_data, dict):
         msg = "Message must be a JSON object"
         raise InvalidMessageFormatError(msg)
+
+
+def _get_client_ip(websocket: WebSocket) -> str:
+    """Extract the real client IP address from a WebSocket connection.
+
+    When ``RATE_LIMIT_TRUST_PROXY`` is True, the ``X-Forwarded-For`` and
+    ``X-Real-IP`` headers are checked first.  Only enable proxy trust when
+    the application is behind a known, trusted reverse proxy — never in
+    direct-to-internet deployments, as headers can be spoofed by clients.
+    """
+    if get_rate_limit_settings().trust_proxy:
+        forwarded_for = websocket.headers.get("x-forwarded-for")
+        if forwarded_for:
+            return forwarded_for.split(",")[0].strip()
+        real_ip = websocket.headers.get("x-real-ip")
+        if real_ip:
+            return real_ip.strip()
+    client = websocket.client
+    return client.host if client is not None else "unknown"
 
 
 _vector_database_cache: VectorDatabase | None = None
@@ -502,10 +522,21 @@ async def websocket_chat(websocket: WebSocket) -> None:
             if visitor_id is None:
                 continue
 
+            client_ip = _get_client_ip(websocket)
+            if not await check_rate_limit(client_ip):
+                await _send_error(
+                    websocket,
+                    session_id=session_id,
+                    error_type=WebSocketErrorType.RATE_LIMIT_EXCEEDED,
+                    content="Daily message limit reached. Please try again tomorrow.",
+                )
+                continue
+
             try:
                 await _handle_chat_turn(
                     websocket, agent, chat_message, session_id, visitor_id
                 )
+                await record_ai_response(client_ip)
             except Exception as e:
                 logger.exception("Error during streaming:")
                 app_settings = get_app_settings()

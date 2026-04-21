@@ -18,7 +18,7 @@ services:
       - "8001:8001"
     environment:
       # LLM settings for embeddings
-      - LLM_ENDPOINT=${LLM_ENDPOINT}
+      - OPENAI_ENDPOINT=${OPENAI_ENDPOINT}
       - LLM_API_KEY=${LLM_API_KEY}
       - LLM_API_VERSION=${LLM_API_VERSION}
       - LLM_EMBEDDING_DEPLOYMENT_NAME=${LLM_EMBEDDING_DEPLOYMENT_NAME}
@@ -33,6 +33,26 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+    networks:
+      - chatguru-network
+
+  # --------------------------------------------------------------------------
+  # Redis (rate limiting backing store)
+  # --------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     networks:
       - chatguru-network
 
@@ -66,7 +86,8 @@ services:
       - "8002:8002"
     environment:
       # LLM settings for embeddings
-      - LLM_ENDPOINT=${LLM_ENDPOINT}
+      - OPENAI_ENDPOINT=${OPENAI_ENDPOINT}
+      - LLM_OPENAI_BASE_URL=${LLM_OPENAI_BASE_URL:-}
       - LLM_API_KEY=${LLM_API_KEY}
       - LLM_API_VERSION=${LLM_API_VERSION}
       - LLM_EMBEDDING_DEPLOYMENT_NAME=${LLM_EMBEDDING_DEPLOYMENT_NAME}
@@ -98,7 +119,7 @@ services:
       - "8000:8000"
     environment:
       # LLM Configuration (Azure OpenAI)
-      - LLM_ENDPOINT=${LLM_ENDPOINT}
+      - OPENAI_ENDPOINT=${OPENAI_ENDPOINT}
       - LLM_API_KEY=${LLM_API_KEY}
       - LLM_DEPLOYMENT_NAME=${LLM_DEPLOYMENT_NAME}
       - LLM_API_VERSION=${LLM_API_VERSION}
@@ -122,6 +143,13 @@ services:
       #   PERSISTENCE_DATABASE_URL=postgresql+asyncpg://user:pass@host:5432/chatguru
       - PERSISTENCE_DATABASE_URL=${PERSISTENCE_DATABASE_URL:-}
 
+      # Rate Limiting
+      - RATE_LIMIT_ENABLED=${RATE_LIMIT_ENABLED:-false}
+      - RATE_LIMIT_REDIS_URL=redis://redis:6379/0
+      - RATE_LIMIT_MAX_MESSAGES=${RATE_LIMIT_MAX_MESSAGES:-1}
+      - RATE_LIMIT_WINDOW_SECONDS=${RATE_LIMIT_WINDOW_SECONDS:-86400}
+      - RATE_LIMIT_TRUST_PROXY=${RATE_LIMIT_TRUST_PROXY:-false}
+
       # FastAPI Configuration
       - FASTAPI_HOST=0.0.0.0
       - FASTAPI_PORT=8000
@@ -133,6 +161,8 @@ services:
 
     depends_on:
       mongo-vector-db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
     restart: unless-stopped
@@ -159,7 +189,7 @@ services:
       - "8000:8000"
     environment:
       # LLM Configuration (Azure OpenAI)
-      - LLM_ENDPOINT=${LLM_ENDPOINT}
+      - OPENAI_ENDPOINT=${OPENAI_ENDPOINT}
       - LLM_API_KEY=${LLM_API_KEY}
       - LLM_DEPLOYMENT_NAME=${LLM_DEPLOYMENT_NAME}
       - LLM_API_VERSION=${LLM_API_VERSION}
@@ -178,6 +208,13 @@ services:
       # Chat + Alembic (same SQLite file as vector-db service)
       - PERSISTENCE_DATABASE_URL=sqlite+aiosqlite:////data/chatguru.db
 
+      # Rate Limiting
+      - RATE_LIMIT_ENABLED=${RATE_LIMIT_ENABLED:-false}
+      - RATE_LIMIT_REDIS_URL=redis://redis:6379/0
+      - RATE_LIMIT_MAX_MESSAGES=${RATE_LIMIT_MAX_MESSAGES:-1}
+      - RATE_LIMIT_WINDOW_SECONDS=${RATE_LIMIT_WINDOW_SECONDS:-86400}
+      - RATE_LIMIT_TRUST_PROXY=${RATE_LIMIT_TRUST_PROXY:-false}
+
       # FastAPI Configuration
       - FASTAPI_HOST=0.0.0.0
       - FASTAPI_PORT=8000
@@ -189,6 +226,8 @@ services:
 
     depends_on:
       vector-db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
     restart: unless-stopped
@@ -232,6 +271,8 @@ volumes:
   vector-db-data:
     driver: local
   mongodb-data:
+    driver: local
+  redis-data:
     driver: local
 
 # --------------------------------------------------------------------------
