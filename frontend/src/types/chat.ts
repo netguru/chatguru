@@ -24,11 +24,9 @@ export interface ChatMessage {
 
 // Outbound WebSocket message
 export interface WsOutboundMessage {
-  message: string;
   session_id?: string;
+  visitor_id: string;
   messages: HistoryMessage[];
-  vector_db_type: VectorDbType | null;
-  platform: "web";
 }
 
 // Inbound WebSocket events — aligned with backend routes/chat.py

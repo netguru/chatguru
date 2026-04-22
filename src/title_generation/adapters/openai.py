@@ -1,7 +1,7 @@
 """OpenAI-compatible adapter for conversation title generation."""
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
+from langchain_openai import AzureChatOpenAI, ChatOpenAI
 from pydantic import SecretStr
 
 from config import LLMSettings, get_logger
@@ -19,20 +19,32 @@ class OpenAITitleGenerator:
 
     def __init__(self, settings: LLMSettings) -> None:
         self._settings = settings
-        self._llm: ChatOpenAI | None = None
+        self._llm: ChatOpenAI | AzureChatOpenAI | None = None
 
-    def _get_llm(self) -> ChatOpenAI:
+    def _get_llm(self) -> ChatOpenAI | AzureChatOpenAI:
         """Return the shared LLM client for title generation."""
         if self._llm is None:
-            self._llm = ChatOpenAI(
-                model=self._settings.deployment_name,
-                api_key=SecretStr(self._settings.api_key),
-                base_url=self._settings.endpoint.rstrip("/"),
-                default_headers={"api-key": self._settings.api_key},
-                streaming=False,
-                temperature=0,
-                max_completion_tokens=MAX_TITLE_COMPLETION_TOKENS,
-            )
+            compat_base = self._settings.openai_base_url.strip()
+            if compat_base:
+                self._llm = ChatOpenAI(
+                    model=self._settings.deployment_name,
+                    api_key=SecretStr(self._settings.api_key),
+                    base_url=compat_base.rstrip("/"),
+                    default_headers={"api-key": self._settings.api_key},
+                    streaming=False,
+                    temperature=0,
+                    max_completion_tokens=MAX_TITLE_COMPLETION_TOKENS,
+                )
+            else:
+                self._llm = AzureChatOpenAI(
+                    azure_deployment=self._settings.deployment_name,
+                    api_key=SecretStr(self._settings.api_key),
+                    azure_endpoint=self._settings.endpoint.rstrip("/"),
+                    api_version=self._settings.api_version,
+                    default_headers={"api-key": self._settings.api_key},
+                    streaming=False,
+                    temperature=0,
+                )
         return self._llm
 
     async def connect(self) -> None:

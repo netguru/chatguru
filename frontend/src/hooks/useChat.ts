@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useRef } from "react";
-import { selectCurrentHistory, useAppStore } from "../store/appStore";
-import type { WsEndEvent, WsErrorEvent, WsEvent, WsTokenEvent } from "../types/chat";
+import { selectCurrentHistory, selectCurrentSession, useAppStore } from "../store/appStore";
+import type {
+  HistoryMessage,
+  WsEndEvent,
+  WsErrorEvent,
+  WsEvent,
+  WsOutboundMessage,
+  WsTokenEvent,
+} from "../types/chat";
+import { getOrCreateVisitorId } from "../utils/visitorId";
 
 // WebSocket path — matches backend @router.websocket("/ws") included without prefix.
 // In development the Vite dev server proxies this path to the backend (see vite.config.ts).
@@ -27,6 +35,7 @@ export function useChat() {
     finalizeLastMessage,
     markLastMessageError,
     addToHistory,
+    updateSessionTitle,
   } = useAppStore();
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -38,6 +47,38 @@ export function useChat() {
   // keeping connect() stable and useable as an effect dependency).
   const isStreamingRef = useRef(isStreaming);
   isStreamingRef.current = isStreaming;
+
+  const requestConversationTitle = useCallback(
+    async (sessionId: string, firstMessage: string, attempt = 0) => {
+      const visitorId = getOrCreateVisitorId();
+      try {
+        const response = await fetch("/conversations/title", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            visitor_id: visitorId,
+            session_id: sessionId,
+            first_message: firstMessage,
+          }),
+        });
+        if (response.status === 404 && attempt < 4) {
+          window.setTimeout(() => {
+            void requestConversationTitle(sessionId, firstMessage, attempt + 1);
+          }, 150 * (attempt + 1));
+          return;
+        }
+        if (!response.ok) return;
+
+        const data = (await response.json()) as {
+          session_id: string;
+          title: string;
+        };
+        updateSessionTitle(data.session_id, data.title);
+      } catch {
+      }
+    },
+    [updateSessionTitle]
+  );
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
@@ -113,8 +154,8 @@ export function useChat() {
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN || isStreamingRef.current)
         return;
 
-      // Snapshot history BEFORE adding the current user message so the backend
-      // receives only prior turns in the `messages` field.
+      // Snapshot history BEFORE adding the current user message; we append the
+      // current turn explicitly for the outbound payload.
       const historySnapshot = selectCurrentHistory(useAppStore.getState());
 
       addUserMessage({ id: crypto.randomUUID(), role: "user", content: text });
@@ -123,7 +164,19 @@ export function useChat() {
       // Read currentSessionId AFTER addUserMessage — the first-ever message triggers
       // lazy session creation inside the store (synchronous Zustand set), so reading
       // before would yield null and send session_id: null to the backend.
-      const { currentSessionId, vectorDbType } = useAppStore.getState();
+      const stateAfterAdd = useAppStore.getState();
+      const { currentSessionId } = stateAfterAdd;
+      const currentSession = selectCurrentSession(stateAfterAdd);
+      const visitorId = getOrCreateVisitorId();
+      const currentUserMessage: HistoryMessage = { role: "user", content: text };
+      const outboundMessages = [...historySnapshot, currentUserMessage];
+      // Only treat this as the first message in a new session when hydration has
+      // completed (isHydrated === true). Persisted sessions that haven't finished
+      // loading their history yet also have historySnapshot.length === 0, so
+      // checking isHydrated prevents accidentally triggering title generation
+      // (and sending an incomplete transcript) for those sessions.
+      const isFirstMessageInSession =
+        historySnapshot.length === 0 && currentSession?.isHydrated === true;
 
       // Create the assistant placeholder immediately — backend sends token events
       // directly without a preceding 'start' event.
@@ -135,17 +188,24 @@ export function useChat() {
         isStreaming: true,
       });
 
-      wsRef.current.send(
-        JSON.stringify({
-          message: text,
-          session_id: currentSessionId,
-          messages: historySnapshot,
-          vector_db_type: vectorDbType,
-          platform: "web",
-        })
-      );
+      const payload: WsOutboundMessage = {
+        session_id: currentSessionId ?? undefined,
+        visitor_id: visitorId,
+        messages: outboundMessages,
+      };
+      wsRef.current.send(JSON.stringify(payload));
+
+      if (isFirstMessageInSession && currentSessionId) {
+        void requestConversationTitle(currentSessionId, text);
+      }
     },
-    [addUserMessage, addToHistory, setStreaming, addAssistantPlaceholder]
+    [
+      addUserMessage,
+      addToHistory,
+      setStreaming,
+      addAssistantPlaceholder,
+      requestConversationTitle,
+    ]
   );
 
   return { sendMessage };
