@@ -46,7 +46,10 @@ class ChatMessage(BaseModel):
     )
     visitor_id: str | None = Field(
         None,
-        description="Stable ID for persisted history (per device or user); required when persistence is enabled, otherwise a per-connection default is generated",
+        description=(
+            "Stable ID for persisted history (per device or user); required when "
+            "persistence is enabled, otherwise a per-connection default is generated"
+        ),
     )
     messages: list[HistoryMessage] = Field(
         default_factory=list,

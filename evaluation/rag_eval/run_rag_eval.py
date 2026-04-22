@@ -2,9 +2,8 @@
 
 import asyncio
 
-from src.config import get_logger
-
 from evaluation.rag_eval.test_rag_dataset import RagEvaluator
+from src.config import get_logger
 
 logger = get_logger("rag_eval_script")
 

@@ -17,8 +17,12 @@ services:
     ports:
       - "8001:8001"
     environment:
-      # LLM settings for embeddings
-      - LLM_ENDPOINT=${LLM_ENDPOINT}
+      # LLM settings for embeddings (see .cursorrules: endpoints use OPENAI_*,
+      # credentials/model use LLM_*). OPENAI_EMBEDDINGS_ENDPOINT is optional
+      # and falls back to OPENAI_ENDPOINT when empty.
+      - OPENAI_ENDPOINT=${OPENAI_ENDPOINT}
+      - OPENAI_EMBEDDINGS_ENDPOINT=${OPENAI_EMBEDDINGS_ENDPOINT:-}
+      - OPENAI_EMBEDDINGS_API_KEY=${OPENAI_EMBEDDINGS_API_KEY:-}
       - LLM_API_KEY=${LLM_API_KEY}
       - LLM_API_VERSION=${LLM_API_VERSION}
       - LLM_EMBEDDING_DEPLOYMENT_NAME=${LLM_EMBEDDING_DEPLOYMENT_NAME}
@@ -65,8 +69,12 @@ services:
     ports:
       - "8002:8002"
     environment:
-      # LLM settings for embeddings
-      - LLM_ENDPOINT=${LLM_ENDPOINT}
+      # LLM settings for embeddings (see .cursorrules: endpoints use OPENAI_*,
+      # credentials/model use LLM_*). OPENAI_EMBEDDINGS_ENDPOINT is optional
+      # and falls back to OPENAI_ENDPOINT when empty.
+      - OPENAI_ENDPOINT=${OPENAI_ENDPOINT}
+      - OPENAI_EMBEDDINGS_ENDPOINT=${OPENAI_EMBEDDINGS_ENDPOINT:-}
+      - OPENAI_EMBEDDINGS_API_KEY=${OPENAI_EMBEDDINGS_API_KEY:-}
       - LLM_API_KEY=${LLM_API_KEY}
       - LLM_API_VERSION=${LLM_API_VERSION}
       - LLM_EMBEDDING_DEPLOYMENT_NAME=${LLM_EMBEDDING_DEPLOYMENT_NAME}
@@ -97,8 +105,10 @@ services:
     ports:
       - "8000:8000"
     environment:
-      # LLM Configuration (Azure OpenAI)
-      - LLM_ENDPOINT=${LLM_ENDPOINT}
+      # LLM Configuration (see .cursorrules: endpoints use OPENAI_*, model/keys use LLM_*)
+      - OPENAI_ENDPOINT=${OPENAI_ENDPOINT}
+      - OPENAI_EMBEDDINGS_ENDPOINT=${OPENAI_EMBEDDINGS_ENDPOINT:-}
+      - OPENAI_EMBEDDINGS_API_KEY=${OPENAI_EMBEDDINGS_API_KEY:-}
       - LLM_API_KEY=${LLM_API_KEY}
       - LLM_DEPLOYMENT_NAME=${LLM_DEPLOYMENT_NAME}
       - LLM_API_VERSION=${LLM_API_VERSION}
@@ -158,8 +168,10 @@ services:
     ports:
       - "8000:8000"
     environment:
-      # LLM Configuration (Azure OpenAI)
-      - LLM_ENDPOINT=${LLM_ENDPOINT}
+      # LLM Configuration (see .cursorrules: endpoints use OPENAI_*, model/keys use LLM_*)
+      - OPENAI_ENDPOINT=${OPENAI_ENDPOINT}
+      - OPENAI_EMBEDDINGS_ENDPOINT=${OPENAI_EMBEDDINGS_ENDPOINT:-}
+      - OPENAI_EMBEDDINGS_API_KEY=${OPENAI_EMBEDDINGS_API_KEY:-}
       - LLM_API_KEY=${LLM_API_KEY}
       - LLM_DEPLOYMENT_NAME=${LLM_DEPLOYMENT_NAME}
       - LLM_API_VERSION=${LLM_API_VERSION}

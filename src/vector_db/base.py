@@ -57,8 +57,8 @@ class VectorDatabase(ABC):
         for p in products:
             sizes = p.get("sizes", [])
             colors = p.get("colors", [])
-            formatted.append(
-                f"""
+            url = p.get("url")
+            block = f"""
 **{p['name']}**
 - Category: {p.get('category', 'N/A')}
 - Brand: {p.get('brand', 'N/A')}
@@ -69,6 +69,8 @@ class VectorDatabase(ABC):
 - Material: {p.get('material', 'N/A')}
 - Status: {'In Stock' if p.get('in_stock', True) else 'Out of Stock'}
 """.strip()
-            )
+            if url:
+                block = f"{block}\n- URL: {url}"
+            formatted.append(block)
 
         return f"Found {len(products)} product(s):\n\n" + "\n\n---\n\n".join(formatted)
