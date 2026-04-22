@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
-import { selectCurrentHistory, useAppStore } from "../store/appStore";
+import { selectCurrentHistory, selectCurrentSession, useAppStore } from "../store/appStore";
 import type {
   HistoryMessage,
   WsEndEvent,
@@ -164,11 +164,19 @@ export function useChat() {
       // Read currentSessionId AFTER addUserMessage — the first-ever message triggers
       // lazy session creation inside the store (synchronous Zustand set), so reading
       // before would yield null and send session_id: null to the backend.
-      const { currentSessionId } = useAppStore.getState();
+      const stateAfterAdd = useAppStore.getState();
+      const { currentSessionId } = stateAfterAdd;
+      const currentSession = selectCurrentSession(stateAfterAdd);
       const visitorId = getOrCreateVisitorId();
       const currentUserMessage: HistoryMessage = { role: "user", content: text };
       const outboundMessages = [...historySnapshot, currentUserMessage];
-      const isFirstMessageInSession = historySnapshot.length === 0 && currentSessionId !== null;
+      // Only treat this as the first message in a new session when hydration has
+      // completed (isHydrated === true). Persisted sessions that haven't finished
+      // loading their history yet also have historySnapshot.length === 0, so
+      // checking isHydrated prevents accidentally triggering title generation
+      // (and sending an incomplete transcript) for those sessions.
+      const isFirstMessageInSession =
+        historySnapshot.length === 0 && currentSession?.isHydrated === true;
 
       // Create the assistant placeholder immediately — backend sends token events
       // directly without a preceding 'start' event.
