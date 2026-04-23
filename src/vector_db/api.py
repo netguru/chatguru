@@ -74,6 +74,7 @@ class ProductResponse(BaseModel):
     material: str
     care_instructions: str
     in_stock: bool
+    url: str | None = None
 
 
 class SearchResultProduct(ProductResponse):

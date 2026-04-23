@@ -1,6 +1,6 @@
 """Product document structure and utilities for RAG."""
 
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 from langchain_core.documents import Document
 
@@ -19,6 +19,7 @@ class ProductData(TypedDict):
     material: str
     care_instructions: str
     in_stock: bool
+    url: NotRequired[str]
 
 
 def create_product_document(product: ProductData) -> Document:
@@ -31,6 +32,8 @@ def create_product_document(product: ProductData) -> Document:
     Returns:
         LangChain Document with content and metadata
     """
+    url = product.get("url")
+
     content = f"""
 {product['name']}
 
@@ -47,6 +50,9 @@ Care: {product['care_instructions']}
 Status: {'In Stock' if product['in_stock'] else 'Out of Stock'}
 """.strip()
 
+    if url:
+        content = f"{content}\nURL: {url}"
+
     metadata = {
         "product_id": product["id"],
         "name": product["name"],
@@ -61,5 +67,8 @@ Status: {'In Stock' if product['in_stock'] else 'Out of Stock'}
         "care_instructions": product["care_instructions"],
         "type": "product",
     }
+
+    if url:
+        metadata["url"] = url
 
     return Document(page_content=content, metadata=metadata)
