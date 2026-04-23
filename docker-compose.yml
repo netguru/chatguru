@@ -4,6 +4,12 @@
 # Usage:
 #   MongoDB (default): docker compose up
 #   SQLite:            docker compose --profile sqlite up
+#   + Rate Limiting:   add --profile rate-limiting to either command above
+#                      and set RATE_LIMIT_ENABLED=true in .env
+#
+# Examples:
+#   docker compose --profile rate-limiting up
+#   docker compose --profile sqlite --profile rate-limiting up
 
 services:
   # --------------------------------------------------------------------------
@@ -37,9 +43,10 @@ services:
       - chatguru-network
 
   # --------------------------------------------------------------------------
-  # Redis (rate limiting backing store)
+  # Redis (rate limiting backing store) - Use with --profile rate-limiting
   # --------------------------------------------------------------------------
   redis:
+    profiles: [ "rate-limiting" ]
     image: redis:7-alpine
     ports:
       - "6379:6379"
@@ -162,8 +169,6 @@ services:
     depends_on:
       mongo-vector-db:
         condition: service_healthy
-      redis:
-        condition: service_healthy
 
     restart: unless-stopped
 
@@ -226,8 +231,6 @@ services:
 
     depends_on:
       vector-db:
-        condition: service_healthy
-      redis:
         condition: service_healthy
 
     restart: unless-stopped

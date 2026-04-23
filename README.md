@@ -297,6 +297,20 @@ The application uses environment variables for configuration. Copy `env.example`
 | `RATE_LIMIT_WINDOW_SECONDS` | Fixed window length in seconds (86400 = 24 h) | `86400` |
 | `RATE_LIMIT_TRUST_PROXY` | Read real IP from `X-Forwarded-For` / `X-Real-IP` (only when behind a trusted proxy) | `false` |
 
+#### Rate limiting (Docker)
+
+Redis is **not** started by default. Add `--profile rate-limiting` to include it:
+
+```bash
+# MongoDB + rate limiting
+docker compose --profile rate-limiting up
+
+# SQLite + rate limiting
+docker compose --profile sqlite --profile rate-limiting up
+```
+
+Set `RATE_LIMIT_ENABLED=true` in `.env` alongside the profile. When `RATE_LIMIT_ENABLED=false` (the default), the profile is not needed — the agent starts without Redis.
+
 #### Chat history persistence
 
 `PERSISTENCE_DATABASE_URL` is the single toggle for server-side chat history:
