@@ -77,6 +77,7 @@ services:
       - "27017:27017"
     volumes:
       - mongodb-data:/data/db
+      - mongodb-configdb-data:/data/configdb
     restart: unless-stopped
     healthcheck:
       test: [ "CMD", "mongosh", "--eval", "db.adminCommand('ping')" ]
@@ -290,6 +291,8 @@ volumes:
   vector-db-data:
     driver: local
   mongodb-data:
+    driver: local
+  mongodb-configdb-data:
     driver: local
   redis-data:
     driver: local
