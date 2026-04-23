@@ -11,9 +11,9 @@ _redis_client: aioredis.Redis | None = None
 # Atomic Lua script: check the current count, reject if at or above the limit,
 # otherwise increment and set TTL on first use.
 #
-# All three operations (GET / INCR / EXPIRE) run inside a single Redis
-# transaction — there is no window between the check and the increment where a
-# concurrent request can slip through and exceed the quota.
+# All three operations (GET / INCR / EXPIRE) run as a single atomic Lua
+# script execution in Redis — there is no window between the check and the
+# increment where a concurrent request can slip through and exceed the quota.
 #
 # Returns:
 #   1  — request is within the limit (counter has been incremented).
