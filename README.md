@@ -293,8 +293,8 @@ The application uses environment variables for configuration. Copy `env.example`
 | `TITLE_GENERATION_CUSTOM_CLASS` | Custom class path (`module.path:ClassName`) when provider is `custom` | *(empty)* |
 | `RATE_LIMIT_ENABLED` | Enable Redis-backed per-IP rate limiting | `false` |
 | `RATE_LIMIT_REDIS_URL` | Redis connection URL | `redis://localhost:6379/0` |
-| `RATE_LIMIT_MAX_MESSAGES` | Max LLM messages per IP per rolling window | `10` |
-| `RATE_LIMIT_WINDOW_SECONDS` | Rolling window length in seconds (86400 = 24 h) | `86400` |
+| `RATE_LIMIT_MAX_MESSAGES` | Max LLM messages per IP per fixed window | `10` |
+| `RATE_LIMIT_WINDOW_SECONDS` | Fixed window length in seconds (86400 = 24 h) | `86400` |
 | `RATE_LIMIT_TRUST_PROXY` | Read real IP from `X-Forwarded-For` / `X-Real-IP` (only when behind a trusted proxy) | `false` |
 
 #### Chat history persistence

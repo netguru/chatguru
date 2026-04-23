@@ -400,7 +400,7 @@ class RateLimitSettings(BaseSettings):
     window_seconds: int = Field(
         default=86400,
         ge=1,
-        description="Rolling window length in seconds (RATE_LIMIT_WINDOW_SECONDS). Default: 24 h.",
+        description="Fixed window length in seconds (RATE_LIMIT_WINDOW_SECONDS). Default: 24 h.",
     )
     trust_proxy: bool = Field(
         default=False,
