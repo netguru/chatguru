@@ -18,7 +18,7 @@ from api.errors import (
 )
 from config import get_app_settings, get_logger, get_rate_limit_settings
 from persistence import get_chat_history_repository, is_persistence_enabled
-from rate_limiting import check_rate_limit, record_ai_response
+from rate_limiting import consume_rate_limit
 from title_generation import generate_title, truncate_title
 from vector_db import VectorDatabase, create_vector_database
 
@@ -155,8 +155,14 @@ def _validate_message_format(message_data: object) -> None:
         raise InvalidMessageFormatError(msg)
 
 
-def _get_client_ip(websocket: WebSocket) -> str:
+def _get_client_ip(websocket: WebSocket) -> str | None:
     """Extract the real client IP address from a WebSocket connection.
+
+    Returns ``None`` when the IP cannot be determined (e.g. certain ASGI
+    transports set ``websocket.client`` to ``None``). Callers must skip rate
+    limiting for a ``None`` result rather than falling back to a shared key —
+    a single shared key would let any one client exhaust the quota for every
+    other client whose IP is unknown.
 
     When ``RATE_LIMIT_TRUST_PROXY`` is True, the ``X-Forwarded-For`` and
     ``X-Real-IP`` headers are checked first.  Only enable proxy trust when
@@ -171,7 +177,12 @@ def _get_client_ip(websocket: WebSocket) -> str:
         if real_ip:
             return real_ip.strip()
     client = websocket.client
-    return client.host if client is not None else "unknown"
+    if client is None:
+        logger.warning(
+            "Cannot determine client IP — rate limiting skipped for this connection"
+        )
+        return None
+    return client.host
 
 
 _vector_database_cache: VectorDatabase | None = None
@@ -501,6 +512,8 @@ async def websocket_chat(websocket: WebSocket) -> None:
         vector_db = await _initialize_vector_database()
         agent = Agent(vector_database=vector_db)
         connection_visitor_id: str | None = None
+        # Extract once per connection — the IP cannot change mid-WebSocket.
+        client_ip = _get_client_ip(websocket)
 
         while True:
             data = await websocket.receive_text()
@@ -522,8 +535,11 @@ async def websocket_chat(websocket: WebSocket) -> None:
             if visitor_id is None:
                 continue
 
-            client_ip = _get_client_ip(websocket)
-            if not await check_rate_limit(client_ip):
+            # consume_rate_limit is skipped when client_ip is None (undetermined
+            # IP) rather than sharing a single "unknown" bucket across all such
+            # connections. The slot is consumed atomically before streaming begins
+            # so that partial-stream failures still count against the quota.
+            if client_ip is not None and not await consume_rate_limit(client_ip):
                 await _send_error(
                     websocket,
                     session_id=session_id,
@@ -536,7 +552,6 @@ async def websocket_chat(websocket: WebSocket) -> None:
                 await _handle_chat_turn(
                     websocket, agent, chat_message, session_id, visitor_id
                 )
-                await record_ai_response(client_ip)
             except Exception as e:
                 logger.exception("Error during streaming:")
                 app_settings = get_app_settings()

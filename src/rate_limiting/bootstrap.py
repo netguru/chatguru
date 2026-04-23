@@ -8,16 +8,27 @@ logger = get_logger(__name__)
 
 _redis_client: aioredis.Redis | None = None
 
-# Atomic Lua script: increment a counter, set TTL on the first increment.
-# Returns the counter value after incrementing.
-# Using Lua guarantees the INCR + EXPIRE pair is atomic — no risk of a key
-# with a counter > 0 but no TTL if the process dies between the two calls.
-_LUA_INCREMENT = """
-local count = redis.call('INCR', KEYS[1])
-if count == 1 then
+# Atomic Lua script: check the current count, reject if at or above the limit,
+# otherwise increment and set TTL on first use.
+#
+# All three operations (GET / INCR / EXPIRE) run inside a single Redis
+# transaction — there is no window between the check and the increment where a
+# concurrent request can slip through and exceed the quota.
+#
+# Returns:
+#   1  — request is within the limit (counter has been incremented).
+#   0  — limit already reached (counter unchanged).
+_LUA_CONSUME = """
+local count = redis.call('GET', KEYS[1])
+count = count and tonumber(count) or 0
+if count >= tonumber(ARGV[2]) then
+    return 0
+end
+local new_count = redis.call('INCR', KEYS[1])
+if new_count == 1 then
     redis.call('EXPIRE', KEYS[1], ARGV[1])
 end
-return count
+return 1
 """
 
 
@@ -65,11 +76,16 @@ def _get_redis_client() -> aioredis.Redis | None:
     return _redis_client
 
 
-async def check_rate_limit(ip: str) -> bool:
-    """Return True if the IP is within the allowed rate, False if it should be blocked.
+async def consume_rate_limit(ip: str) -> bool:
+    """Atomically check and consume one rate-limit slot for ``ip``.
 
-    Read-only — does not increment the counter. Call :func:`record_ai_response`
-    after a successful AI reply to consume one slot.
+    Uses a single Lua script so the check and increment are one atomic Redis
+    operation — concurrent requests from the same IP cannot both slip through
+    the guard before either has recorded its use (TOCTOU-safe).
+
+    The slot is consumed *before* the AI call begins, so a request that starts
+    streaming but fails mid-way still counts against the quota. This prevents
+    clients from exploiting streaming errors to bypass the limit.
 
     When rate limiting is disabled (no Redis client) every request is allowed.
 
@@ -77,8 +93,8 @@ async def check_rate_limit(ip: str) -> bool:
         ip: Client IP address used as the rate limit key.
 
     Returns:
-        True  — request is allowed.
-        False — limit reached; caller should send a rate_limit_exceeded error.
+        True  — slot consumed; request is allowed.
+        False — limit already reached; caller should send a rate_limit_exceeded error.
     """
     client = _get_redis_client()
     if client is None:
@@ -86,33 +102,15 @@ async def check_rate_limit(ip: str) -> bool:
 
     settings = get_rate_limit_settings()
     key = f"rate_limit:chat:{ip}"
-    raw = await client.get(key)
-    count = int(raw) if raw is not None else 0
-    allowed = count < settings.max_messages
+    result = await client.eval(  # type: ignore[misc]
+        _LUA_CONSUME, 1, key, str(settings.window_seconds), str(settings.max_messages)
+    )
+    allowed = bool(result)
     if not allowed:
         logger.info(
-            "Rate limit exceeded for ip=%s (count=%d, limit=%d)",
+            "Rate limit exceeded for ip=%s (limit=%d per %ds)",
             ip,
-            count,
             settings.max_messages,
+            settings.window_seconds,
         )
-    return bool(allowed)
-
-
-async def record_ai_response(ip: str) -> None:
-    """Increment the rate limit counter after a successful AI response.
-
-    Must be called once per completed AI reply. Skipped when rate limiting
-    is disabled. Uses the same atomic Lua script to set the TTL on first use.
-
-    Args:
-        ip: Client IP address used as the rate limit key.
-    """
-    client = _get_redis_client()
-    if client is None:
-        return
-
-    settings = get_rate_limit_settings()
-    key = f"rate_limit:chat:{ip}"
-    await client.eval(_LUA_INCREMENT, 1, key, str(settings.window_seconds))  # type: ignore[misc]
-    logger.debug("Recorded AI response for ip=%s", ip)
+    return allowed
