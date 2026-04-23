@@ -112,6 +112,7 @@ asyncio.run(chat())
 - **📊 Observability**: Built-in Langfuse tracing and monitoring
 - **✅ Testing**: Comprehensive test suite with promptfoo LLM evaluation
 - **🐳 Production Ready**: Docker containerization with health checks
+- **🔒 Rate Limiting**: Redis-backed per-IP message quota (opt-in, atomic Lua enforcement)
 
 ## 🏗️ Architecture
 
@@ -141,6 +142,7 @@ For detailed architecture documentation, see [docs/architecture.md](docs/archite
 - **AI/ML**: LangChain + Azure OpenAI (direct integration)
 - **LLM Provider**: Azure OpenAI (via langchain-openai)
 - **Vector Search**: sqlite-vec (semantic product search)
+- **Rate Limiting**: Redis 7 + hiredis (atomic Lua per-IP quotas)
 - **Observability**: Langfuse
 - **Testing**: pytest + promptfoo + GenericFakeChatModel
 - **Code Quality**: mypy + ruff + pre-commit
@@ -289,6 +291,11 @@ The application uses environment variables for configuration. Copy `env.example`
 | `LLM_OPENAI_BASE_URL` | OpenAI v1-compatible chat base URL; when set, chat uses `ChatOpenAI` instead of native Azure routing | *(empty)* |
 | `TITLE_GENERATION_PROVIDER` | Title provider: `openai`, `fallback`, `custom` | `openai` |
 | `TITLE_GENERATION_CUSTOM_CLASS` | Custom class path (`module.path:ClassName`) when provider is `custom` | *(empty)* |
+| `RATE_LIMIT_ENABLED` | Enable Redis-backed per-IP rate limiting | `false` |
+| `RATE_LIMIT_REDIS_URL` | Redis connection URL | `redis://localhost:6379/0` |
+| `RATE_LIMIT_MAX_MESSAGES` | Max LLM messages per IP per rolling window | `1` |
+| `RATE_LIMIT_WINDOW_SECONDS` | Rolling window length in seconds (86400 = 24 h) | `86400` |
+| `RATE_LIMIT_TRUST_PROXY` | Read real IP from `X-Forwarded-For` / `X-Real-IP` (only when behind a trusted proxy) | `false` |
 
 #### Chat history persistence
 
@@ -602,7 +609,7 @@ We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for:
 - [x] **Streaming Responses**: Real-time chat streaming via WebSocket ✅
 - [ ] **MCP Tools**: Integration with commerce platforms (PimCore, Strapi, Medusa.js)
 - [ ] **Authentication**: JWT-based API authentication
-- [ ] **Rate Limiting**: API rate limiting and quotas
+- [x] **Rate Limiting**: Redis-backed per-IP message quota with atomic Lua enforcement ✅
 - [x] **Session Management**: Client-side persistent conversation history (localStorage) ✅
 - [x] **Server-side Sessions**: Backend-persisted conversation history via `PERSISTENCE_DATABASE_URL` (opt-in) ✅
 - [ ] **Multi-tenancy**: Database-backed tenant configuration

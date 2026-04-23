@@ -34,6 +34,27 @@ Chat tables and vector tables can share a **single** `.db` file (see `PERSISTENC
 
 ---
 
+## Per-IP rate limiting (Redis-backed)
+
+**Context:** Prevent any single IP from sending unlimited LLM messages and incurring unbounded inference costs. Rate limiting must be optional (many deployments are internal or authenticated at the proxy layer) and must not introduce a TOCTOU race where concurrent requests from the same IP bypass the quota.
+
+**Decision:**
+
+- Gate the WebSocket handler with a Redis counter keyed by `rate_limit:chat:<ip>`. All configuration is opt-in via `RATE_LIMIT_ENABLED=true`; when false the module is a no-op.
+- **Atomic enforcement via Lua:** The check and increment are a single `EVAL` call (`_LUA_CONSUME` in `rate_limiting/bootstrap.py`). This eliminates the TOCTOU window that exists when using separate `GET` + `INCR` calls — two concurrent coroutines cannot both pass a `GET`-based check before either records its use.
+- **Consume before streaming:** The slot is consumed *before* the LLM call begins, not after it completes. This means a request that starts generating tokens but fails mid-stream still counts against the quota, preventing clients from exploiting partial-stream errors to bypass the limit.
+- **`None` IP, not `"unknown"`:** When `websocket.client` is unavailable (certain ASGI transports), `_get_client_ip` returns `None` and the handler skips enforcement entirely. A shared `"unknown"` key would let one client exhaust the quota for all others in the same situation.
+- **Proxy trust is explicit:** `RATE_LIMIT_TRUST_PROXY=true` enables reading `X-Forwarded-For` / `X-Real-IP`. This is off by default; enabling it in a direct-to-internet deployment would allow clients to spoof their IP.
+- **IP extracted once per connection:** `_get_client_ip` is called once when the WebSocket is accepted, not on every message, since `websocket.client` cannot change mid-connection.
+
+**Trade-offs:**
+
+- Redis is now a required dependency when rate limiting is enabled. Both docker-compose profiles depend on the Redis service health check.
+- The `RATE_LIMIT_MAX_MESSAGES` default is `1` — intentionally restrictive so operators must explicitly raise the limit for their use case rather than accidentally leaving it wide open.
+- Counting is per IP, not per authenticated user — suitable for public deployments without authentication. In authenticated deployments the rate limit key should be switched to a user/tenant identifier.
+
+---
+
 ## Chat history persistence (repository pattern)
 
 **Context:** Persist conversation turns per visitor and session for continuity and analytics.
