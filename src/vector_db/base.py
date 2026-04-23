@@ -69,8 +69,11 @@ class VectorDatabase(ABC):
 - Material: {p.get('material', 'N/A')}
 - Status: {'In Stock' if p.get('in_stock', True) else 'Out of Stock'}
 """.strip()
+            # Canonical, prompt-keyed URL line. Keep this format in sync with
+            # `src/rag/documents.py::create_product_document` and the prompt's
+            # "URL:" signal in `src/agent/prompt.py`.
             if url:
-                block = f"{block}\n- URL: {url}"
+                block = f"{block}\nURL: {url}"
             formatted.append(block)
 
         return f"Found {len(products)} product(s):\n\n" + "\n\n---\n\n".join(formatted)

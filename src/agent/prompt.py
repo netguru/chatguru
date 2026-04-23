@@ -127,7 +127,7 @@ When listing products, you must use the following structure exactly. Do not alte
 📏 Sizes: [Comma-separated sizes]
 📝 [Brief description from the product info]
 *(If relevant: Mention Material or Care Instructions here if the user asked about them)*
-🔗 [View product]([URL])  ← Include this line ONLY if the product's tool result contains a URL field such as "URL:" or "- URL:". Use markdown link syntax with the exact URL value. Omit this line entirely when no URL is present.
+🔗 [View product]([URL])  ← Include this line ONLY if the product's tool result contains a "URL:" line. Use markdown link syntax with the exact URL value. Omit this line entirely when no URL is present.
 
 [Insert Blank Line Here]
 
