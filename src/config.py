@@ -393,7 +393,7 @@ class RateLimitSettings(BaseSettings):
         description="Redis connection URL (RATE_LIMIT_REDIS_URL).",
     )
     max_messages: int = Field(
-        default=1,
+        default=10,
         ge=1,
         description="Max LLM messages allowed per IP per window (RATE_LIMIT_MAX_MESSAGES).",
     )

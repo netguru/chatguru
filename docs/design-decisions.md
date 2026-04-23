@@ -50,7 +50,7 @@ Chat tables and vector tables can share a **single** `.db` file (see `PERSISTENC
 **Trade-offs:**
 
 - Redis is now a required dependency when rate limiting is enabled. Both docker-compose profiles depend on the Redis service health check.
-- The `RATE_LIMIT_MAX_MESSAGES` default is `1` — intentionally restrictive so operators must explicitly raise the limit for their use case rather than accidentally leaving it wide open.
+- The `RATE_LIMIT_MAX_MESSAGES` default is `10` per 24-hour window — a reasonable starting point for typical demo or internal deployments.
 - Counting is per IP, not per authenticated user — suitable for public deployments without authentication. In authenticated deployments the rate limit key should be switched to a user/tenant identifier.
 
 ---
