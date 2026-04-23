@@ -45,7 +45,9 @@ async def init_rate_limiting() -> None:
     """
     global _redis_client  # noqa: PLW0603
     if not is_rate_limiting_enabled():
-        logger.info("Rate limiting is disabled (RATE_LIMIT_ENABLED not set)")
+        logger.info(
+            "Rate limiting is disabled (RATE_LIMIT_ENABLED is false or not set)"
+        )
         return
     if _redis_client is not None:
         return
