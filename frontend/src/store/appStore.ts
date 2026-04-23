@@ -199,14 +199,22 @@ export const useAppStore = create<AppState>((set) => ({
       currentSessionId: null,
     })),
 
-  replaceSessions: (sessions) =>
-    set((state) => ({
-      sessions,
-      currentSessionId:
-        state.currentSessionId && sessions.some((s) => s.id === state.currentSessionId)
-          ? state.currentSessionId
-          : sessions[0]?.id ?? null,
-    })),
+  replaceSessions: (fetchedSessions) =>
+    set((state) => {
+      // Preserve any locally-created sessions (isHydrated === true) that are not
+      // present in the fetched list. These were started while loadConversations()
+      // was in-flight and would otherwise be silently dropped by a naive replace.
+      const fetchedIds = new Set(fetchedSessions.map((s) => s.id));
+      const localSessions = state.sessions.filter((s) => s.isHydrated && !fetchedIds.has(s.id));
+      const mergedSessions = [...localSessions, ...fetchedSessions];
+      return {
+        sessions: mergedSessions,
+        currentSessionId:
+          state.currentSessionId && mergedSessions.some((s) => s.id === state.currentSessionId)
+            ? state.currentSessionId
+            : mergedSessions[0]?.id ?? null,
+      };
+    }),
 
   hydrateSessionHistory: (sessionId, history) =>
     set((state) => ({

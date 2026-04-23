@@ -187,7 +187,7 @@ class MongoVectorStore:
 
         docs = []
         for product, embedding in zip(products, embeddings, strict=True):
-            doc = {
+            doc: dict[str, Any] = {
                 "id": str(product["id"]),
                 "name": product["name"],
                 "category": product.get("category", ""),
@@ -201,6 +201,8 @@ class MongoVectorStore:
                 "in_stock": product.get("in_stock", True),
                 "embedding": embedding,
             }
+            if product.get("url"):
+                doc["url"] = product["url"]
             docs.append(doc)
 
         self._collection.insert_many(docs)
