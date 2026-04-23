@@ -6,7 +6,7 @@ import json
 import uuid
 from typing import Annotated, Self
 
-from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from agent.service import Agent
@@ -47,8 +47,9 @@ class ChatMessage(BaseModel):
     visitor_id: str | None = Field(
         None,
         description=(
-            "Stable ID for persisted history (per device or user); required when "
-            "persistence is enabled, otherwise a per-connection default is generated"
+            "Stable ID for persisted history (per device or user); "
+            "required when persistence is enabled, otherwise a "
+            "per-connection default is generated"
         ),
     )
     messages: list[HistoryMessage] = Field(
@@ -71,6 +72,19 @@ class ChatMessage(BaseModel):
             msg = "Last user message content must be between 1 and 2000 characters"
             raise ValueError(msg)
         return self
+
+
+class GenerateConversationTitleRequest(BaseModel):
+    """HTTP payload for generating a conversation title on demand."""
+
+    visitor_id: str = Field(..., min_length=1, max_length=512, description="Visitor ID")
+    session_id: str = Field(..., min_length=1, max_length=512, description="Session ID")
+    first_message: str = Field(
+        ...,
+        min_length=1,
+        max_length=_MAX_LAST_USER_MESSAGE_LENGTH,
+        description="First user message used to generate the title",
+    )
 
 
 router = APIRouter(tags=["chat"])
@@ -228,34 +242,41 @@ async def get_history(
     return [{"role": m.role, "content": m.content} for m in messages]
 
 
-async def _update_title_in_background(
-    *,
-    visitor_id: str,
-    session_id: str,
-    first_message: str,
-) -> None:
-    """Generate an LLM title and patch the conversation record. Never raises."""
+@persistence_router.post("/conversations/title")
+async def generate_conversation_title(
+    payload: GenerateConversationTitleRequest,
+) -> dict[str, str]:
+    """Generate and persist a title for an existing conversation."""
+    repo = get_chat_history_repository()
+    if repo is None:
+        msg = "persistence router registered but repository is not initialised"
+        raise RuntimeError(msg)
+
+    exists = await repo.conversation_exists(
+        visitor_id=payload.visitor_id,
+        session_id=payload.session_id,
+    )
+    if not exists:
+        raise HTTPException(
+            status_code=404,
+            detail="Conversation not found for visitor_id + session_id",
+        )
+
+    title = truncate_title(payload.first_message)
     try:
-        logger.info(
-            "Starting background title generation (session_id=%s)",
-            session_id,
-        )
-        title = await generate_title(first_message)
-        repo = get_chat_history_repository()
-        if repo is None:
-            return
-        await repo.update_conversation_title(
-            visitor_id=visitor_id,
-            session_id=session_id,
-            title=title,
-        )
-        logger.info(
-            "Title updated for session %s: %r",
-            session_id,
-            title,
-        )
+        title = await generate_title(payload.first_message)
     except Exception:
-        logger.exception("Background title update failed (session_id=%s)", session_id)
+        logger.exception(
+            "Title generation failed (session_id=%s), using fallback",
+            payload.session_id,
+        )
+
+    await repo.update_conversation_title(
+        visitor_id=payload.visitor_id,
+        session_id=payload.session_id,
+        title=title,
+    )
+    return {"session_id": payload.session_id, "title": title}
 
 
 async def _handle_chat_turn(
@@ -299,17 +320,6 @@ async def _handle_chat_turn(
                 logger.exception(
                     "Failed to create conversation record (session_id=%s)", session_id
                 )
-
-            task = asyncio.create_task(
-                _update_title_in_background(
-                    visitor_id=visitor_id,
-                    session_id=session_id,
-                    first_message=current_user_content,
-                )
-            )
-            _background_tasks.add(task)
-            task.add_done_callback(_background_tasks.discard)
-            logger.info("Scheduled background title update (session_id=%s)", session_id)
 
         try:
             await repo.append_message(
