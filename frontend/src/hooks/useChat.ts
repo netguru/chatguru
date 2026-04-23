@@ -113,9 +113,11 @@ export function useChat() {
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN || isStreamingRef.current)
         return;
 
-      // Snapshot history BEFORE adding the current user message so the backend
-      // receives only prior turns in the `messages` field.
-      const historySnapshot = selectCurrentHistory(useAppStore.getState());
+      // Snapshot prior turns before adding the current user message, then append
+      // the current user turn so the backend receives the full transcript with the
+      // current turn as the last entry (required by the ChatMessage contract).
+      const priorHistory = selectCurrentHistory(useAppStore.getState());
+      const messages = [...priorHistory, { role: "user" as const, content: text }];
 
       addUserMessage({ id: crypto.randomUUID(), role: "user", content: text });
       addToHistory({ role: "user", content: text });
@@ -137,9 +139,8 @@ export function useChat() {
 
       wsRef.current.send(
         JSON.stringify({
-          message: text,
           session_id: currentSessionId,
-          messages: historySnapshot,
+          messages,
           vector_db_type: vectorDbType,
           platform: "web",
         })
