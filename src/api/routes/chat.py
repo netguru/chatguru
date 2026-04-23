@@ -178,7 +178,7 @@ def _get_client_ip(websocket: WebSocket) -> str | None:
             return real_ip.strip()
     client = websocket.client
     if client is None:
-        logger.warning(
+        logger.info(
             "Cannot determine client IP — rate limiting skipped for this connection"
         )
         return None
