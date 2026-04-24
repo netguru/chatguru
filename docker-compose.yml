@@ -23,7 +23,6 @@ services:
     ports:
       - "8001:8001"
     environment:
-      # LLM settings for embeddings
       # LLM settings for embeddings (see .cursorrules: endpoints use OPENAI_*,
       # credentials/model use LLM_*). OPENAI_EMBEDDINGS_ENDPOINT is optional
       # and falls back to OPENAI_ENDPOINT when empty.
@@ -98,11 +97,10 @@ services:
     ports:
       - "8002:8002"
     environment:
-      # LLM settings for embeddings
-      - LLM_OPENAI_BASE_URL=${LLM_OPENAI_BASE_URL:-}
       # LLM settings for embeddings (see .cursorrules: endpoints use OPENAI_*,
       # credentials/model use LLM_*). OPENAI_EMBEDDINGS_ENDPOINT is optional
       # and falls back to OPENAI_ENDPOINT when empty.
+      - LLM_OPENAI_BASE_URL=${LLM_OPENAI_BASE_URL:-}
       - OPENAI_ENDPOINT=${OPENAI_ENDPOINT}
       - OPENAI_EMBEDDINGS_ENDPOINT=${OPENAI_EMBEDDINGS_ENDPOINT:-}
       - OPENAI_EMBEDDINGS_API_KEY=${OPENAI_EMBEDDINGS_API_KEY:-}
@@ -136,7 +134,6 @@ services:
     ports:
       - "8000:8000"
     environment:
-      # LLM Configuration (Azure OpenAI)
       # LLM Configuration (see .cursorrules: endpoints use OPENAI_*, model/keys use LLM_*)
       - OPENAI_ENDPOINT=${OPENAI_ENDPOINT}
       - OPENAI_EMBEDDINGS_ENDPOINT=${OPENAI_EMBEDDINGS_ENDPOINT:-}
@@ -207,7 +204,6 @@ services:
     ports:
       - "8000:8000"
     environment:
-      # LLM Configuration (Azure OpenAI)
       # LLM Configuration (see .cursorrules: endpoints use OPENAI_*, model/keys use LLM_*)
       - OPENAI_ENDPOINT=${OPENAI_ENDPOINT}
       - OPENAI_EMBEDDINGS_ENDPOINT=${OPENAI_EMBEDDINGS_ENDPOINT:-}
