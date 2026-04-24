@@ -1,6 +1,6 @@
 import { isRouteErrorResponse, useRouteError } from "react-router-dom";
+import { Logo } from "../components/branding/logo";
 import { Button } from "../components/ui/button";
-import { Logo } from "../components/ui/icons/logo";
 
 export function ErrorPage() {
   const error = useRouteError();

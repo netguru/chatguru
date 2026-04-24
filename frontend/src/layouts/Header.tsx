@@ -1,5 +1,5 @@
 import { Link, useLocation } from "react-router-dom";
-import { Logo } from "../components/ui/icons/logo";
+import { Logo } from "../components/branding/logo";
 import { SidebarTrigger } from "../components/ui/sidebar/sidebar";
 import { selectCurrentSession, useAppStore } from "../store/appStore";
 
