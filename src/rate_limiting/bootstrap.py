@@ -89,7 +89,8 @@ async def consume_rate_limit(ip: str) -> bool:
     streaming but fails mid-way still counts against the quota. This prevents
     clients from exploiting streaming errors to bypass the limit.
 
-    When rate limiting is disabled (no Redis client) every request is allowed.
+    When rate limiting is disabled every request is allowed regardless of
+    whether ``init_rate_limiting`` has been called.
 
     Args:
         ip: Client IP address used as the rate limit key.
@@ -98,6 +99,9 @@ async def consume_rate_limit(ip: str) -> bool:
         True  — slot consumed; request is allowed.
         False — limit already reached; caller should send a rate_limit_exceeded error.
     """
+    if not is_rate_limiting_enabled():
+        return True
+
     client = _get_redis_client()
     if client is None:
         return True
