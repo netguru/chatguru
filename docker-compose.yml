@@ -4,6 +4,12 @@
 # Usage:
 #   MongoDB (default): docker compose up
 #   SQLite:            docker compose --profile sqlite up
+#   + Rate Limiting:   add --profile rate-limiting to either command above
+#                      and set RATE_LIMIT_ENABLED=true in .env
+#
+# Examples:
+#   docker compose --profile rate-limiting up
+#   docker compose --profile sqlite --profile rate-limiting up
 
 services:
   # --------------------------------------------------------------------------
@@ -41,6 +47,27 @@ services:
       - chatguru-network
 
   # --------------------------------------------------------------------------
+  # Redis (rate limiting backing store) - Use with --profile rate-limiting
+  # --------------------------------------------------------------------------
+  redis:
+    profiles: [ "rate-limiting" ]
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - chatguru-network
+
+  # --------------------------------------------------------------------------
   # Local MongoDB Atlas (with Vector Search support)
   # --------------------------------------------------------------------------
   mongodb:
@@ -49,6 +76,7 @@ services:
       - "27017:27017"
     volumes:
       - mongodb-data:/data/db
+      - mongodb-configdb-data:/data/configdb
     restart: unless-stopped
     healthcheck:
       test: [ "CMD", "mongosh", "--eval", "db.adminCommand('ping')" ]
@@ -72,6 +100,7 @@ services:
       # LLM settings for embeddings (see .cursorrules: endpoints use OPENAI_*,
       # credentials/model use LLM_*). OPENAI_EMBEDDINGS_ENDPOINT is optional
       # and falls back to OPENAI_ENDPOINT when empty.
+      - LLM_OPENAI_BASE_URL=${LLM_OPENAI_BASE_URL:-}
       - OPENAI_ENDPOINT=${OPENAI_ENDPOINT}
       - OPENAI_EMBEDDINGS_ENDPOINT=${OPENAI_EMBEDDINGS_ENDPOINT:-}
       - OPENAI_EMBEDDINGS_API_KEY=${OPENAI_EMBEDDINGS_API_KEY:-}
@@ -132,6 +161,13 @@ services:
       #   PERSISTENCE_DATABASE_URL=postgresql+asyncpg://user:pass@host:5432/chatguru
       - PERSISTENCE_DATABASE_URL=${PERSISTENCE_DATABASE_URL:-}
 
+      # Rate Limiting
+      - RATE_LIMIT_ENABLED=${RATE_LIMIT_ENABLED:-false}
+      - RATE_LIMIT_REDIS_URL=${RATE_LIMIT_REDIS_URL:-redis://redis:6379/0}
+      - RATE_LIMIT_MAX_MESSAGES=${RATE_LIMIT_MAX_MESSAGES:-10}
+      - RATE_LIMIT_WINDOW_SECONDS=${RATE_LIMIT_WINDOW_SECONDS:-86400}
+      - RATE_LIMIT_TRUST_PROXY=${RATE_LIMIT_TRUST_PROXY:-false}
+
       # FastAPI Configuration
       - FASTAPI_HOST=0.0.0.0
       - FASTAPI_PORT=8000
@@ -190,6 +226,13 @@ services:
       # Chat + Alembic (same SQLite file as vector-db service)
       - PERSISTENCE_DATABASE_URL=sqlite+aiosqlite:////data/chatguru.db
 
+      # Rate Limiting
+      - RATE_LIMIT_ENABLED=${RATE_LIMIT_ENABLED:-false}
+      - RATE_LIMIT_REDIS_URL=${RATE_LIMIT_REDIS_URL:-redis://redis:6379/0}
+      - RATE_LIMIT_MAX_MESSAGES=${RATE_LIMIT_MAX_MESSAGES:-10}
+      - RATE_LIMIT_WINDOW_SECONDS=${RATE_LIMIT_WINDOW_SECONDS:-86400}
+      - RATE_LIMIT_TRUST_PROXY=${RATE_LIMIT_TRUST_PROXY:-false}
+
       # FastAPI Configuration
       - FASTAPI_HOST=0.0.0.0
       - FASTAPI_PORT=8000
@@ -244,6 +287,10 @@ volumes:
   vector-db-data:
     driver: local
   mongodb-data:
+    driver: local
+  mongodb-configdb-data:
+    driver: local
+  redis-data:
     driver: local
 
 # --------------------------------------------------------------------------

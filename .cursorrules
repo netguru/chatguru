@@ -150,6 +150,40 @@ These rules codify the design decisions and architectural patterns established d
 - **Rule**: Breaking changes (like removing `run()` method) MUST be documented in CHANGELOG.
 - **Rationale**: Helps developers understand migration path.
 
+
+## Testing Rules (additions)
+
+### 24. New Modules Require Tests on Merge
+- **Rule**: Every new module or package MUST ship with a corresponding test file. A commit that adds `src/foo/bar.py` must also add `tests/test_bar.py` (or equivalent). PRs that add logic without tests MUST be rejected.
+- **Rationale**: Untested code accumulates silent bugs. The rate-limit TOCTOU and shared-key issues above went undetected precisely because there were no tests.
+
+### 25. Concurrent / Race-Condition Tests for Shared State
+- **Rule**: Any feature that uses shared mutable state (Redis counters, in-process globals, DB rows) MUST include a concurrency test — typically using `asyncio.gather` with multiple concurrent callers — that verifies the invariant holds under parallel access.
+- **Implementation**: Simulate the atomic operation in-process (without a real Redis) so the test is fast and deterministic.
+- **Example**:
+  ```python
+  results = await asyncio.gather(
+      consume_rate_limit("1.2.3.4"),
+      consume_rate_limit("1.2.3.4"),
+      consume_rate_limit("1.2.3.4"),
+  )
+  assert sum(r is True for r in results) == max_messages
+  ```
+
+## Configuration Rules
+
+### 26. All Docker-Compose Environment Variables Must Be Overridable
+- **Rule**: Every environment variable set in `docker-compose.yml` MUST use the `${VAR_NAME:-default}` expansion pattern so operators can override it without editing the file.
+- **Rationale**: Hardcoded values prevent operators from pointing services at external/managed infrastructure (e.g. a managed Redis or Postgres) without modifying source files.
+- **Example**:
+  ```yaml
+  # ❌ Hardcoded — cannot be changed without editing compose file
+  - RATE_LIMIT_REDIS_URL=redis://redis:6379/0
+
+  # ✅ Overridable with a sensible default
+  - RATE_LIMIT_REDIS_URL=${RATE_LIMIT_REDIS_URL:-redis://redis:6379/0}
+  ```
+
 ## Summary
 
 When making changes:
@@ -161,5 +195,8 @@ When making changes:
 6. ✅ Use `OPENAI_ENDPOINT` / `LLM_*` environment variables
 7. ✅ Follow WebSocket message protocol
 8. ✅ Document significant decisions
+9. ✅ Ship tests with every new module (rule 24)
+10. ✅ Include concurrency tests for shared mutable state (rule 25)
+11. ✅ Make all docker-compose env vars overridable (rule 26)
 
 These rules ensure consistency, maintainability, and robustness of the codebase.

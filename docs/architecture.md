@@ -191,7 +191,7 @@ class ChatResponse(BaseModel):
 **Behavior Customization**:
 - Response style configuration
 - Tool availability per tenant
-- Rate limiting per tenant
+- Per-IP rate limiting (Redis-backed, configurable per deployment)
 - Feature flags
 
 ### 3. Configuration Management
@@ -212,7 +212,7 @@ class ChatResponse(BaseModel):
 - No authentication (development phase)
 - CORS configuration
 - Input validation and sanitization
-- Rate limiting (future)
+- Per-IP rate limiting via Redis (opt-in — see `RATE_LIMIT_*` env vars)
 
 ### 2. Data Privacy
 - Session-based conversation storage

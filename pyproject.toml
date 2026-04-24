@@ -46,6 +46,7 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0.0",
     "aiosqlite>=0.20.0",
     "alembic>=1.13.0",
+    "redis[hiredis]>=5.0.0",
 ]
 
 [project.urls]
@@ -136,6 +137,13 @@ markers = [
 ]
 asyncio_mode = "strict"
 asyncio_default_fixture_loop_scope = "function"
+filterwarnings = [
+    # aiosqlite connections run on a background thread; SQLAlchemy raises this
+    # SAWarning when the GC reclaims them after the event loop closes — even
+    # when engine.dispose() has already been called. This is a known aiosqlite
+    # + SQLAlchemy quirk and not a real leak in the application code.
+    "ignore:The garbage collector is trying to clean up non-checked-in connection:sqlalchemy.exc.SAWarning",
+]
 
 [dependency-groups]
 dev = [

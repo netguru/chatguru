@@ -371,3 +371,48 @@ class TitleGenerationSettings(BaseSettings):
 def get_title_generation_settings() -> TitleGenerationSettings:
     """Get title generation settings."""
     return TitleGenerationSettings()
+
+
+class RateLimitSettings(BaseSettings):
+    """Rate limiting settings."""
+
+    model_config = SettingsConfigDict(
+        env_file=get_env_file_path(),
+        env_prefix="RATE_LIMIT_",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+    enabled: bool = Field(
+        default=False,
+        description="Enable Redis-backed rate limiting (RATE_LIMIT_ENABLED).",
+    )
+    redis_url: str = Field(
+        default="redis://localhost:6379/0",
+        description="Redis connection URL (RATE_LIMIT_REDIS_URL).",
+    )
+    max_messages: int = Field(
+        default=10,
+        ge=1,
+        description="Max LLM messages allowed per IP per window (RATE_LIMIT_MAX_MESSAGES).",
+    )
+    window_seconds: int = Field(
+        default=86400,
+        ge=1,
+        description="Fixed window length in seconds (RATE_LIMIT_WINDOW_SECONDS). Default: 24 h.",
+    )
+    trust_proxy: bool = Field(
+        default=False,
+        description=(
+            "When True, extract the real client IP from the X-Forwarded-For or X-Real-IP "
+            "header instead of the direct TCP connection address. "
+            "Enable only when the app is behind a trusted reverse proxy (RATE_LIMIT_TRUST_PROXY)."
+        ),
+    )
+
+
+@lru_cache
+def get_rate_limit_settings() -> RateLimitSettings:
+    """Get rate limit settings."""
+    return RateLimitSettings()
