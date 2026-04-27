@@ -117,6 +117,7 @@ asyncio.run(chat())
 - **📊 Observability**: Built-in Langfuse tracing and monitoring
 - **✅ Testing**: Comprehensive test suite with promptfoo LLM evaluation
 - **🐳 Production Ready**: Docker containerization with health checks
+- **🔒 Rate Limiting**: Redis-backed per-IP message quota (opt-in, atomic Lua enforcement)
 
 ## 🏗️ Architecture
 
@@ -125,7 +126,7 @@ Simple, modular architecture designed for whitelabel deployment:
 ```mermaid
 graph LR
     subgraph "Current Implementation"
-        UI[Web Chat UI] -->|WebSocket| API[FastAPI API]
+        UI[React/Vite Frontend<br/>frontend/] -->|WebSocket| API[FastAPI API]
         API -->|Streaming| AGENT[Agent Service]
         AGENT -->|AzureChatOpenAI| LLM[Azure OpenAI]
         AGENT -->|RAG Tool| PRODUCTDB[Product DB<br/>sqlite-vec]
@@ -146,40 +147,32 @@ For detailed architecture documentation, see [docs/architecture.md](docs/archite
 - **AI/ML**: LangChain + Azure OpenAI (direct integration)
 - **LLM Provider**: Azure OpenAI (via langchain-openai)
 - **Vector Search**: sqlite-vec (semantic product search)
+- **Rate Limiting**: Redis 7 + hiredis (atomic Lua per-IP quotas)
 - **Observability**: Langfuse
 - **Testing**: pytest + promptfoo + GenericFakeChatModel
 - **Code Quality**: mypy + ruff + pre-commit
+- **Frontend**: React 19 + Vite (`frontend/`)
+- **CSS**: Tailwind CSS v4 (via `@tailwindcss/vite`)
 - **Containerization**: Docker + Docker Compose
 - **Package Management**: uv (Python) + npm (Node.js)
 - **Development**: Makefile for task automation
 
-## 🌐 Frontend Status
+## 🌐 Frontend
 
-- The previous React/Vite frontend has been moved to a separate repository and is not shipped here.
-- This repo only contains a minimal HTML page at `/` (`src/api/templates/index.html`) for smoke testing.
-- For a full experience, run your own frontend (e.g., in another container) that:
-  - Connects to the backend WebSocket at `/ws` and supports token-by-token streaming.
-  - Sends full conversation history via the `messages` array (`role` + `content`) alongside each `message`.
-  - Persists/maintains `session_id` per chat.
+A React + Vite frontend lives in the `frontend/` directory.
 
-### Conversation History Management
+Run it locally:
 
-The frontend is responsible for maintaining conversation history. The included test UI (`index.html`) demonstrates the recommended approach:
+```bash
+make frontend-dev   # Vite dev server → http://localhost:5173
+```
 
-1. **Storage**: Use `localStorage` to persist conversation history and session ID across page reloads
-2. **Format**: Store messages as `[{role: "user"|"assistant", content: "..."}]`
-3. **Sending**: Include all previous messages (excluding the current one) in the `messages` array with each request
-4. **Session ID**: Extract and save `session_id` from ALL response types (`token`, `end`, `error`)
+Or via Docker Compose — the `frontend` service starts automatically on port 5173.
 
-```javascript
-// Example localStorage keys
-const STORAGE_KEY = 'chatguru_chat_history';   // Array of {role, content}
-const SESSION_KEY = 'chatguru_session_id';      // Session ID string
+Copy the env template before running:
 
-// On page load: restore history and display messages
-// On send: add user message to history, send with messages array
-// On response end: add assistant message to history, save session_id
-// On error: preserve session_id if valid (not "unknown")
+```bash
+cp frontend/.env.example frontend/.env
 ```
 
 ## 📋 Prerequisites
@@ -187,6 +180,7 @@ const SESSION_KEY = 'chatguru_session_id';      // Session ID string
 Before you begin, ensure you have the following installed:
 
 - **Python 3.12+** ([Download](https://www.python.org/downloads/))
+- **Node.js 20+** and npm — required by React 19 ([Download](https://nodejs.org/))
 - **uv** - Fast Python package installer ([Installation guide](https://github.com/astral-sh/uv))
 - **Docker** and Docker Compose (optional, for containerized deployment)
 - **Azure OpenAI account** with API access
@@ -233,6 +227,7 @@ make dev
 
 #### 5. Access the Application
 
+- **Frontend**: http://localhost:5173
 - **Test UI (Minimal)**: http://localhost:8000/  _(for smoke testing only)_
 - **Backend API**: http://localhost:8000
 - **API Documentation**: http://localhost:8000/docs
@@ -263,6 +258,7 @@ make docker-run-detached
 
 #### 3. Access the Application
 
+- **Frontend**: http://localhost:5173
 - **Test UI (Minimal)**: http://localhost:8000/  _(for smoke testing only)_
 - **Backend API**: http://localhost:8000
 - **API Documentation**: http://localhost:8000/docs
@@ -307,8 +303,28 @@ The application uses environment variables for configuration. Copy `env.example`
 | `DOCUMENT_RAG_EMBEDDING_CUSTOM_CLASS` | Custom embedding provider class path (`module.path:ClassName`) | *(empty)* |
 | `DOCUMENT_RAG_MONGODB_FILES_BUCKET` | GridFS bucket storing full source documents | `document_sources` |
 | `LLM_API_VERSION` | API version for native Azure OpenAI setups | *(empty)* |
+| `LLM_OPENAI_BASE_URL` | OpenAI v1-compatible chat base URL; when set, chat uses `ChatOpenAI` instead of native Azure routing | *(empty)* |
 | `TITLE_GENERATION_PROVIDER` | Title provider: `openai`, `fallback`, `custom` | `openai` |
 | `TITLE_GENERATION_CUSTOM_CLASS` | Custom class path (`module.path:ClassName`) when provider is `custom` | *(empty)* |
+| `RATE_LIMIT_ENABLED` | Enable Redis-backed per-IP rate limiting | `false` |
+| `RATE_LIMIT_REDIS_URL` | Redis connection URL | `redis://localhost:6379/0` |
+| `RATE_LIMIT_MAX_MESSAGES` | Max LLM messages per IP per fixed window | `10` |
+| `RATE_LIMIT_WINDOW_SECONDS` | Fixed window length in seconds (86400 = 24 h) | `86400` |
+| `RATE_LIMIT_TRUST_PROXY` | Read real IP from `X-Forwarded-For` / `X-Real-IP` (only when behind a trusted proxy) | `false` |
+
+#### Rate limiting (Docker)
+
+Redis is **not** started by default. Add `--profile rate-limiting` to include it:
+
+```bash
+# MongoDB + rate limiting
+docker compose --profile rate-limiting up
+
+# SQLite + rate limiting
+docker compose --profile sqlite --profile rate-limiting up
+```
+
+Set `RATE_LIMIT_ENABLED=true` in `.env` alongside the profile. When `RATE_LIMIT_ENABLED=false` (the default), the profile is not needed — the agent starts without Redis.
 
 #### Chat history persistence
 
@@ -350,6 +366,8 @@ To fully replace existing document RAG data during ingest:
 ```bash
 make ingest-docs SOURCE_DIR=./docs BACKEND=mongodb FULL_REPLACE=1
 ```
+
+**LLM URL modes:** `LLM_OPENAI_BASE_URL` (universal OpenAI-compatible API) vs. `OPENAI_ENDPOINT` with empty `LLM_OPENAI_BASE_URL` (native Azure OpenAI client) is documented in [docs/design-decisions.md](docs/design-decisions.md#llm-endpoint-modes).
 
 See [env.example](env.example) for a complete template with detailed comments.
 
@@ -429,6 +447,7 @@ make install        # Install production dependencies
 #### Development Servers
 ```bash
 make dev            # Start backend development server (auto-reload)
+make frontend-dev   # Start frontend development server (Vite, port 5173)
 make run            # Start production server (no auto-reload)
 ```
 
@@ -467,6 +486,11 @@ make clean          # Clean Python cache files
 
 ```
 chatguru/
+├── frontend/                # React + Vite frontend
+│   ├── src/                 # Source code (components, hooks, pages)
+│   ├── public/              # Static assets
+│   ├── .env.example         # Frontend env template
+│   └── package.json
 ├── src/                     # Main application code
 │   ├── api/                 # FastAPI application
 │   │   ├── main.py         # FastAPI app setup
@@ -565,68 +589,17 @@ docker run -p 8000:8000 --env-file .env chatguru-agent
 
 ### Ports
 
+- **Frontend**: `5173` (host) → `5173` (container)
 - **Backend API**: `8000` (host) → `8000` (container)
 - **Product DB**: `8001` (host) → `8001` (container)
 - **WebSocket**: `ws://localhost:8000/ws`
 - **Test UI**: `http://localhost:8000/` (minimal, not production)
 
-### Using an External Frontend
+### Frontend Service
 
-Run your preferred frontend in a separate container or process and point it to the backend:
-
-- HTTP base: `http://<backend-host>:8000`
-- WebSocket: `ws://<backend-host>:8000/ws`
-- Include full conversation history in every message as `messages: [{role, content}, ...]`.
-- Preserve a stable `session_id` per chat thread.
-
-#### Conversation History Requirements
-
-Your frontend **must** maintain conversation history to enable context-aware responses:
-
-1. **Persist locally**: Store conversation history in `localStorage` (web) or equivalent persistent storage
-2. **Send with each message**: Include all previous messages in the `messages` array (excluding the current message being sent)
-3. **Update after responses**: Add assistant responses to history when the `end` message is received
-4. **Handle session_id correctly**:
-   - Extract `session_id` from ALL response types (`token`, `end`, `error`)
-   - Use `is not null` checks (empty string is valid, `"unknown"` is fallback)
-   - Persist session_id alongside conversation history
-
-Example WebSocket payload:
-
-```json
-{
-  "message": "Hi there!",
-  "session_id": "chat-123",
-  "messages": [
-    {"role": "user", "content": "Earlier user message"},
-    {"role": "assistant", "content": "Earlier assistant reply"}
-  ]
-}
-```
-
-Example response handling:
-
-```javascript
-// Handle all response types
-ws.onmessage = (event) => {
-  const data = JSON.parse(event.data);
-
-  if (data.type === 'token') {
-    // Append to current response display
-  } else if (data.type === 'end') {
-    // Save assistant response to history
-    history.push({role: 'assistant', content: fullResponse});
-    sessionId = data.session_id;
-    saveToStorage();
-  } else if (data.type === 'error') {
-    // Preserve session_id even on errors
-    if (data.session_id && data.session_id !== 'unknown') {
-      sessionId = data.session_id;
-      saveToStorage();
-    }
-  }
-};
-```
+The `frontend` service is included in Docker Compose and starts automatically on port 5173.
+`WS_PROXY_TARGET` controls where Vite proxies WebSocket traffic inside the Docker network
+(default: `http://chatguru-agent:8000`).
 
 ## 🐛 Troubleshooting
 
@@ -702,7 +675,7 @@ We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for:
 - [x] **Streaming Responses**: Real-time chat streaming via WebSocket ✅
 - [ ] **MCP Tools**: Integration with commerce platforms (PimCore, Strapi, Medusa.js)
 - [ ] **Authentication**: JWT-based API authentication
-- [ ] **Rate Limiting**: API rate limiting and quotas
+- [x] **Rate Limiting**: Redis-backed per-IP message quota with atomic Lua enforcement ✅
 - [x] **Session Management**: Client-side persistent conversation history (localStorage) ✅
 - [x] **Server-side Sessions**: Backend-persisted conversation history via `PERSISTENCE_DATABASE_URL` (opt-in) ✅
 - [ ] **Multi-tenancy**: Database-backed tenant configuration

@@ -21,9 +21,15 @@ from api.errors import (
     ValidationFailedError,
     WebSocketErrorType,
 )
-from config import get_app_settings, get_document_rag_settings, get_logger
+from config import (
+    get_app_settings,
+    get_document_rag_settings,
+    get_logger,
+    get_rate_limit_settings,
+)
 from document_rag import get_document_rag_repository
 from persistence import get_chat_history_repository, is_persistence_enabled
+from rate_limiting import consume_rate_limit
 from title_generation import generate_title, truncate_title
 from vector_db import VectorDatabase, create_vector_database
 
@@ -77,6 +83,19 @@ class ChatMessage(BaseModel):
             msg = "Last user message content must be between 1 and 2000 characters"
             raise ValueError(msg)
         return self
+
+
+class GenerateConversationTitleRequest(BaseModel):
+    """HTTP payload for generating a conversation title on demand."""
+
+    visitor_id: str = Field(..., min_length=1, max_length=512, description="Visitor ID")
+    session_id: str = Field(..., min_length=1, max_length=512, description="Session ID")
+    first_message: str = Field(
+        ...,
+        min_length=1,
+        max_length=_MAX_LAST_USER_MESSAGE_LENGTH,
+        description="First user message used to generate the title",
+    )
 
 
 router = APIRouter(tags=["chat"])
@@ -144,6 +163,36 @@ def _validate_message_format(message_data: object) -> None:
     if not isinstance(message_data, dict):
         msg = "Message must be a JSON object"
         raise InvalidMessageFormatError(msg)
+
+
+def _get_client_ip(websocket: WebSocket) -> str | None:
+    """Extract the real client IP address from a WebSocket connection.
+
+    Returns ``None`` when the IP cannot be determined (e.g. certain ASGI
+    transports set ``websocket.client`` to ``None``). Callers must skip rate
+    limiting for a ``None`` result rather than falling back to a shared key —
+    a single shared key would let any one client exhaust the quota for every
+    other client whose IP is unknown.
+
+    When ``RATE_LIMIT_TRUST_PROXY`` is True, the ``X-Forwarded-For`` and
+    ``X-Real-IP`` headers are checked first.  Only enable proxy trust when
+    the application is behind a known, trusted reverse proxy — never in
+    direct-to-internet deployments, as headers can be spoofed by clients.
+    """
+    if get_rate_limit_settings().trust_proxy:
+        forwarded_for = websocket.headers.get("x-forwarded-for")
+        if forwarded_for:
+            return forwarded_for.split(",")[0].strip()
+        real_ip = websocket.headers.get("x-real-ip")
+        if real_ip:
+            return real_ip.strip()
+    client = websocket.client
+    if client is None:
+        logger.info(
+            "Cannot determine client IP — rate limiting skipped for this connection"
+        )
+        return None
+    return client.host
 
 
 _vector_database_cache: VectorDatabase | None = None
@@ -272,34 +321,41 @@ async def get_history(
     return [{"role": m.role, "content": m.content} for m in messages]
 
 
-async def _update_title_in_background(
-    *,
-    visitor_id: str,
-    session_id: str,
-    first_message: str,
-) -> None:
-    """Generate an LLM title and patch the conversation record. Never raises."""
+@persistence_router.post("/conversations/title")
+async def generate_conversation_title(
+    payload: GenerateConversationTitleRequest,
+) -> dict[str, str]:
+    """Generate and persist a title for an existing conversation."""
+    repo = get_chat_history_repository()
+    if repo is None:
+        msg = "persistence router registered but repository is not initialised"
+        raise RuntimeError(msg)
+
+    exists = await repo.conversation_exists(
+        visitor_id=payload.visitor_id,
+        session_id=payload.session_id,
+    )
+    if not exists:
+        raise HTTPException(
+            status_code=404,
+            detail="Conversation not found for visitor_id + session_id",
+        )
+
+    title = truncate_title(payload.first_message)
     try:
-        logger.info(
-            "Starting background title generation (session_id=%s)",
-            session_id,
-        )
-        title = await generate_title(first_message)
-        repo = get_chat_history_repository()
-        if repo is None:
-            return
-        await repo.update_conversation_title(
-            visitor_id=visitor_id,
-            session_id=session_id,
-            title=title,
-        )
-        logger.info(
-            "Title updated for session %s: %r",
-            session_id,
-            title,
-        )
+        title = await generate_title(payload.first_message)
     except Exception:
-        logger.exception("Background title update failed (session_id=%s)", session_id)
+        logger.exception(
+            "Title generation failed (session_id=%s), using fallback",
+            payload.session_id,
+        )
+
+    await repo.update_conversation_title(
+        visitor_id=payload.visitor_id,
+        session_id=payload.session_id,
+        title=title,
+    )
+    return {"session_id": payload.session_id, "title": title}
 
 
 async def _handle_chat_turn(
@@ -343,17 +399,6 @@ async def _handle_chat_turn(
                 logger.exception(
                     "Failed to create conversation record (session_id=%s)", session_id
                 )
-
-            task = asyncio.create_task(
-                _update_title_in_background(
-                    visitor_id=visitor_id,
-                    session_id=session_id,
-                    first_message=current_user_content,
-                )
-            )
-            _background_tasks.add(task)
-            task.add_done_callback(_background_tasks.discard)
-            logger.info("Scheduled background title update (session_id=%s)", session_id)
 
         try:
             await repo.append_message(
@@ -510,6 +555,8 @@ async def websocket_chat(websocket: WebSocket) -> None:
         document_repo = get_document_rag_repository()
         agent = Agent(vector_database=vector_db, document_repository=document_repo)
         connection_visitor_id: str | None = None
+        # Extract once per connection — the IP cannot change mid-WebSocket.
+        client_ip = _get_client_ip(websocket)
 
         while True:
             data = await websocket.receive_text()
@@ -529,6 +576,19 @@ async def websocket_chat(websocket: WebSocket) -> None:
                 websocket, chat_message, connection_visitor_id, session_id
             )
             if visitor_id is None:
+                continue
+
+            # consume_rate_limit is skipped when client_ip is None (undetermined
+            # IP) rather than sharing a single "unknown" bucket across all such
+            # connections. The slot is consumed atomically before streaming begins
+            # so that partial-stream failures still count against the quota.
+            if client_ip is not None and not await consume_rate_limit(client_ip):
+                await _send_error(
+                    websocket,
+                    session_id=session_id,
+                    error_type=WebSocketErrorType.RATE_LIMIT_EXCEEDED,
+                    content="Daily message limit reached. Please try again tomorrow.",
+                )
                 continue
 
             try:

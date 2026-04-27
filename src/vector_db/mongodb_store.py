@@ -90,9 +90,13 @@ class MongoVectorStore:
         ][self._collection_name]
 
         # Initialize embeddings model
-        # OPENAI_EMBEDDINGS_ENDPOINT overrides OPENAI_ENDPOINT when set (e.g. a dedicated
-        # embeddings deployment on a different endpoint).
-        embeddings_base_url = llm_settings.embeddings_endpoint or llm_settings.endpoint
+        # Resolution order: OPENAI_EMBEDDINGS_ENDPOINT → OPENAI_ENDPOINT → LLM_OPENAI_BASE_URL
+        # The last fallback covers setups where only the APIM base URL is configured.
+        embeddings_base_url = (
+            llm_settings.embeddings_endpoint
+            or llm_settings.endpoint
+            or llm_settings.openai_base_url
+        )
         embeddings_api_key = llm_settings.embeddings_api_key or llm_settings.api_key
         self._embeddings = OpenAIEmbeddings(
             model=llm_settings.embedding_deployment_name,
@@ -183,7 +187,7 @@ class MongoVectorStore:
 
         docs = []
         for product, embedding in zip(products, embeddings, strict=True):
-            doc = {
+            doc: dict[str, Any] = {
                 "id": str(product["id"]),
                 "name": product["name"],
                 "category": product.get("category", ""),
@@ -197,6 +201,8 @@ class MongoVectorStore:
                 "in_stock": product.get("in_stock", True),
                 "embedding": embedding,
             }
+            if product.get("url"):
+                doc["url"] = product["url"]
             docs.append(doc)
 
         self._collection.insert_many(docs)

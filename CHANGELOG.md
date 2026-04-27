@@ -37,6 +37,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Redis-backed per-IP rate limiting** (opt-in, disabled by default). Set `RATE_LIMIT_ENABLED=true`
+  to enforce a configurable message quota per IP per fixed window. The check and counter increment
+  are a single atomic Redis Lua transaction — no TOCTOU gap. Proxy-trust (`RATE_LIMIT_TRUST_PROXY`)
+  reads `X-Forwarded-For` / `X-Real-IP` when the application sits behind a known reverse proxy.
+  New variables: `RATE_LIMIT_ENABLED`, `RATE_LIMIT_REDIS_URL`, `RATE_LIMIT_MAX_MESSAGES`,
+  `RATE_LIMIT_WINDOW_SECONDS`, `RATE_LIMIT_TRUST_PROXY`.
 - **Server-side chat history persistence** via `PERSISTENCE_DATABASE_URL` (opt-in).
   Supports SQLite (local dev) and PostgreSQL (production). When unset the server
   remains fully stateless — no database required. See [docs/persistence.md](docs/persistence.md).

@@ -656,6 +656,57 @@ def test_conversations_endpoint_isolated_by_visitor(app: TestClient) -> None:
     assert len(r2) == 1 and r2[0]["title"] == "V2 chat"
 
 
+def test_generate_conversation_title_updates_existing_conversation(
+    app: TestClient,
+) -> None:
+    """POST /conversations/title updates title for an existing conversation."""
+    repo = get_chat_history_repository()
+    vid, sid = "title-visitor", "title-session"
+
+    async def _seed() -> None:
+        await repo.create_conversation(
+            visitor_id=vid, session_id=sid, title="Initial title"
+        )
+
+    asyncio.run(_seed())
+
+    with patch(
+        "api.routes.chat.generate_title",
+        new=AsyncMock(return_value="Generated title"),
+    ):
+        response = app.post(
+            "/conversations/title",
+            json={
+                "visitor_id": vid,
+                "session_id": sid,
+                "first_message": "Can you summarize transformers?",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"session_id": sid, "title": "Generated title"}
+
+    conversations = app.get("/conversations", params={"visitor_id": vid}).json()
+    assert conversations[0]["session_id"] == sid
+    assert conversations[0]["title"] == "Generated title"
+
+
+def test_generate_conversation_title_returns_404_for_missing_conversation(
+    app: TestClient,
+) -> None:
+    """POST /conversations/title returns 404 when conversation does not exist."""
+    response = app.post(
+        "/conversations/title",
+        json={
+            "visitor_id": "missing-visitor",
+            "session_id": "missing-session",
+            "first_message": "Hello",
+        },
+    )
+
+    assert response.status_code == 404
+
+
 # ============================================================================
 # No-persistence visitor_id fallback
 # ============================================================================

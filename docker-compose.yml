@@ -4,21 +4,31 @@
 # Usage:
 #   MongoDB (default): docker compose up
 #   SQLite:            docker compose --profile sqlite up
+#   + Rate Limiting:   add --profile rate-limiting to either command above
+#                      and set RATE_LIMIT_ENABLED=true in .env
+#
+# Examples:
+#   docker compose --profile rate-limiting up
+#   docker compose --profile sqlite --profile rate-limiting up
 
 services:
   # --------------------------------------------------------------------------
   # Vector Database Service (sqlite-vec) - Use with --profile sqlite
   # --------------------------------------------------------------------------
   vector-db:
-    profiles: ["sqlite"]
+    profiles: [ "sqlite" ]
     build:
       context: .
       dockerfile: docker/Dockerfile.db
     ports:
       - "8001:8001"
     environment:
-      # LLM settings for embeddings
-      - LLM_ENDPOINT=${LLM_ENDPOINT}
+      # LLM settings for embeddings (see .cursorrules: endpoints use OPENAI_*,
+      # credentials/model use LLM_*). OPENAI_EMBEDDINGS_ENDPOINT is optional
+      # and falls back to OPENAI_ENDPOINT when empty.
+      - OPENAI_ENDPOINT=${OPENAI_ENDPOINT}
+      - OPENAI_EMBEDDINGS_ENDPOINT=${OPENAI_EMBEDDINGS_ENDPOINT:-}
+      - OPENAI_EMBEDDINGS_API_KEY=${OPENAI_EMBEDDINGS_API_KEY:-}
       - LLM_API_KEY=${LLM_API_KEY}
       - LLM_API_VERSION=${LLM_API_VERSION}
       - LLM_EMBEDDING_DEPLOYMENT_NAME=${LLM_EMBEDDING_DEPLOYMENT_NAME}
@@ -28,11 +38,32 @@ services:
       - vector-db-data:/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      test: [ "CMD", "curl", "-f", "http://localhost:8001/health" ]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 30s
+    networks:
+      - chatguru-network
+
+  # --------------------------------------------------------------------------
+  # Redis (rate limiting backing store) - Use with --profile rate-limiting
+  # --------------------------------------------------------------------------
+  redis:
+    profiles: [ "rate-limiting" ]
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     networks:
       - chatguru-network
 
@@ -45,9 +76,10 @@ services:
       - "27017:27017"
     volumes:
       - mongodb-data:/data/db
+      - mongodb-configdb-data:/data/configdb
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      test: [ "CMD", "mongosh", "--eval", "db.adminCommand('ping')" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -65,8 +97,13 @@ services:
     ports:
       - "8002:8002"
     environment:
-      # LLM settings for embeddings
-      - LLM_ENDPOINT=${LLM_ENDPOINT}
+      # LLM settings for embeddings (see .cursorrules: endpoints use OPENAI_*,
+      # credentials/model use LLM_*). OPENAI_EMBEDDINGS_ENDPOINT is optional
+      # and falls back to OPENAI_ENDPOINT when empty.
+      - LLM_OPENAI_BASE_URL=${LLM_OPENAI_BASE_URL:-}
+      - OPENAI_ENDPOINT=${OPENAI_ENDPOINT}
+      - OPENAI_EMBEDDINGS_ENDPOINT=${OPENAI_EMBEDDINGS_ENDPOINT:-}
+      - OPENAI_EMBEDDINGS_API_KEY=${OPENAI_EMBEDDINGS_API_KEY:-}
       - LLM_API_KEY=${LLM_API_KEY}
       - LLM_API_VERSION=${LLM_API_VERSION}
       - LLM_EMBEDDING_DEPLOYMENT_NAME=${LLM_EMBEDDING_DEPLOYMENT_NAME}
@@ -79,7 +116,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      test: [ "CMD", "curl", "-f", "http://localhost:8002/health" ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -97,8 +134,10 @@ services:
     ports:
       - "8000:8000"
     environment:
-      # LLM Configuration (Azure OpenAI)
-      - LLM_ENDPOINT=${LLM_ENDPOINT}
+      # LLM Configuration (see .cursorrules: endpoints use OPENAI_*, model/keys use LLM_*)
+      - OPENAI_ENDPOINT=${OPENAI_ENDPOINT}
+      - OPENAI_EMBEDDINGS_ENDPOINT=${OPENAI_EMBEDDINGS_ENDPOINT:-}
+      - OPENAI_EMBEDDINGS_API_KEY=${OPENAI_EMBEDDINGS_API_KEY:-}
       - LLM_API_KEY=${LLM_API_KEY}
       - LLM_DEPLOYMENT_NAME=${LLM_DEPLOYMENT_NAME}
       - LLM_API_VERSION=${LLM_API_VERSION}
@@ -122,6 +161,13 @@ services:
       #   PERSISTENCE_DATABASE_URL=postgresql+asyncpg://user:pass@host:5432/chatguru
       - PERSISTENCE_DATABASE_URL=${PERSISTENCE_DATABASE_URL:-}
 
+      # Rate Limiting
+      - RATE_LIMIT_ENABLED=${RATE_LIMIT_ENABLED:-false}
+      - RATE_LIMIT_REDIS_URL=${RATE_LIMIT_REDIS_URL:-redis://redis:6379/0}
+      - RATE_LIMIT_MAX_MESSAGES=${RATE_LIMIT_MAX_MESSAGES:-10}
+      - RATE_LIMIT_WINDOW_SECONDS=${RATE_LIMIT_WINDOW_SECONDS:-86400}
+      - RATE_LIMIT_TRUST_PROXY=${RATE_LIMIT_TRUST_PROXY:-false}
+
       # FastAPI Configuration
       - FASTAPI_HOST=0.0.0.0
       - FASTAPI_PORT=8000
@@ -138,7 +184,7 @@ services:
     restart: unless-stopped
 
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -151,15 +197,17 @@ services:
   # Main Agent Service (SQLite backend) - Use with --profile sqlite
   # --------------------------------------------------------------------------
   chatguru-agent-sqlite:
-    profiles: ["sqlite"]
+    profiles: [ "sqlite" ]
     build:
       context: .
       dockerfile: docker/Dockerfile
     ports:
       - "8000:8000"
     environment:
-      # LLM Configuration (Azure OpenAI)
-      - LLM_ENDPOINT=${LLM_ENDPOINT}
+      # LLM Configuration (see .cursorrules: endpoints use OPENAI_*, model/keys use LLM_*)
+      - OPENAI_ENDPOINT=${OPENAI_ENDPOINT}
+      - OPENAI_EMBEDDINGS_ENDPOINT=${OPENAI_EMBEDDINGS_ENDPOINT:-}
+      - OPENAI_EMBEDDINGS_API_KEY=${OPENAI_EMBEDDINGS_API_KEY:-}
       - LLM_API_KEY=${LLM_API_KEY}
       - LLM_DEPLOYMENT_NAME=${LLM_DEPLOYMENT_NAME}
       - LLM_API_VERSION=${LLM_API_VERSION}
@@ -177,6 +225,13 @@ services:
 
       # Chat + Alembic (same SQLite file as vector-db service)
       - PERSISTENCE_DATABASE_URL=sqlite+aiosqlite:////data/chatguru.db
+
+      # Rate Limiting
+      - RATE_LIMIT_ENABLED=${RATE_LIMIT_ENABLED:-false}
+      - RATE_LIMIT_REDIS_URL=${RATE_LIMIT_REDIS_URL:-redis://redis:6379/0}
+      - RATE_LIMIT_MAX_MESSAGES=${RATE_LIMIT_MAX_MESSAGES:-10}
+      - RATE_LIMIT_WINDOW_SECONDS=${RATE_LIMIT_WINDOW_SECONDS:-86400}
+      - RATE_LIMIT_TRUST_PROXY=${RATE_LIMIT_TRUST_PROXY:-false}
 
       # FastAPI Configuration
       - FASTAPI_HOST=0.0.0.0
@@ -197,12 +252,31 @@ services:
       - vector-db-data:/data
 
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
 
+    networks:
+      - chatguru-network
+
+  # --------------------------------------------------------------------------
+  # Frontend Service (React + Vite dev server)
+  # --------------------------------------------------------------------------
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_URL=http://localhost:8000
+      # Vite proxies /ws to this target inside the Docker network
+      - WS_PROXY_TARGET=http://chatguru-agent:8000
+    depends_on:
+      - chatguru-agent
+    restart: unless-stopped
     networks:
       - chatguru-network
 
@@ -213,6 +287,10 @@ volumes:
   vector-db-data:
     driver: local
   mongodb-data:
+    driver: local
+  mongodb-configdb-data:
+    driver: local
+  redis-data:
     driver: local
 
 # --------------------------------------------------------------------------

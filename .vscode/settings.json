@@ -1,0 +1,32 @@
+{
+	// Point the Biome extension to the binary and config inside the frontend subfolder
+	"biome.lsp.bin": "frontend/node_modules/@biomejs/biome/bin/biome",
+	"biome.configurationPath": "frontend/biome.jsonc",
+
+	// Default formatter for all files
+	"editor.defaultFormatter": "biomejs.biome",
+	"editor.formatOnSave": true,
+
+	// Per-language overrides — Biome handles JS/TS/JSX/TSX/JSON/JSONC/CSS
+	"[javascript]": {
+		"editor.defaultFormatter": "biomejs.biome"
+	},
+	"[javascriptreact]": {
+		"editor.defaultFormatter": "biomejs.biome"
+	},
+	"[typescript]": {
+		"editor.defaultFormatter": "biomejs.biome"
+	},
+	"[typescriptreact]": {
+		"editor.defaultFormatter": "biomejs.biome"
+	},
+	"[json]": {
+		"editor.defaultFormatter": "biomejs.biome"
+	},
+	"[jsonc]": {
+		"editor.defaultFormatter": "biomejs.biome"
+	},
+	"[css]": {
+		"editor.defaultFormatter": "biomejs.biome"
+	}
+}

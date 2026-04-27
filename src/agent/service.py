@@ -13,7 +13,7 @@ from langchain_core.messages import (
 )
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, ToolException, tool
-from langchain_openai import ChatOpenAI
+from langchain_openai import AzureChatOpenAI, ChatOpenAI
 from langfuse import Langfuse, get_client, propagate_attributes
 from langfuse.langchain import CallbackHandler as LangfuseCallbackHandler
 from pydantic import BaseModel, Field
@@ -24,13 +24,24 @@ from document_rag.repository import DocumentRagRepository
 from vector_db import VectorDatabase
 
 
-def _build_chat_llm() -> ChatOpenAI:
+def _build_chat_llm() -> ChatOpenAI | AzureChatOpenAI:
     """Build a ChatOpenAI client pointed at OPENAI_ENDPOINT."""
     settings = get_llm_settings()
-    return ChatOpenAI(
-        model=settings.deployment_name,
+    compat_base = settings.openai_base_url.strip()
+    if compat_base:
+        return ChatOpenAI(
+            model=settings.deployment_name,
+            api_key=settings.api_key,
+            base_url=compat_base.rstrip("/"),
+            default_headers={"api-key": settings.api_key},
+            streaming=True,
+            temperature=settings.temperature,
+        )
+    return AzureChatOpenAI(
+        azure_deployment=settings.deployment_name,
         api_key=settings.api_key,
-        base_url=settings.endpoint.rstrip("/"),
+        azure_endpoint=settings.endpoint.rstrip("/"),
+        api_version=settings.api_version,
         default_headers={"api-key": settings.api_key},
         streaming=True,
         temperature=settings.temperature,

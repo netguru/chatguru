@@ -172,6 +172,14 @@ class LLMSettings(BaseSettings):
         default="",
         description="Model / deployment name (LLM_DEPLOYMENT_NAME).",
     )
+    openai_base_url: str = Field(
+        default="",
+        description=(
+            "If set, chat uses OpenAI v1-compatible Chat Completions at this base URL "
+            "(e.g. Azure APIM .../plc/openai/v1). LLM_DEPLOYMENT_NAME is the model id. "
+            "Auth uses the api-key header (APIM subscription key)."
+        ),
+    )
     temperature: float = Field(
         default=1,
         description="Sampling temperature (LLM_TEMPERATURE).",
@@ -180,16 +188,14 @@ class LLMSettings(BaseSettings):
         default="",
         validation_alias=AliasChoices("OPENAI_EMBEDDINGS_ENDPOINT"),
         description=(
-            "OpenAI-compatible base URL for the embeddings model. "
-            "Defaults to OPENAI_ENDPOINT when empty."
+            "OpenAI-compatible base URL for the embeddings model. Defaults to OPENAI_ENDPOINT when empty."
         ),
     )
     embeddings_api_key: str = Field(
         default="",
         validation_alias=AliasChoices("OPENAI_EMBEDDINGS_API_KEY"),
         description=(
-            "API key for the embeddings endpoint. "
-            "Defaults to LLM_API_KEY when empty."
+            "API key for the embeddings endpoint. Defaults to LLM_API_KEY when empty."
         ),
     )
     embedding_deployment_name: str = Field(
@@ -350,8 +356,7 @@ class TitleGenerationSettings(BaseSettings):
     provider: str = Field(
         default="openai",
         description=(
-            "Title generation provider: openai, fallback, or custom. "
-            "Use fallback to disable external model calls."
+            "Title generation provider: openai, fallback, or custom. Use fallback to disable external model calls."
         ),
     )
     custom_class: str = Field(
@@ -429,3 +434,48 @@ class DocumentRagSettings(BaseSettings):
 def get_document_rag_settings() -> DocumentRagSettings:
     """Get document RAG settings."""
     return DocumentRagSettings()
+
+
+class RateLimitSettings(BaseSettings):
+    """Rate limiting settings."""
+
+    model_config = SettingsConfigDict(
+        env_file=get_env_file_path(),
+        env_prefix="RATE_LIMIT_",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+    enabled: bool = Field(
+        default=False,
+        description="Enable Redis-backed rate limiting (RATE_LIMIT_ENABLED).",
+    )
+    redis_url: str = Field(
+        default="redis://localhost:6379/0",
+        description="Redis connection URL (RATE_LIMIT_REDIS_URL).",
+    )
+    max_messages: int = Field(
+        default=10,
+        ge=1,
+        description="Max LLM messages allowed per IP per window (RATE_LIMIT_MAX_MESSAGES).",
+    )
+    window_seconds: int = Field(
+        default=86400,
+        ge=1,
+        description="Fixed window length in seconds (RATE_LIMIT_WINDOW_SECONDS). Default: 24 h.",
+    )
+    trust_proxy: bool = Field(
+        default=False,
+        description=(
+            "When True, extract the real client IP from the X-Forwarded-For or X-Real-IP "
+            "header instead of the direct TCP connection address. "
+            "Enable only when the app is behind a trusted reverse proxy (RATE_LIMIT_TRUST_PROXY)."
+        ),
+    )
+
+
+@lru_cache
+def get_rate_limit_settings() -> RateLimitSettings:
+    """Get rate limit settings."""
+    return RateLimitSettings()

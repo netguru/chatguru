@@ -22,3 +22,6 @@ data/
 .cursor/worktrees.json
 .DS_Store
 frontend/node_modules/
+
+# vscode
+.vscode

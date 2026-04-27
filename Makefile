@@ -39,7 +39,7 @@ setup: install pre-commit-install ## Complete development setup (installs deps +
 	@echo "1. Run 'make env-setup' to copy environment template"
 	@echo "2. Edit .env with your credentials"
 	@echo "3. Run 'make dev' to start the backend development server"
-	@echo "4. (Optional) Run your external frontend separately and point it to ws://localhost:8000/ws"
+	@echo "4. Run 'make frontend-dev' to start the React frontend at http://localhost:5173"
 	@echo "5. Visit http://localhost:8000/ for the minimal test UI"
 	@echo "6. Visit http://localhost:8000/docs for API documentation"
 
@@ -63,6 +63,11 @@ dev: ## Run the backend development server with auto-reload
 	@echo "📡 WebSocket streaming enabled at ws://localhost:8000/ws"
 	@echo "🌐 API docs available at http://localhost:8000/docs"
 	uv run --directory src uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
+
+frontend-dev: ## Run the frontend development server (Vite)
+	@echo "🚀 Starting frontend development server..."
+	@echo "🌐 Frontend available at http://localhost:5173"
+	cd frontend && npm install && npm run dev
 
 run: ## Run the production server (no auto-reload)
 	@echo "🚀 Starting production server..."

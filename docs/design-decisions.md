@@ -34,6 +34,27 @@ Chat tables and vector tables can share a **single** `.db` file (see `PERSISTENC
 
 ---
 
+## Per-IP rate limiting (Redis-backed)
+
+**Context:** Prevent any single IP from sending unlimited LLM messages and incurring unbounded inference costs. Rate limiting must be optional (many deployments are internal or authenticated at the proxy layer) and must not introduce a TOCTOU race where concurrent requests from the same IP bypass the quota.
+
+**Decision:**
+
+- Gate the WebSocket handler with a Redis counter keyed by `rate_limit:chat:<ip>`. All configuration is opt-in via `RATE_LIMIT_ENABLED=true`; when false the module is a no-op.
+- **Atomic enforcement via Lua:** The check and increment are a single `EVAL` call (`_LUA_CONSUME` in `rate_limiting/bootstrap.py`). This eliminates the TOCTOU window that exists when using separate `GET` + `INCR` calls — two concurrent coroutines cannot both pass a `GET`-based check before either records its use.
+- **Consume before streaming:** The slot is consumed *before* the LLM call begins, not after it completes. This means a request that starts generating tokens but fails mid-stream still counts against the quota, preventing clients from exploiting partial-stream errors to bypass the limit.
+- **`None` IP, not `"unknown"`:** When `websocket.client` is unavailable (certain ASGI transports), `_get_client_ip` returns `None` and the handler skips enforcement entirely. A shared `"unknown"` key would let one client exhaust the quota for all others in the same situation.
+- **Proxy trust is explicit:** `RATE_LIMIT_TRUST_PROXY=true` enables reading `X-Forwarded-For` / `X-Real-IP`. This is off by default; enabling it in a direct-to-internet deployment would allow clients to spoof their IP.
+- **IP extracted once per connection:** `_get_client_ip` is called once when the WebSocket is accepted, not on every message, since `websocket.client` cannot change mid-connection.
+
+**Trade-offs:**
+
+- Redis is now a required dependency when rate limiting is enabled. Both docker-compose profiles depend on the Redis service health check.
+- The `RATE_LIMIT_MAX_MESSAGES` default is `10` per 24-hour window — a reasonable starting point for typical demo or internal deployments.
+- Counting is per IP, not per authenticated user — suitable for public deployments without authentication. In authenticated deployments the rate limit key should be switched to a user/tenant identifier.
+
+---
+
 ## Chat history persistence (repository pattern)
 
 **Context:** Persist conversation turns per visitor and session for continuity and analytics.
@@ -49,3 +70,24 @@ Chat tables and vector tables can share a **single** `.db` file (see `PERSISTENC
 **Trade-offs:** Global singleton simplifies handlers; tests that need isolation call `shutdown_persistence()` and clear `get_persistence_settings` cache where URLs are swapped.
 
 **Single SQLite file (optional):** Chat history (`chat_messages` via Alembic) and the sqlite-vec product tables can live in one `.db` file — different tables, no conflict. Use the same path for `PERSISTENCE_DATABASE_URL` and `VECTOR_SQLITE_DB_PATH` (vector microservice). Docker Compose sqlite profile mounts one volume at `/data` on both `vector-db` and `chatguru-agent-sqlite`.
+
+---
+
+<a id="llm-endpoint-modes"></a>
+
+## LLM endpoint: universal (`ChatOpenAI`) vs native Azure (`AzureChatOpenAI`)
+
+**Context:** The agent builds one of two LangChain chat clients in `agent/service.py` (`_build_chat_llm`). The choice is **not** where the chatguru API is hosted (e.g. Azure App Service vs. elsewhere). It depends on **which HTTP API** your LLM URL exposes.
+
+### Decision
+
+| Mode | When to use | Environment variables | Client |
+|------|-------------|------------------------|--------|
+| **Universal / OpenAI-compatible** | The URL speaks the **OpenAI Chat Completions** contract: a single base URL, model id in the request body, paths like `.../chat/completions`. Typical: **Azure API Management** in front of Azure OpenAI, **true OpenAI** (`https://api.openai.com/v1`), LiteLLM, or any custom gateway that exposes `/openai/v1` (or similar). | Set **`LLM_OPENAI_BASE_URL`** to that base (e.g. `https://your-apim.azure-api.net/.../openai/v1`). **`OPENAI_ENDPOINT`** is not used for chat in this mode. `LLM_DEPLOYMENT_NAME` is the **model id** (e.g. `gpt-5-mini`). | `ChatOpenAI` with `base_url` |
+| **Native Azure OpenAI** | The app calls **Azure OpenAI Service directly** using the resource host and deployment-based routing (`azure_endpoint` + `azure_deployment` + `api-version`), not a single v1-compatible base URL you fully control yourself. | Leave **`LLM_OPENAI_BASE_URL`** empty. Set **`OPENAI_ENDPOINT`** to the Azure resource base (see `config.py` / `env.example`). Set **`LLM_API_VERSION`**. `LLM_DEPLOYMENT_NAME` is the **deployment name** in Azure. | `AzureChatOpenAI` |
+
+### Notes
+
+- **Hosting the app on Azure** does not force either mode. An app on Azure can use **`LLM_OPENAI_BASE_URL`** if traffic goes through a v1-compatible gateway (common and valid).
+- Embeddings may still use **`OPENAI_EMBEDDINGS_ENDPOINT`** (or fall back to `OPENAI_ENDPOINT` when the universal chat path is not used); see `LLMSettings` in `config.py` for precedence.
+- Deprecated env names (`LLM_ENDPOINT` for the chat base URL) are not used; prefer **`OPENAI_ENDPOINT`** per project conventions.

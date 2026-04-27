@@ -80,10 +80,19 @@ class VectorStore:
                     colors TEXT,
                     material TEXT,
                     care_instructions TEXT,
-                    in_stock INTEGER DEFAULT 1
+                    in_stock INTEGER DEFAULT 1,
+                    url TEXT
                 )
             """
             )
+
+            # Ensure `url` column exists for databases created before it was added.
+            # sqlite has no "ADD COLUMN IF NOT EXISTS", so inspect first.
+            existing_columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(products)").fetchall()
+            }
+            if "url" not in existing_columns:
+                conn.execute("ALTER TABLE products ADD COLUMN url TEXT")
 
             # Vector embeddings table using sqlite-vec
             conn.execute(
@@ -132,8 +141,8 @@ class VectorStore:
                 conn.execute(
                     """
                     INSERT INTO products (id, name, category, brand, price, description,
-                                         sizes, colors, material, care_instructions, in_stock)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                         sizes, colors, material, care_instructions, in_stock, url)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         str(product["id"]),
@@ -147,6 +156,7 @@ class VectorStore:
                         product.get("material", ""),
                         product.get("care_instructions", ""),
                         1 if product.get("in_stock", True) else 0,
+                        product.get("url"),
                     ),
                 )
 
