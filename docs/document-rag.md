@@ -254,6 +254,53 @@ make ingest-docs SOURCE_DIR=./rag_data BACKEND=mongodb
 
 4. On source click in UI, open `GET /documents/{source_path}` in an iframe.
 
+## Docker startup ingestion
+
+When running via Docker Compose, the backend image bundles the contents of `rag_data/`
+at `/app/rag_data` and automatically ingests them on first startup when
+`DOCUMENT_RAG_ENABLED=true`.
+
+### How it works
+
+The `docker/entrypoint.sh` runs the ingestion CLI before starting the server:
+
+1. **First start** — no sentinel exists → ingestion runs → sentinel written to the
+   `rag-ingest-state` Docker volume at `/app/rag_ingest_state/.ingested`.
+2. **Subsequent starts** — sentinel found → ingestion skipped, container boots
+   immediately. The indexed data is persisted in the `mongodb-data` volume.
+3. **Force re-ingest** — set `DOCUMENT_RAG_INGEST_FULL_REPLACE=1` → sentinel is
+   ignored, existing chunks and GridFS files are deleted, everything in `rag_data/`
+   is re-embedded and re-indexed. The sentinel is updated on success.
+
+### Configuration
+
+| Variable | Description | Default |
+|---|---|---|
+| `DOCUMENT_RAG_ENABLED` | Enable startup ingestion and retrieval | `false` |
+| `DOCUMENT_RAG_INGEST_FULL_REPLACE` | Set to any non-empty value to force a full re-ingest on next start | *(unset)* |
+
+### Force a full re-ingest from scratch
+
+```bash
+# In .env, set:
+DOCUMENT_RAG_INGEST_FULL_REPLACE=1
+
+# Then restart:
+docker compose up --build
+```
+
+Remove `DOCUMENT_RAG_INGEST_FULL_REPLACE=1` from `.env` afterwards to restore
+the skip-if-done behavior.
+
+### Adding new documents
+
+Place new files in `rag_data/`, rebuild the image, and set
+`DOCUMENT_RAG_INGEST_FULL_REPLACE=1` for one run to pick up the changes:
+
+```bash
+DOCUMENT_RAG_INGEST_FULL_REPLACE=1 docker compose up --build
+```
+
 ## Troubleshooting
 
 - `sources` arrives empty:
@@ -263,7 +310,10 @@ make ingest-docs SOURCE_DIR=./rag_data BACKEND=mongodb
 
 - PDF opens on page 1:
   - ensure chunk records have non-null `page`
-  - re-ingest PDFs after parser changes (prefer `--full-replace`)
+  - re-ingest PDFs after parser changes (prefer `--full-replace` / `DOCUMENT_RAG_INGEST_FULL_REPLACE=1`)
 
-- Need a clean re-index:
+- Need a clean re-index (local CLI):
   - use `--full-replace` to clear chunks + GridFS source files before ingest
+
+- Need a clean re-index (Docker):
+  - set `DOCUMENT_RAG_INGEST_FULL_REPLACE=1` in `.env` and restart

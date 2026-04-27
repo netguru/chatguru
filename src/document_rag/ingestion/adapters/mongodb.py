@@ -1,6 +1,8 @@
 """MongoDB ingestion adapter for document RAG chunks."""
 
 import contextlib
+import logging
+import time
 from typing import Any
 
 from gridfs import GridFSBucket
@@ -10,6 +12,8 @@ from pymongo.operations import SearchIndexModel, UpdateOne
 
 from config import DocumentRagSettings
 from document_rag.models import DocumentChunk, DocumentSourceFile
+
+logger = logging.getLogger(__name__)
 
 
 class MongoDocumentRagIngestionRepository:
@@ -42,8 +46,13 @@ class MongoDocumentRagIngestionRepository:
             files_collection.delete_many({})
             chunks_collection.delete_many({})
 
-    def ensure_ready(self, *, embedding_dimensions: int) -> None:
+    def ensure_ready(
+        self, *, embedding_dimensions: int, timeout_seconds: int = 120
+    ) -> None:
+        """Create the vector search index if absent, then wait until it is READY."""
         namespace_not_found = 26
+        index_name = self._settings.mongodb_index_name
+
         with self._mongo_client() as client:
             collection = self._collection(client)
             try:
@@ -51,31 +60,54 @@ class MongoDocumentRagIngestionRepository:
             except errors.OperationFailure as exc:
                 if exc.code != namespace_not_found:  # NamespaceNotFound
                     raise
-                # Collection may not exist yet on a fresh deployment.
-                # It will be created by the first upsert operation.
-                return
-            if any(
-                idx.get("name") == self._settings.mongodb_index_name for idx in existing
-            ):
-                return
+                existing = []
 
-            model = SearchIndexModel(
-                definition={
-                    "fields": [
-                        {
-                            "type": "vector",
-                            "path": "embedding",
-                            "numDimensions": embedding_dimensions,
-                            "similarity": "cosine",
-                        },
-                        {"type": "filter", "path": "source_id"},
-                        {"type": "filter", "path": "source_type"},
-                    ]
-                },
-                name=self._settings.mongodb_index_name,
-                type="vectorSearch",
+            if not any(idx.get("name") == index_name for idx in existing):
+                model = SearchIndexModel(
+                    definition={
+                        "fields": [
+                            {
+                                "type": "vector",
+                                "path": "embedding",
+                                "numDimensions": embedding_dimensions,
+                                "similarity": "cosine",
+                            },
+                            {"type": "filter", "path": "source_id"},
+                            {"type": "filter", "path": "source_type"},
+                        ]
+                    },
+                    name=index_name,
+                    type="vectorSearch",
+                )
+                collection.create_search_index(model=model)
+                logger.info(
+                    "Created vector search index '%s', waiting for READY ...",
+                    index_name,
+                )
+
+            # Poll until READY — index build is async in MongoDB Atlas Local.
+            deadline = time.monotonic() + timeout_seconds
+            while time.monotonic() < deadline:
+                indexes = list(collection.list_search_indexes())
+                for idx in indexes:
+                    if idx.get("name") == index_name:
+                        status = idx.get("status", "")
+                        if status == "READY":
+                            logger.info(
+                                "Vector search index '%s' is READY.", index_name
+                            )
+                            return
+                        logger.info(
+                            "Index '%s' status: %s — waiting ...", index_name, status
+                        )
+                        break
+                time.sleep(5)
+
+            logger.warning(
+                "Index '%s' did not reach READY within %ds.",
+                index_name,
+                timeout_seconds,
             )
-            collection.create_search_index(model=model)
 
     def upsert_chunks(self, chunks: list[DocumentChunk]) -> int:
         operations = [

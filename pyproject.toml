@@ -88,7 +88,7 @@ ignore = [
 ]
 [tool.ruff.lint.per-file-ignores]
 "src/**/prompt.py" = ["ERA001", "N806", "E501", "S608"]
-"src/document_rag/ingestion/cli.py" = ["BLE001", "C901", "PLR0912", "PLR0913", "PLR0914", "PLC0415", "S324", "T201", "UP038"]
+"src/document_rag/ingestion/cli.py" = ["BLE001", "C901", "PLR0912", "PLR0913", "PLR0914", "PLR0915", "PLC0415", "S324", "T201", "UP038"]
 "tests/**/*.py" = ["ALL"]
 "alembic/**/*.py" = ["INP001", "TCH002"]
 "src/**/alembic/**/*.py" = ["INP001", "TCH002"]

@@ -65,7 +65,8 @@ def _extract_docling_page_units(
     """Extract text units from Docling, preferring page-aware units for PDFs."""
     try:
         result = converter.convert(str(path))
-    except Exception:
+    except Exception as exc:
+        print(f"  [docling] conversion failed for {path.name}: {exc}", flush=True)
         return []
 
     document = getattr(result, "document", None)
@@ -76,8 +77,16 @@ def _extract_docling_page_units(
 
     pages_attr = getattr(document, "pages", None)
     if pages_attr is not None:
+        # In docling ≥ 2.x, document.pages is a dict {page_no: PageItem}.
+        # Iterating a dict yields keys, not values, so we must use .items().
+        page_iter = (
+            list(pages_attr.items())
+            if isinstance(pages_attr, dict)
+            else list(enumerate(pages_attr, start=1))
+        )
+
         units: list[tuple[str, int | None]] = []
-        for idx, page in enumerate(pages_attr, start=1):
+        for page_no_key, page in page_iter:
             page_text: str | None = None
 
             for method_name in (
@@ -108,16 +117,10 @@ def _extract_docling_page_units(
             if not normalized:
                 continue
 
-            page_number = (
-                getattr(page, "page_no", None)
-                or getattr(page, "page_number", None)
-                or getattr(page, "page", None)
-                or idx
-            )
             try:
-                page_no = int(page_number)
+                page_no = int(page_no_key)
             except (TypeError, ValueError):
-                page_no = idx
+                page_no = None
 
             units.append((normalized, page_no))
 
@@ -264,6 +267,7 @@ def _build_chunk_documents(
         relative = file_path.relative_to(source_dir).as_posix()
         units = _read_document_units(file_path, converter)
         if not units:
+            print(f"  [skip] {relative} — no extractable text", flush=True)
             skipped += 1
             continue
 
