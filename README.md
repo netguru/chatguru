@@ -355,17 +355,26 @@ Document RAG is a separate retrieval domain with persistence-style lifecycle boo
 
 See [docs/document-rag.md](docs/document-rag.md) for architecture, contract, and full configuration details.
 
-To ingest local files into document RAG MongoDB:
+To ingest local files into document RAG MongoDB (local dev):
 
 ```bash
-make ingest-docs SOURCE_DIR=./docs BACKEND=mongodb
+make ingest-docs SOURCE_DIR=./rag_data BACKEND=mongodb
 ```
 
 To fully replace existing document RAG data during ingest:
 
 ```bash
-make ingest-docs SOURCE_DIR=./docs BACKEND=mongodb FULL_REPLACE=1
+make ingest-docs SOURCE_DIR=./rag_data BACKEND=mongodb FULL_REPLACE=1
 ```
+
+**Docker startup ingestion** — when running via Docker Compose with `DOCUMENT_RAG_ENABLED=true`, files in `rag_data/` are indexed automatically on first startup. Subsequent restarts skip ingestion (data persists in the `mongodb-data` volume). To force a full re-ingest from scratch:
+
+```bash
+# .env
+DOCUMENT_RAG_INGEST_FULL_REPLACE=1
+```
+
+Then `docker compose up --build`. Remove the variable afterwards to restore normal behaviour. See [docs/document-rag.md](docs/document-rag.md#docker-startup-ingestion) for full details.
 
 **LLM URL modes:** `LLM_OPENAI_BASE_URL` (universal OpenAI-compatible API) vs. `OPENAI_ENDPOINT` with empty `LLM_OPENAI_BASE_URL` (native Azure OpenAI client) is documented in [docs/design-decisions.md](docs/design-decisions.md#llm-endpoint-modes).
 

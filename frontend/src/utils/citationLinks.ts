@@ -15,7 +15,7 @@ export function injectCitationLinks(content: string, sources: Source[]): string 
   for (const s of sources) {
     if (!s.url) {
       sourceUrls.push("");
-      sourceTitles.push(s.file.split(/[/\\]/).pop() ?? "");
+      sourceTitles.push(s.file?.split(/[/\\]/).pop() ?? "");
       continue;
     }
     let fullUrl: string;

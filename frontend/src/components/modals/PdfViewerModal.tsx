@@ -214,7 +214,7 @@ export function PdfViewerModal({ source, onClose }: Props) {
           {loadState === "loading" && <PdfLoadingState />}
           {loadState === "error" && <PdfErrorState />}
           <Document
-            file={source?.file}
+            file={source?.file ? `/documents/${source.file}` : undefined}
             onLoadSuccess={onDocumentLoadSuccess}
             onLoadError={onDocumentLoadError}
             loading={null}
