@@ -52,8 +52,10 @@ async def generate_title(
     """
     try:
         with propagate_attributes(session_id=session_id, user_id=visitor_id):
-            title = str(await get_title_generator().generate(first_message))
-            flush_langfuse()
+            try:
+                title = str(await get_title_generator().generate(first_message))
+            finally:
+                flush_langfuse()
         if title.strip():
             return title
     except Exception:

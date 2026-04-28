@@ -303,10 +303,11 @@ class Agent:
 
         # Propagate session_id and user_id to all Langfuse traces (when provided)
         with propagate_attributes(session_id=session_id, user_id=visitor_id):
-            async for chunk in self._run_agentic_loop(lc_messages, config):
-                yield chunk
-
-            flush_langfuse()
+            try:
+                async for chunk in self._run_agentic_loop(lc_messages, config):
+                    yield chunk
+            finally:
+                flush_langfuse()
 
     async def _run_agentic_loop(
         self, messages: list[BaseMessage], config: RunnableConfig

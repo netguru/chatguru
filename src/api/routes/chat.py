@@ -4,9 +4,16 @@ import asyncio
 import contextlib
 import json
 import uuid
-from typing import Annotated, Literal, Self
+from typing import Annotated, Any, Literal, Self
 
-from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import (
+    APIRouter,
+    HTTPException,
+    Query,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from agent.service import Agent
@@ -93,7 +100,10 @@ class FeedbackRequest(BaseModel):
     """HTTP payload for submitting user feedback on an assistant message."""
 
     trace_id: str = Field(
-        ..., min_length=1, description="Langfuse trace ID for the message"
+        ...,
+        min_length=1,
+        max_length=512,
+        description="Langfuse trace ID for the message",
     )
     value: Literal[0, 1] = Field(..., description="1 = thumbs up, 0 = thumbs down")
     comment: str | None = Field(
@@ -328,19 +338,24 @@ async def generate_conversation_title(
 
 
 @router.post("/feedback")
-async def submit_feedback(payload: FeedbackRequest) -> dict[str, str]:
+async def submit_feedback(payload: FeedbackRequest, request: Request) -> dict[str, str]:
     """Submit a user thumbs-up / thumbs-down score for an assistant message.
 
     Submits a ``BOOLEAN`` score named ``user-feedback`` to Langfuse using the
-    provided trace ID.  The ``id`` field on the score acts as an idempotency key
+    provided trace ID.  The ``score_id`` field on the score acts as an idempotency key
     so re-submissions overwrite rather than duplicate the existing score.
 
     Returns ``{"status": "skipped"}`` when Langfuse is not configured so that
     non-instrumented deployments don't surface errors to users.
     """
+    client_ip = request.client.host if request.client else None
+    if client_ip is not None and not await consume_rate_limit(client_ip):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
     if not is_langfuse_initialized():
         return {"status": "skipped"}
 
+    safe_trace_id = payload.trace_id.replace("\n", "\\n").replace("\r", "\\r")
     try:
         get_client().create_score(
             trace_id=payload.trace_id,
@@ -353,7 +368,7 @@ async def submit_feedback(payload: FeedbackRequest) -> dict[str, str]:
     except Exception as exc:
         logger.exception(
             "Failed to submit feedback score to Langfuse (trace_id=%s)",
-            payload.trace_id,
+            safe_trace_id,
         )
         raise HTTPException(
             status_code=500, detail="Failed to submit feedback"
@@ -439,7 +454,7 @@ async def _handle_chat_turn(
             }
         )
 
-    end_frame: dict = {
+    end_frame: dict[str, Any] = {
         "type": "end",
         "content": full_response,
         "session_id": session_id,
@@ -562,7 +577,8 @@ async def websocket_chat(websocket: WebSocket) -> None:
     {
         "type": "token" | "end" | "error",
         "content": "chunk of text" | null,
-        "session_id": "session-id"
+        "session_id": "session-id",
+        "trace_id": "langfuse-trace-id"  # end frames only, omitted when Langfuse is disabled
     }
     """
     await websocket.accept()

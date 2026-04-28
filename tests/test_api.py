@@ -942,3 +942,41 @@ def test_feedback_idempotency_key_is_stable(app: TestClient) -> None:
         == calls[1].kwargs["score_id"]
         == f"{trace_id}-user-feedback"
     )
+
+
+@pytest.mark.asyncio
+async def test_feedback_concurrent_submissions_idempotent() -> None:
+    """Two simultaneous POST /feedback calls with the same trace_id both succeed
+    and produce identical score_id values (Rule 25 + plan U4 concurrency test)."""
+    import httpx
+
+    from api.main import create_app
+
+    trace_id = "concurrent-trace-xyz"
+    mock_client = MagicMock()
+
+    with (
+        patch("api.routes.chat.is_langfuse_initialized", return_value=True),
+        patch("api.routes.chat.get_client", return_value=mock_client),
+        patch("api.main.init_langfuse"),
+        patch("api.main.init_persistence", new=AsyncMock()),
+        patch("api.main.shutdown_persistence", new=AsyncMock()),
+        patch("api.main.init_title_generation", new=AsyncMock()),
+        patch("api.main.shutdown_title_generation", new=AsyncMock()),
+        patch("api.main.init_rate_limiting", new=AsyncMock()),
+        patch("api.main.shutdown_rate_limiting", new=AsyncMock()),
+    ):
+        transport = httpx.ASGITransport(app=create_app())
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            results = await asyncio.gather(
+                client.post("/feedback", json={"trace_id": trace_id, "value": 1}),
+                client.post("/feedback", json={"trace_id": trace_id, "value": 0}),
+            )
+
+    assert all(r.status_code == 200 for r in results)
+    calls = mock_client.create_score.call_args_list
+    assert len(calls) == 2
+    score_ids = {c.kwargs["score_id"] for c in calls}
+    assert score_ids == {f"{trace_id}-user-feedback"}
