@@ -1,7 +1,7 @@
 """Agent component tests."""
 
 from collections.abc import AsyncIterator
-from unittest.mock import MagicMock, PropertyMock, patch, AsyncMock
+from unittest.mock import MagicMock, patch, AsyncMock
 
 import pytest
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
