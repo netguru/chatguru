@@ -10,6 +10,7 @@ import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
+import { useFeedback } from "../../hooks/useFeedback";
 import { useAppStore } from "../../store/appStore";
 import type { ChatMessage as ChatMessageType } from "../../types/chat";
 import { injectCitationLinks } from "../../utils/citationLinks";
@@ -29,6 +30,7 @@ export function ChatMessage({ message }: Props) {
   const { copied, copy } = useCopyToClipboard();
   const openSourcesPanel = useAppStore((s) => s.openSourcesPanel);
   const [thumbsDownOpen, setThumbsDownOpen] = useState(false);
+  const { submitFeedback, isSubmitting } = useFeedback();
 
   return (
     <>
@@ -97,7 +99,19 @@ export function ChatMessage({ message }: Props) {
                 </Button>
               )}
               <div className="ms-auto">
-                <IconButton variant="subtle" aria-label="Thumb up" size="xs">
+                <IconButton
+                  variant="subtle"
+                  aria-label="Thumb up"
+                  size="xs"
+                  disabled={isSubmitting}
+                  onClick={() => {
+                    if (message.traceId) {
+                      void submitFeedback(message.traceId, 1);
+                    } else {
+                      console.warn("[ChatMessage] thumbs-up: no traceId on message", message.id);
+                    }
+                  }}
+                >
                   <ThumbsUpIcon weight="bold" />
                 </IconButton>
                 <IconButton
@@ -114,7 +128,11 @@ export function ChatMessage({ message }: Props) {
         </div>
       </div>
 
-      <ThumbsDownModal open={thumbsDownOpen} onOpenChange={setThumbsDownOpen} />
+      <ThumbsDownModal
+        open={thumbsDownOpen}
+        onOpenChange={setThumbsDownOpen}
+        traceId={message.traceId}
+      />
     </>
   );
 }
