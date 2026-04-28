@@ -828,6 +828,7 @@ def test_feedback_thumbs_up_calls_langfuse(app: TestClient) -> None:
     with (
         patch("api.routes.chat.is_langfuse_initialized", return_value=True),
         patch("api.routes.chat.get_client", return_value=mock_client),
+        patch("api.routes.chat.consume_rate_limit", return_value=True),
     ):
         response = app.post(
             "/feedback",
@@ -853,6 +854,7 @@ def test_feedback_thumbs_down_with_comment(app: TestClient) -> None:
     with (
         patch("api.routes.chat.is_langfuse_initialized", return_value=True),
         patch("api.routes.chat.get_client", return_value=mock_client),
+        patch("api.routes.chat.consume_rate_limit", return_value=True),
     ):
         response = app.post(
             "/feedback",
@@ -877,6 +879,7 @@ def test_feedback_skipped_when_langfuse_disabled(app: TestClient) -> None:
     with (
         patch("api.routes.chat.is_langfuse_initialized", return_value=False),
         patch("api.routes.chat.get_client", return_value=mock_client),
+        patch("api.routes.chat.consume_rate_limit", return_value=True),
     ):
         response = app.post(
             "/feedback",
@@ -914,6 +917,7 @@ def test_feedback_langfuse_error_returns_500(app: TestClient) -> None:
     with (
         patch("api.routes.chat.is_langfuse_initialized", return_value=True),
         patch("api.routes.chat.get_client", return_value=mock_client),
+        patch("api.routes.chat.consume_rate_limit", return_value=True),
     ):
         response = app.post(
             "/feedback",
@@ -931,6 +935,7 @@ def test_feedback_idempotency_key_is_stable(app: TestClient) -> None:
     with (
         patch("api.routes.chat.is_langfuse_initialized", return_value=True),
         patch("api.routes.chat.get_client", return_value=mock_client),
+        patch("api.routes.chat.consume_rate_limit", return_value=True),
     ):
         app.post("/feedback", json={"trace_id": trace_id, "value": 1})
         app.post("/feedback", json={"trace_id": trace_id, "value": 0})
@@ -958,6 +963,7 @@ async def test_feedback_concurrent_submissions_idempotent() -> None:
     with (
         patch("api.routes.chat.is_langfuse_initialized", return_value=True),
         patch("api.routes.chat.get_client", return_value=mock_client),
+        patch("api.routes.chat.consume_rate_limit", return_value=True),
         patch("api.main.init_langfuse"),
         patch("api.main.init_persistence", new=AsyncMock()),
         patch("api.main.shutdown_persistence", new=AsyncMock()),
