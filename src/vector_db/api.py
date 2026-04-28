@@ -19,6 +19,8 @@ SEARCH_LIMIT_MIN = 1
 SEARCH_LIMIT_MAX = 50
 VECTOR_SQLITE_DB_PATH_ENV = "VECTOR_SQLITE_DB_PATH"
 VECTOR_SQLITE_DB_PATH_DEFAULT = "/data/chatguru.db"
+VECTOR_SQLITE_PRODUCTS_PATH_ENV = "VECTOR_SQLITE_PRODUCTS_PATH"
+VECTOR_SQLITE_PRODUCTS_PATH_DEFAULT = "/app/data/products.json"
 
 
 class VectorStoreProtocol(Protocol):
@@ -120,7 +122,9 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
     _store = _create_store()
 
     # Load products if not already loaded
-    products_path = Path("/app/data/products.json")
+    products_path = Path(
+        os.getenv(VECTOR_SQLITE_PRODUCTS_PATH_ENV, VECTOR_SQLITE_PRODUCTS_PATH_DEFAULT)
+    )
     if await anyio.Path(products_path).exists():
         count = _store.load_products(products_path)
         if count > 0:

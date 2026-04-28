@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import AzureChatOpenAI, ChatOpenAI
@@ -18,7 +18,10 @@ from tracing import get_langfuse_handler
 
 logger = get_logger("title_generation.adapters.openai")
 
-MAX_TITLE_COMPLETION_TOKENS = 256
+# Token budget for the title call. Reasoning tokens (when enabled on gpt-5/o-series)
+# are counted against this budget alongside the visible completion, so we leave
+# generous headroom even though the visible title itself is tiny.
+MAX_TITLE_COMPLETION_TOKENS = 1024
 _MAX_LOG_MESSAGE_LENGTH = 500
 
 
@@ -29,9 +32,27 @@ class OpenAITitleGenerator:
         self._settings = settings
         self._llm: ChatOpenAI | AzureChatOpenAI | None = None
 
+    def _build_extra_kwargs(self) -> dict[str, Any]:
+        """Build optional kwargs (reasoning_effort) only when configured.
+
+        Title generation is a simple naming task, so when the underlying model is
+        a reasoning model we cap effort at the user-configured level (or the
+        provider default if unset). Passing ``reasoning_effort`` against a
+        non-reasoning deployment would 400, hence the conditional.
+        """
+        extra: dict[str, Any] = {}
+        if self._settings.reasoning_effort:
+            extra["reasoning_effort"] = self._settings.reasoning_effort
+        return extra
+
     def _get_llm(self) -> ChatOpenAI | AzureChatOpenAI:
         """Return the shared LLM client for title generation."""
         if self._llm is None:
+            extra_kwargs = self._build_extra_kwargs()
+            # Reasoning models (gpt-5 family) reject anything other than the
+            # default temperature=1, so we mirror the chat client's setting
+            # rather than hard-coding 0.
+            temperature = self._settings.temperature
             compat_base = self._settings.openai_base_url.strip()
             if compat_base:
                 self._llm = ChatOpenAI(
@@ -40,8 +61,9 @@ class OpenAITitleGenerator:
                     base_url=compat_base.rstrip("/"),
                     default_headers={"api-key": self._settings.api_key},
                     streaming=False,
-                    temperature=0,
+                    temperature=temperature,
                     max_completion_tokens=MAX_TITLE_COMPLETION_TOKENS,
+                    **extra_kwargs,
                 )
             else:
                 self._llm = AzureChatOpenAI(
@@ -51,7 +73,9 @@ class OpenAITitleGenerator:
                     api_version=self._settings.api_version,
                     default_headers={"api-key": self._settings.api_key},
                     streaming=False,
-                    temperature=0,
+                    temperature=temperature,
+                    max_completion_tokens=MAX_TITLE_COMPLETION_TOKENS,
+                    **extra_kwargs,
                 )
         return self._llm
 

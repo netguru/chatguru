@@ -1,5 +1,5 @@
+import { Logo } from "../components/branding/logo";
 import { Button } from "../components/ui/button";
-import { Logo } from "../components/ui/icons/logo";
 import { useAuth } from "../hooks/useAuth";
 
 export function UnauthorizedPage() {
