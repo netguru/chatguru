@@ -24,6 +24,10 @@ from vector_db import VectorDatabase
 def _build_chat_llm() -> ChatOpenAI | AzureChatOpenAI:
     """Build a ChatOpenAI client pointed at OPENAI_ENDPOINT."""
     settings = get_llm_settings()
+    extra_kwargs: dict[str, Any] = {}
+    if settings.reasoning_effort:
+        extra_kwargs["reasoning_effort"] = settings.reasoning_effort
+
     compat_base = settings.openai_base_url.strip()
     if compat_base:
         return ChatOpenAI(
@@ -33,6 +37,7 @@ def _build_chat_llm() -> ChatOpenAI | AzureChatOpenAI:
             default_headers={"api-key": settings.api_key},
             streaming=True,
             temperature=settings.temperature,
+            **extra_kwargs,
         )
     return AzureChatOpenAI(
         azure_deployment=settings.deployment_name,
@@ -42,6 +47,7 @@ def _build_chat_llm() -> ChatOpenAI | AzureChatOpenAI:
         default_headers={"api-key": settings.api_key},
         streaming=True,
         temperature=settings.temperature,
+        **extra_kwargs,
     )
 
 

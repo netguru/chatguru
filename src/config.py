@@ -184,6 +184,14 @@ class LLMSettings(BaseSettings):
         default=1,
         description="Sampling temperature (LLM_TEMPERATURE).",
     )
+    reasoning_effort: str = Field(
+        default="",
+        description=(
+            "Reasoning effort for OpenAI reasoning models (gpt-5 family, o-series). "
+            "Allowed values: 'none', 'low', 'medium', 'high'."
+            "it can be different for different models, please check docs https://developers.openai.com/api/docs/guides/reasoning#reasoning-effort"
+        ),
+    )
     embeddings_endpoint: str = Field(
         default="",
         validation_alias=AliasChoices("OPENAI_EMBEDDINGS_ENDPOINT"),
