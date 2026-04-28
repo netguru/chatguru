@@ -1,0 +1,86 @@
+"""Shared Langfuse tracing helpers used across services (agent, title generation, etc.)."""
+
+from langfuse import (
+    Langfuse,
+    get_client,
+    propagate_attributes,
+)
+
+# (get_client re-exported)
+from langfuse.langchain import CallbackHandler as LangfuseCallbackHandler
+
+from config import get_langfuse_settings, get_logger
+
+logger = get_logger("tracing")
+
+_langfuse_initialized = False
+
+
+def init_langfuse() -> bool:
+    """
+    Initialize Langfuse client if enabled and configured.
+
+    Uses the singleton pattern — the Langfuse client is initialised once per
+    process.  Safe to call multiple times; subsequent calls are no-ops.
+
+    Returns:
+        True if Langfuse was successfully initialised, False otherwise.
+    """
+    global _langfuse_initialized  # noqa: PLW0603
+    if _langfuse_initialized:
+        return True
+
+    settings = get_langfuse_settings()
+    if settings.enabled and settings.public_key and settings.secret_key:
+        try:
+            Langfuse(
+                public_key=settings.public_key,
+                secret_key=settings.secret_key,
+                host=settings.host,
+            )
+            _langfuse_initialized = True
+            logger.info("Langfuse tracing initialized successfully")
+        except Exception:
+            logger.exception("Failed to initialize Langfuse")
+            return False
+    else:
+        logger.info("Langfuse tracing disabled or not configured")
+    return _langfuse_initialized
+
+
+def is_langfuse_initialized() -> bool:
+    """Return True if the Langfuse client has been successfully initialised."""
+    return _langfuse_initialized
+
+
+def get_langfuse_handler() -> LangfuseCallbackHandler | None:
+    """
+    Return a new LangChain callback handler wired to the Langfuse client.
+
+    Returns None when Langfuse has not been initialised so callers can safely
+    skip attaching callbacks without extra guards.
+    """
+    if not _langfuse_initialized:
+        return None
+    return LangfuseCallbackHandler()
+
+
+def flush_langfuse() -> None:
+    """Flush pending Langfuse events; swallows errors so callers stay clean."""
+    if not _langfuse_initialized:
+        return
+    try:
+        get_client().flush()
+    except Exception:
+        logger.exception("Failed to flush Langfuse events")
+
+
+__all__ = [
+    "LangfuseCallbackHandler",
+    "flush_langfuse",
+    "get_client",
+    "get_langfuse_handler",
+    "init_langfuse",
+    "is_langfuse_initialized",
+    "propagate_attributes",
+]

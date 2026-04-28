@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import json
 import uuid
-from typing import Annotated, Self
+from typing import Annotated, Literal, Self
 
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field, ValidationError, model_validator
@@ -20,6 +20,7 @@ from config import get_app_settings, get_logger, get_rate_limit_settings
 from persistence import get_chat_history_repository, is_persistence_enabled
 from rate_limiting import consume_rate_limit
 from title_generation import generate_title, truncate_title
+from tracing import get_client, is_langfuse_initialized
 from vector_db import VectorDatabase, create_vector_database
 
 logger = get_logger(__name__)
@@ -85,6 +86,18 @@ class GenerateConversationTitleRequest(BaseModel):
         min_length=1,
         max_length=_MAX_LAST_USER_MESSAGE_LENGTH,
         description="First user message used to generate the title",
+    )
+
+
+class FeedbackRequest(BaseModel):
+    """HTTP payload for submitting user feedback on an assistant message."""
+
+    trace_id: str = Field(
+        ..., min_length=1, description="Langfuse trace ID for the message"
+    )
+    value: Literal[0, 1] = Field(..., description="1 = thumbs up, 0 = thumbs down")
+    comment: str | None = Field(
+        None, max_length=2000, description="Optional freeform comment"
     )
 
 
@@ -295,7 +308,11 @@ async def generate_conversation_title(
 
     title = truncate_title(payload.first_message)
     try:
-        title = await generate_title(payload.first_message)
+        title = await generate_title(
+            payload.first_message,
+            session_id=payload.session_id,
+            visitor_id=payload.visitor_id,
+        )
     except Exception:
         logger.exception(
             "Title generation failed (session_id=%s), using fallback",
@@ -308,6 +325,41 @@ async def generate_conversation_title(
         title=title,
     )
     return {"session_id": payload.session_id, "title": title}
+
+
+@router.post("/feedback")
+async def submit_feedback(payload: FeedbackRequest) -> dict[str, str]:
+    """Submit a user thumbs-up / thumbs-down score for an assistant message.
+
+    Submits a ``BOOLEAN`` score named ``user-feedback`` to Langfuse using the
+    provided trace ID.  The ``id`` field on the score acts as an idempotency key
+    so re-submissions overwrite rather than duplicate the existing score.
+
+    Returns ``{"status": "skipped"}`` when Langfuse is not configured so that
+    non-instrumented deployments don't surface errors to users.
+    """
+    if not is_langfuse_initialized():
+        return {"status": "skipped"}
+
+    try:
+        get_client().create_score(
+            trace_id=payload.trace_id,
+            name="user-feedback",
+            value=float(payload.value),
+            data_type="BOOLEAN",
+            comment=payload.comment,
+            score_id=f"{payload.trace_id}-user-feedback",
+        )
+    except Exception as exc:
+        logger.exception(
+            "Failed to submit feedback score to Langfuse (trace_id=%s)",
+            payload.trace_id,
+        )
+        raise HTTPException(
+            status_code=500, detail="Failed to submit feedback"
+        ) from exc
+
+    return {"status": "ok"}
 
 
 async def _handle_chat_turn(
@@ -387,13 +439,21 @@ async def _handle_chat_turn(
             }
         )
 
-    await websocket.send_json(
-        {
-            "type": "end",
-            "content": full_response,
-            "session_id": session_id,
-        }
+    end_frame: dict = {
+        "type": "end",
+        "content": full_response,
+        "session_id": session_id,
+    }
+    trace_id = agent.last_trace_id
+    logger.info(
+        "Streaming completed, trace_id=%s, langfuse_initialized=%s",
+        trace_id,
+        is_langfuse_initialized(),
     )
+    if trace_id is not None:
+        end_frame["trace_id"] = trace_id
+
+    await websocket.send_json(end_frame)
     logger.info("Streaming completed for session: %s", session_id)
 
     if repo is not None:

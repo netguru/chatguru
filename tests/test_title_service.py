@@ -1,6 +1,6 @@
 """Tests for title generation adapters and fallback behavior."""
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -98,3 +98,46 @@ async def test_openai_generator_falls_back_on_empty_llm_response() -> None:
     result = await generator.generate("Fallback message here")
 
     assert result == "Fallback message here"
+
+
+@pytest.mark.asyncio
+async def test_openai_generator_attaches_langfuse_callback_when_initialized() -> None:
+    """When Langfuse is initialized, its callback handler is passed to ainvoke."""
+    llm_response = MagicMock()
+    llm_response.content = "Title From LLM"
+
+    mock_handler = MagicMock()
+
+    generator = OpenAITitleGenerator(LLMSettings())
+    generator._llm = MagicMock()
+    generator._llm.ainvoke = AsyncMock(return_value=llm_response)
+
+    with patch(
+        "title_generation.adapters.openai.get_langfuse_handler",
+        return_value=mock_handler,
+    ):
+        result = await generator.generate("Some question")
+
+    assert result == "Title From LLM"
+    _, call_kwargs = generator._llm.ainvoke.call_args
+    assert call_kwargs.get("config", {}).get("callbacks") == [mock_handler]
+
+
+@pytest.mark.asyncio
+async def test_openai_generator_no_langfuse_callback_when_not_initialized() -> None:
+    """When Langfuse is not initialized, ainvoke is called without callbacks."""
+    llm_response = MagicMock()
+    llm_response.content = "Another Title"
+
+    generator = OpenAITitleGenerator(LLMSettings())
+    generator._llm = MagicMock()
+    generator._llm.ainvoke = AsyncMock(return_value=llm_response)
+
+    with patch(
+        "title_generation.adapters.openai.get_langfuse_handler", return_value=None
+    ):
+        result = await generator.generate("Another question")
+
+    assert result == "Another Title"
+    _, call_kwargs = generator._llm.ainvoke.call_args
+    assert not call_kwargs.get("config", {}).get("callbacks")

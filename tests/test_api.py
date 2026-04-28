@@ -54,6 +54,7 @@ def test_websocket_chat_success(async_app: TestClient) -> None:
 
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
+        mock_agent_instance.last_trace_id = None
         mock_agent_instance.astream = _mock_astream(chunks)
         mock_agent_class.return_value = mock_agent_instance
 
@@ -90,6 +91,7 @@ def test_websocket_chat_without_session_id(async_app: TestClient) -> None:
 
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
+        mock_agent_instance.last_trace_id = None
         mock_agent_instance.astream = _mock_astream(["Hello!"])
         mock_agent_class.return_value = mock_agent_instance
 
@@ -116,6 +118,7 @@ def test_websocket_chat_with_empty_string_session_id(async_app: TestClient) -> N
 
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
+        mock_agent_instance.last_trace_id = None
         mock_agent_instance.astream = _mock_astream(["Hello!"])
         mock_agent_class.return_value = mock_agent_instance
 
@@ -231,6 +234,7 @@ def test_websocket_streaming_multiple_chunks(async_app: TestClient) -> None:
 
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
+        mock_agent_instance.last_trace_id = None
         mock_agent_instance.astream = _mock_astream(chunks)
         mock_agent_class.return_value = mock_agent_instance
 
@@ -301,6 +305,7 @@ def test_websocket_chat_with_conversation_history(async_app: TestClient) -> None
 
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
+        mock_agent_instance.last_trace_id = None
 
         async def astream_gen(
             messages: list[dict[str, str]],
@@ -374,6 +379,7 @@ def test_websocket_session_id_preserved_across_messages(async_app: TestClient) -
 
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
+        mock_agent_instance.last_trace_id = None
         mock_agent_instance.astream = _mock_astream(chunks)
         mock_agent_class.return_value = mock_agent_instance
 
@@ -419,6 +425,7 @@ def test_websocket_error_response_includes_session_id(async_app: TestClient) -> 
     """Test that error responses include session_id for client recovery."""
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
+        mock_agent_instance.last_trace_id = None
 
         async def astream_gen(
             messages: list[dict[str, str]],
@@ -472,6 +479,7 @@ def test_websocket_history_with_multiple_turns(async_app: TestClient) -> None:
 
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
+        mock_agent_instance.last_trace_id = None
 
         async def astream_gen(
             messages: list[dict[str, str]],
@@ -532,6 +540,7 @@ def test_websocket_missing_visitor_id_returns_error(async_app: TestClient) -> No
     """When persistence is enabled, omitting visitor_id returns an error message."""
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
+        mock_agent_instance.last_trace_id = None
         mock_agent_instance.astream = _mock_astream(["Hello!"])
         mock_agent_class.return_value = mock_agent_instance
 
@@ -729,6 +738,7 @@ def test_websocket_omitted_visitor_id_succeeds_without_persistence() -> None:
         patch("api.routes.chat.Agent") as mock_agent_class,
     ):
         mock_agent_instance = MagicMock()
+        mock_agent_instance.last_trace_id = None
         mock_agent_instance.astream = _mock_astream(["Hi!"])
         mock_agent_class.return_value = mock_agent_instance
 
@@ -750,3 +760,185 @@ def test_websocket_omitted_visitor_id_succeeds_without_persistence() -> None:
                     if data["type"] == "end":
                         assert data["session_id"] == "s1"
                         received_end = True
+
+
+def test_end_frame_includes_trace_id_when_langfuse_active(
+    async_app: TestClient,
+) -> None:
+    """The end frame carries trace_id when agent.last_trace_id is set."""
+    with patch("api.routes.chat.Agent") as mock_agent_class:
+        mock_agent_instance = MagicMock()
+        mock_agent_instance.last_trace_id = "trace-abc123"
+        mock_agent_instance.astream = _mock_astream(["Hi!"])
+        mock_agent_class.return_value = mock_agent_instance
+
+        with async_app.websocket_connect("/ws") as websocket:
+            websocket.send_json(
+                {
+                    "session_id": "s1",
+                    "visitor_id": "v1",
+                    "messages": [{"role": "user", "content": "Hello!"}],
+                }
+            )
+
+            while True:
+                data = websocket.receive_json()
+                if data["type"] == "end":
+                    assert data.get("trace_id") == "trace-abc123"
+                    break
+                elif data["type"] == "error":
+                    pytest.fail(f"Unexpected error: {data['content']}")
+
+
+def test_end_frame_omits_trace_id_when_langfuse_disabled(async_app: TestClient) -> None:
+    """The end frame omits trace_id entirely when agent.last_trace_id is None."""
+    with patch("api.routes.chat.Agent") as mock_agent_class:
+        mock_agent_instance = MagicMock()
+        mock_agent_instance.last_trace_id = None
+        mock_agent_instance.astream = _mock_astream(["Hi!"])
+        mock_agent_class.return_value = mock_agent_instance
+
+        with async_app.websocket_connect("/ws") as websocket:
+            websocket.send_json(
+                {
+                    "session_id": "s1",
+                    "visitor_id": "v1",
+                    "messages": [{"role": "user", "content": "Hello!"}],
+                }
+            )
+
+            while True:
+                data = websocket.receive_json()
+                if data["type"] == "end":
+                    assert "trace_id" not in data
+                    break
+                elif data["type"] == "error":
+                    pytest.fail(f"Unexpected error: {data['content']}")
+
+
+# ---------------------------------------------------------------------------
+# POST /feedback tests (U2)
+# ---------------------------------------------------------------------------
+
+
+def test_feedback_thumbs_up_calls_langfuse(app: TestClient) -> None:
+    """POST /feedback with value=1 calls langfuse.create_score with correct args."""
+    mock_client = MagicMock()
+
+    with (
+        patch("api.routes.chat.is_langfuse_initialized", return_value=True),
+        patch("api.routes.chat.get_client", return_value=mock_client),
+    ):
+        response = app.post(
+            "/feedback",
+            json={"trace_id": "t1", "value": 1},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    mock_client.create_score.assert_called_once_with(
+        trace_id="t1",
+        name="user-feedback",
+        value=1.0,
+        data_type="BOOLEAN",
+        comment=None,
+        score_id="t1-user-feedback",
+    )
+
+
+def test_feedback_thumbs_down_with_comment(app: TestClient) -> None:
+    """POST /feedback with value=0 and comment passes comment through."""
+    mock_client = MagicMock()
+
+    with (
+        patch("api.routes.chat.is_langfuse_initialized", return_value=True),
+        patch("api.routes.chat.get_client", return_value=mock_client),
+    ):
+        response = app.post(
+            "/feedback",
+            json={"trace_id": "t2", "value": 0, "comment": "Incorrect answer"},
+        )
+
+    assert response.status_code == 200
+    mock_client.create_score.assert_called_once_with(
+        trace_id="t2",
+        name="user-feedback",
+        value=0.0,
+        data_type="BOOLEAN",
+        comment="Incorrect answer",
+        score_id="t2-user-feedback",
+    )
+
+
+def test_feedback_skipped_when_langfuse_disabled(app: TestClient) -> None:
+    """POST /feedback returns 200 with skipped status when Langfuse is not initialised."""
+    mock_client = MagicMock()
+
+    with (
+        patch("api.routes.chat.is_langfuse_initialized", return_value=False),
+        patch("api.routes.chat.get_client", return_value=mock_client),
+    ):
+        response = app.post(
+            "/feedback",
+            json={"trace_id": "t3", "value": 1},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "skipped"}
+    mock_client.create_score.assert_not_called()
+
+
+def test_feedback_invalid_value_returns_422(app: TestClient) -> None:
+    """POST /feedback with value outside [0,1] returns 422."""
+    response = app.post(
+        "/feedback",
+        json={"trace_id": "t4", "value": 2},
+    )
+    assert response.status_code == 422
+
+
+def test_feedback_missing_trace_id_returns_422(app: TestClient) -> None:
+    """POST /feedback without trace_id returns 422."""
+    response = app.post(
+        "/feedback",
+        json={"value": 1},
+    )
+    assert response.status_code == 422
+
+
+def test_feedback_langfuse_error_returns_500(app: TestClient) -> None:
+    """POST /feedback returns 500 when Langfuse create_score raises."""
+    mock_client = MagicMock()
+    mock_client.create_score.side_effect = RuntimeError("Langfuse down")
+
+    with (
+        patch("api.routes.chat.is_langfuse_initialized", return_value=True),
+        patch("api.routes.chat.get_client", return_value=mock_client),
+    ):
+        response = app.post(
+            "/feedback",
+            json={"trace_id": "t5", "value": 1},
+        )
+
+    assert response.status_code == 500
+
+
+def test_feedback_idempotency_key_is_stable(app: TestClient) -> None:
+    """Submitting the same trace_id twice uses identical score id (idempotency)."""
+    mock_client = MagicMock()
+    trace_id = "trace-xyz"
+
+    with (
+        patch("api.routes.chat.is_langfuse_initialized", return_value=True),
+        patch("api.routes.chat.get_client", return_value=mock_client),
+    ):
+        app.post("/feedback", json={"trace_id": trace_id, "value": 1})
+        app.post("/feedback", json={"trace_id": trace_id, "value": 0})
+
+    calls = mock_client.create_score.call_args_list
+    assert len(calls) == 2
+    assert (
+        calls[0].kwargs["score_id"]
+        == calls[1].kwargs["score_id"]
+        == f"{trace_id}-user-feedback"
+    )

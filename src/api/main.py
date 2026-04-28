@@ -14,6 +14,7 @@ from config import get_app_settings, get_fastapi_settings, get_llm_settings, get
 from persistence import init_persistence, is_persistence_enabled, shutdown_persistence
 from rate_limiting import init_rate_limiting, shutdown_rate_limiting
 from title_generation import init_title_generation, shutdown_title_generation
+from tracing import init_langfuse
 
 logger = get_logger(__name__)
 app_settings = get_app_settings()
@@ -39,6 +40,7 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
         bool(llm.api_key),
     )
 
+    init_langfuse()
     await init_persistence()
     await init_title_generation()
     await init_rate_limiting()

@@ -1,12 +1,20 @@
 """OpenAI-compatible adapter for conversation title generation."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import AzureChatOpenAI, ChatOpenAI
 from pydantic import SecretStr
 
+if TYPE_CHECKING:
+    from langchain_core.runnables import RunnableConfig
+
 from config import LLMSettings, get_logger
 from title_generation.prompt import TITLE_GENERATION_SYSTEM_PROMPT
 from title_generation.utils import truncate_title
+from tracing import get_langfuse_handler
 
 logger = get_logger("title_generation.adapters.openai")
 
@@ -61,12 +69,15 @@ class OpenAITitleGenerator:
                 TITLE_GENERATION_SYSTEM_PROMPT,
                 logged_message,
             )
-            response = await self._get_llm().ainvoke(
-                [
-                    SystemMessage(content=TITLE_GENERATION_SYSTEM_PROMPT),
-                    HumanMessage(content=first_message),
-                ]
-            )
+            messages = [
+                SystemMessage(content=TITLE_GENERATION_SYSTEM_PROMPT),
+                HumanMessage(content=first_message),
+            ]
+            config: RunnableConfig = {}
+            langfuse_handler = get_langfuse_handler()
+            if langfuse_handler:
+                config["callbacks"] = [langfuse_handler]
+            response = await self._get_llm().ainvoke(messages, config=config)
             metadata = getattr(response, "response_metadata", {})
             logger.info(
                 "LLM title response metadata: finish_reason=%s token_usage=%s",

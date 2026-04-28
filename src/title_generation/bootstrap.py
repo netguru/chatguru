@@ -4,6 +4,7 @@ from config import get_logger
 from title_generation.factory import build_title_generator
 from title_generation.repository import TitleGenerator
 from title_generation.utils import truncate_title
+from tracing import flush_langfuse, propagate_attributes
 
 logger = get_logger(__name__)
 
@@ -36,10 +37,23 @@ def get_title_generator() -> TitleGenerator:
     return _title_generator
 
 
-async def generate_title(first_message: str) -> str:
-    """Generate title through configured provider with hard safety fallback."""
+async def generate_title(
+    first_message: str,
+    *,
+    session_id: str | None = None,
+    visitor_id: str | None = None,
+) -> str:
+    """Generate title through configured provider with hard safety fallback.
+
+    Args:
+        first_message: The first user message used to derive the title.
+        session_id: Optional session ID forwarded to Langfuse for trace grouping.
+        visitor_id: Optional visitor/user ID forwarded to Langfuse.
+    """
     try:
-        title = str(await get_title_generator().generate(first_message))
+        with propagate_attributes(session_id=session_id, user_id=visitor_id):
+            title = str(await get_title_generator().generate(first_message))
+            flush_langfuse()
         if title.strip():
             return title
     except Exception:

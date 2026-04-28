@@ -20,6 +20,7 @@ export interface ChatMessage {
   content: string;
   sources?: Source[];
   isStreaming?: boolean;
+  traceId?: string;
 }
 
 // Outbound WebSocket message — matches backend ChatMessage schema.
@@ -48,6 +49,7 @@ export interface WsTokenEvent extends WsBaseEvent {
 export interface WsEndEvent extends WsBaseEvent {
   type: "end";
   content: string;
+  trace_id?: string;
   // Backend does not currently send sources; reserved for future use.
   sources?: Source[] | null;
 }

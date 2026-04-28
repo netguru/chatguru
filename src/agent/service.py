@@ -1,6 +1,6 @@
 import re
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from langchain_core.messages import (
     AIMessage,
@@ -13,12 +13,19 @@ from langchain_core.messages import (
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, ToolException, tool
 from langchain_openai import AzureChatOpenAI, ChatOpenAI
-from langfuse import Langfuse, get_client, propagate_attributes
-from langfuse.langchain import CallbackHandler as LangfuseCallbackHandler
 
 from agent.prompt import SYSTEM_PROMPT
-from config import get_langfuse_settings, get_llm_settings, get_logger
+from config import get_llm_settings, get_logger
+from tracing import (
+    flush_langfuse,
+    get_langfuse_handler,
+    init_langfuse,
+    propagate_attributes,
+)
 from vector_db import VectorDatabase
+
+if TYPE_CHECKING:
+    from langfuse.langchain import CallbackHandler as LangfuseCallbackHandler
 
 
 def _build_chat_llm() -> ChatOpenAI | AzureChatOpenAI:
@@ -49,59 +56,6 @@ logger = get_logger("agent.service")
 
 # Maximum number of tool-calling iterations to prevent infinite loops
 MAX_TOOL_ITERATIONS = 10
-
-# Langfuse initialization state
-_langfuse_initialized = False
-
-
-def _init_langfuse() -> bool:
-    """
-    Initialize Langfuse client if enabled and configured.
-
-    Uses the singleton pattern - Langfuse client is initialized once at startup.
-
-    Returns:
-        True if Langfuse was successfully initialized, False otherwise
-    """
-    global _langfuse_initialized  # noqa: PLW0603
-    if _langfuse_initialized:
-        return True
-
-    settings = get_langfuse_settings()
-    if settings.enabled and settings.public_key and settings.secret_key:
-        try:
-            Langfuse(
-                public_key=settings.public_key,
-                secret_key=settings.secret_key,
-                host=settings.host,
-            )
-            _langfuse_initialized = True
-            logger.info("Langfuse tracing initialized successfully")
-        except Exception:
-            logger.exception("Failed to initialize Langfuse")
-            return False
-    else:
-        logger.info("Langfuse tracing disabled or not configured")
-    return _langfuse_initialized
-
-
-def _get_langfuse_handler() -> LangfuseCallbackHandler | None:
-    """
-    Get a Langfuse callback handler for tracing if available.
-
-    Returns a new handler instance only when Langfuse has been successfully
-    initialized; otherwise returns None.
-
-    Note: In Langfuse v3, session_id and user_id are passed via config metadata,
-    not through the CallbackHandler constructor.
-
-    Returns:
-        LangfuseCallbackHandler instance if Langfuse is initialized, None otherwise
-    """
-    if not _langfuse_initialized:
-        return None
-
-    return LangfuseCallbackHandler()
 
 
 def _convert_history_to_messages(history: list[dict[str, str]]) -> list[BaseMessage]:
@@ -161,8 +115,8 @@ class Agent:
         Args:
             vector_database: VectorDatabase for RAG search (calls sqlite-vec service)
         """
-        # Initialize Langfuse tracing (singleton)
-        _init_langfuse()
+        # Initialize Langfuse tracing (idempotent; also called at app startup)
+        init_langfuse()
 
         llm = _build_chat_llm()
 
@@ -179,6 +133,7 @@ class Agent:
         self.tool_registry: dict[str, BaseTool] = {
             tool.name: tool for tool in self.tools
         }
+        self._last_langfuse_handler: LangfuseCallbackHandler | None = None
 
     @staticmethod
     def _create_rag_tool(db: VectorDatabase) -> BaseTool:
@@ -278,14 +233,29 @@ class Agent:
         messages.extend(_convert_history_to_messages(transcript))
         return messages
 
-    @staticmethod
-    def _build_config() -> RunnableConfig:
-        """Build the LLM config with Langfuse callback if available."""
+    def _build_config(self) -> RunnableConfig:
+        """Build the LLM config with Langfuse callback if available.
+
+        Stores the callback handler instance on ``self._last_langfuse_handler``
+        so that ``last_trace_id`` can be read after the agentic loop completes.
+        """
         config: RunnableConfig = {}
-        langfuse_handler = _get_langfuse_handler()
-        if langfuse_handler:
-            config["callbacks"] = [langfuse_handler]
+        handler = get_langfuse_handler()
+        self._last_langfuse_handler = handler
+        if handler:
+            config["callbacks"] = [handler]
         return config
+
+    @property
+    def last_trace_id(self) -> str | None:
+        """Return the Langfuse trace ID from the most recent ``astream()`` call.
+
+        Returns ``None`` when Langfuse is disabled, not yet initialised, or when
+        the handler has not produced a trace ID (e.g. the stream was never consumed).
+        """
+        if self._last_langfuse_handler is None:
+            return None
+        return self._last_langfuse_handler.last_trace_id
 
     async def _process_tool_calls(
         self, full_response: AIMessageChunk, messages: list[BaseMessage]
@@ -327,20 +297,16 @@ class Agent:
         Yields:
             Response chunks as strings (including tool call notifications)
         """
+        self._last_langfuse_handler = None
         lc_messages = Agent._build_messages_from_transcript(messages)
-        config = Agent._build_config()
+        config = self._build_config()
 
         # Propagate session_id and user_id to all Langfuse traces (when provided)
         with propagate_attributes(session_id=session_id, user_id=visitor_id):
             async for chunk in self._run_agentic_loop(lc_messages, config):
                 yield chunk
 
-            # Flush Langfuse events at the end of the request
-            if _langfuse_initialized:
-                try:
-                    get_client().flush()
-                except Exception:
-                    logger.exception("Failed to flush Langfuse events")
+            flush_langfuse()
 
     async def _run_agentic_loop(
         self, messages: list[BaseMessage], config: RunnableConfig
