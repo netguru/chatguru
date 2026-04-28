@@ -14,6 +14,7 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
+from starlette.requests import HTTPConnection
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from agent.service import Agent
@@ -178,11 +179,15 @@ def _validate_message_format(message_data: object) -> None:
         raise InvalidMessageFormatError(msg)
 
 
-def _get_client_ip(websocket: WebSocket) -> str | None:
-    """Extract the real client IP address from a WebSocket connection.
+def _get_client_ip(conn: HTTPConnection) -> str | None:
+    """Extract the real client IP address from an HTTP or WebSocket connection.
+
+    Accepts any Starlette ``HTTPConnection`` — both ``Request`` (HTTP) and
+    ``WebSocket`` extend this base class — so the same logic is shared across
+    the ``/feedback`` endpoint and the WebSocket chat path.
 
     Returns ``None`` when the IP cannot be determined (e.g. certain ASGI
-    transports set ``websocket.client`` to ``None``). Callers must skip rate
+    transports set ``conn.client`` to ``None``). Callers must skip rate
     limiting for a ``None`` result rather than falling back to a shared key —
     a single shared key would let any one client exhaust the quota for every
     other client whose IP is unknown.
@@ -193,13 +198,13 @@ def _get_client_ip(websocket: WebSocket) -> str | None:
     direct-to-internet deployments, as headers can be spoofed by clients.
     """
     if get_rate_limit_settings().trust_proxy:
-        forwarded_for = websocket.headers.get("x-forwarded-for")
+        forwarded_for = conn.headers.get("x-forwarded-for")
         if forwarded_for:
             return forwarded_for.split(",")[0].strip()
-        real_ip = websocket.headers.get("x-real-ip")
+        real_ip = conn.headers.get("x-real-ip")
         if real_ip:
             return real_ip.strip()
-    client = websocket.client
+    client = conn.client
     if client is None:
         logger.info(
             "Cannot determine client IP — rate limiting skipped for this connection"
@@ -348,7 +353,7 @@ async def submit_feedback(payload: FeedbackRequest, request: Request) -> dict[st
     Returns ``{"status": "skipped"}`` when Langfuse is not configured so that
     non-instrumented deployments don't surface errors to users.
     """
-    client_ip = request.client.host if request.client else None
+    client_ip = _get_client_ip(request)
     if client_ip is not None and not await consume_rate_limit(client_ip):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
