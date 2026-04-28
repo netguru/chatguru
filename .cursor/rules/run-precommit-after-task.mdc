@@ -1,0 +1,20 @@
+---
+description: Run pre-commit hooks after completing any coding task
+alwaysApply: true
+---
+
+# Run Pre-commit Hooks After Every Task
+
+After completing any coding task (implementing a feature, fixing a bug, applying code review findings, refactoring), always run pre-commit hooks before finishing:
+
+```bash
+cd /Users/jakub.kaczmarek/Code/projects/chatguru && .venv/bin/pre-commit run --files <changed files>
+```
+
+Or to run against all staged/changed files:
+
+```bash
+.venv/bin/pre-commit run --all-files
+```
+
+Fix any hook failures before reporting the task as done.
