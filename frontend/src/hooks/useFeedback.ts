@@ -27,7 +27,11 @@ export function useFeedback(): UseFeedbackResult {
         body: JSON.stringify(payload),
       });
       const body = await res.json().catch(() => null);
-      console.debug("[useFeedback] Response:", res.status, body);
+      if (!res.ok) {
+        console.error("[useFeedback] Feedback submission failed:", res.status, body);
+      } else {
+        console.debug("[useFeedback] Response:", res.status, body);
+      }
     } catch (err) {
       console.error("[useFeedback] Failed to submit feedback:", err);
     } finally {

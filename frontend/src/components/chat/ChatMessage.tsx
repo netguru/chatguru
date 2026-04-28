@@ -103,12 +103,10 @@ export function ChatMessage({ message }: Props) {
                   variant="subtle"
                   aria-label="Thumb up"
                   size="xs"
-                  disabled={isSubmitting}
+                  disabled={!message.traceId || isSubmitting}
                   onClick={() => {
                     if (message.traceId) {
                       void submitFeedback(message.traceId, 1);
-                    } else {
-                      console.warn("[ChatMessage] thumbs-up: no traceId on message", message.id);
                     }
                   }}
                 >
@@ -118,6 +116,7 @@ export function ChatMessage({ message }: Props) {
                   variant="subtle"
                   aria-label="Thumb down"
                   size="xs"
+                  disabled={!message.traceId}
                   onClick={() => setThumbsDownOpen(true)}
                 >
                   <ThumbsDownIcon weight="bold" />
