@@ -14,8 +14,8 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from starlette.requests import HTTPConnection
 from pydantic import BaseModel, Field, ValidationError, model_validator
+from starlette.requests import HTTPConnection
 
 from agent.service import Agent
 from api.errors import (
@@ -465,9 +465,14 @@ async def _handle_chat_turn(
         "session_id": session_id,
     }
     trace_id = agent.last_trace_id
+    safe_trace_id = (
+        trace_id.replace("\n", "\\n").replace("\r", "\\r")
+        if trace_id is not None
+        else None
+    )
     logger.info(
         "Streaming completed, trace_id=%s, langfuse_initialized=%s",
-        trace_id,
+        safe_trace_id,
         is_langfuse_initialized(),
     )
     if trace_id is not None:

@@ -8,13 +8,15 @@ alwaysApply: true
 After completing any coding task (implementing a feature, fixing a bug, applying code review findings, refactoring), always run pre-commit hooks before finishing:
 
 ```bash
-cd /Users/jakub.kaczmarek/Code/projects/chatguru && .venv/bin/pre-commit run --files <changed files>
+pre-commit run --files <changed files>
 ```
 
-Or to run against all staged/changed files:
+Or to run against all changed files:
 
 ```bash
-.venv/bin/pre-commit run --all-files
+pre-commit run --all-files
 ```
+
+If `pre-commit` is not on PATH, activate the project virtualenv first (`source .venv/bin/activate`) or invoke it directly via `.venv/bin/pre-commit`.
 
 Fix any hook failures before reporting the task as done.
