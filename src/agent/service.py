@@ -17,7 +17,7 @@ from langchain_openai import AzureChatOpenAI, ChatOpenAI
 from agent.prompt import SYSTEM_PROMPT
 from config import get_llm_settings, get_logger
 from tracing import (
-    flush_langfuse,
+    flush_langfuse_async,
     get_langfuse_handler,
     init_langfuse,
     propagate_attributes,
@@ -313,7 +313,7 @@ class Agent:
                 async for chunk in self._run_agentic_loop(lc_messages, config):
                     yield chunk
             finally:
-                flush_langfuse()
+                await flush_langfuse_async()
 
     async def _run_agentic_loop(
         self, messages: list[BaseMessage], config: RunnableConfig

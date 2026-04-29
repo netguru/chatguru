@@ -298,7 +298,14 @@ async def get_history(
         msg = "persistence router registered but repository is not initialised"
         raise RuntimeError(msg)
     messages = await repo.list_messages(visitor_id=visitor_id, session_id=session_id)
-    return [{"role": m.role, "content": m.content} for m in messages]
+    return [
+        {
+            "role": m.role,
+            "content": m.content,
+            **({"trace_id": m.trace_id} if m.trace_id is not None else {}),
+        }
+        for m in messages
+    ]
 
 
 @persistence_router.post("/conversations/title")
@@ -488,6 +495,7 @@ async def _handle_chat_turn(
                 session_id=session_id,
                 role="assistant",
                 content=full_response,
+                trace_id=trace_id,
             )
         except Exception:
             # The response has already been delivered to the client via the "end"

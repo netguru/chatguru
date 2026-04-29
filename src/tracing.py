@@ -1,5 +1,6 @@
 """Shared Langfuse tracing helpers used across services (agent, title generation, etc.)."""
 
+import asyncio
 import threading
 
 from langfuse import (
@@ -74,7 +75,12 @@ def get_langfuse_handler() -> LangfuseCallbackHandler | None:
 
 
 def flush_langfuse() -> None:
-    """Flush pending Langfuse events; swallows errors so callers stay clean."""
+    """Flush pending Langfuse events synchronously; swallows errors so callers stay clean.
+
+    Note: flushes the global client queue — may include events from other concurrent
+    requests. Prefer ``flush_langfuse_async`` inside async contexts so the event loop
+    is not blocked while waiting.
+    """
     if not _langfuse_initialized:
         return
     try:
@@ -83,9 +89,23 @@ def flush_langfuse() -> None:
         logger.exception("Failed to flush Langfuse events")
 
 
+async def flush_langfuse_async() -> None:
+    """Schedule a non-blocking Langfuse flush from an async context.
+
+    Runs ``flush_langfuse`` in the default thread-pool executor so the async
+    event loop is not blocked while the SDK drains its queue.  Fire-and-forget:
+    the coroutine returns immediately after scheduling the work.
+    """
+    if not _langfuse_initialized:
+        return
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, flush_langfuse)
+
+
 __all__ = [
     "LangfuseCallbackHandler",
     "flush_langfuse",
+    "flush_langfuse_async",
     "get_client",
     "get_langfuse_handler",
     "init_langfuse",

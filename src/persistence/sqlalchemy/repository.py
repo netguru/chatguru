@@ -195,6 +195,7 @@ class SqlAlchemyChatHistoryRepository(ChatHistoryRepository):
         session_id: str,
         role: str,
         content: str,
+        trace_id: str | None = None,
     ) -> None:
         validate_chat_message_role(role)
         message_id = str(uuid.uuid4())
@@ -208,6 +209,7 @@ class SqlAlchemyChatHistoryRepository(ChatHistoryRepository):
                     role=role,
                     content=content,
                     created_at=created_at,
+                    trace_id=trace_id,
                 )
             )
 
@@ -238,6 +240,7 @@ class SqlAlchemyChatHistoryRepository(ChatHistoryRepository):
                 role=str(r["role"]),
                 content=str(r["content"]),
                 created_at=_as_utc_datetime(r["created_at"]),
+                trace_id=str(r["trace_id"]) if r["trace_id"] is not None else None,
             )
             for r in rows
         ]

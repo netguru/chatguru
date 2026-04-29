@@ -4,7 +4,7 @@ from config import get_logger
 from title_generation.factory import build_title_generator
 from title_generation.repository import TitleGenerator
 from title_generation.utils import truncate_title
-from tracing import flush_langfuse, propagate_attributes
+from tracing import flush_langfuse_async, propagate_attributes
 
 logger = get_logger(__name__)
 
@@ -55,7 +55,7 @@ async def generate_title(
             try:
                 title = str(await get_title_generator().generate(first_message))
             finally:
-                flush_langfuse()
+                await flush_langfuse_async()
         if title.strip():
             return title
     except Exception:

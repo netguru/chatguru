@@ -74,6 +74,7 @@ class ChatHistoryRepository(Protocol):
         session_id: str,
         role: str,
         content: str,
+        trace_id: str | None = None,
     ) -> None:
         """Persist one message. Roles are typically ``user`` or ``assistant``."""
         ...
