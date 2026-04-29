@@ -12,11 +12,13 @@ interface ConversationDto {
 interface HistoryMessageDto {
   role: string;
   content: string;
+  trace_id?: string;
 }
 
 interface ValidHistoryMessageDto {
   role: MessageRole;
   content: string;
+  trace_id?: string;
 }
 
 function isMessageRole(role: string): role is MessageRole {
@@ -85,7 +87,11 @@ export function usePersistedHistory() {
         const rawHistory = (await response.json()) as HistoryMessageDto[];
         const history = rawHistory
           .filter(hasValidRole)
-          .map((entry) => ({ role: entry.role, content: entry.content }));
+          .map((entry) => ({
+            role: entry.role,
+            content: entry.content,
+            ...(entry.trace_id ? { traceId: entry.trace_id } : {}),
+          }));
 
         hydrateSessionHistory(sessionId, history);
       } catch {

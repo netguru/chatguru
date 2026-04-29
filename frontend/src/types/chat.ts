@@ -5,6 +5,7 @@ export type MessageRole = "user" | "assistant" | "system";
 export interface HistoryMessage {
   role: MessageRole;
   content: string;
+  traceId?: string;
 }
 
 export interface Source {

@@ -18,9 +18,10 @@ interface ThumbsDownModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   traceId?: string;
+  onSent?: () => void;
 }
 
-export function ThumbsDownModal({ open, onOpenChange, traceId }: ThumbsDownModalProps) {
+export function ThumbsDownModal({ open, onOpenChange, traceId, onSent }: ThumbsDownModalProps) {
   const [selectedChip, setSelectedChip] = useState<string | null>(null);
   const [text, setText] = useState("");
   const [isPending, startTransition] = useTransition();
@@ -50,6 +51,7 @@ export function ThumbsDownModal({ open, onOpenChange, traceId }: ThumbsDownModal
       }
       onOpenChange(false);
       reset();
+      onSent?.();
     });
   }
 

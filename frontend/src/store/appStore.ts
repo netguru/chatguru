@@ -225,6 +225,7 @@ export const useAppStore = create<AppState>((set) => ({
           id: crypto.randomUUID(),
           role: entry.role,
           content: entry.content,
+          ...(entry.traceId ? { traceId: entry.traceId } : {}),
         }));
         return {
           ...s,
