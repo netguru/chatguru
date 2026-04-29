@@ -283,5 +283,5 @@ async def test_init_langfuse_idempotent_under_concurrent_callers() -> None:
 
     # All callers should report True once initialized
     assert all(results)
-    # Langfuse() constructor must have been called at most once
-    assert call_count["n"] <= 1
+    # The lock guarantees the constructor is called exactly once, not just "at most once"
+    assert call_count["n"] == 1

@@ -1,5 +1,7 @@
 """Shared Langfuse tracing helpers used across services (agent, title generation, etc.)."""
 
+import threading
+
 from langfuse import (
     Langfuse,
     get_client,
@@ -14,6 +16,7 @@ from config import get_langfuse_settings, get_logger
 logger = get_logger("tracing")
 
 _langfuse_initialized = False
+_init_lock = threading.Lock()
 
 
 def init_langfuse() -> bool:
@@ -30,21 +33,26 @@ def init_langfuse() -> bool:
     if _langfuse_initialized:
         return True
 
-    settings = get_langfuse_settings()
-    if settings.enabled and settings.public_key and settings.secret_key:
-        try:
-            Langfuse(
-                public_key=settings.public_key,
-                secret_key=settings.secret_key,
-                host=settings.host,
-            )
-            _langfuse_initialized = True
-            logger.info("Langfuse tracing initialized successfully")
-        except Exception:
-            logger.exception("Failed to initialize Langfuse")
-            return False
-    else:
-        logger.info("Langfuse tracing disabled or not configured")
+    with _init_lock:
+        # Re-check inside the lock — another thread may have initialized while we waited.
+        if _langfuse_initialized:
+            return True
+
+        settings = get_langfuse_settings()
+        if settings.enabled and settings.public_key and settings.secret_key:
+            try:
+                Langfuse(
+                    public_key=settings.public_key,
+                    secret_key=settings.secret_key,
+                    host=settings.host,
+                )
+                _langfuse_initialized = True
+                logger.info("Langfuse tracing initialized successfully")
+            except Exception:
+                logger.exception("Failed to initialize Langfuse")
+                return False
+        else:
+            logger.info("Langfuse tracing disabled or not configured")
     return _langfuse_initialized
 
 
