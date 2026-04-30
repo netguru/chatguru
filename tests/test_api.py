@@ -829,10 +829,11 @@ def test_feedback_thumbs_up_calls_langfuse(app: TestClient) -> None:
         patch("api.routes.chat.is_langfuse_initialized", return_value=True),
         patch("api.routes.chat.get_client", return_value=mock_client),
         patch("api.routes.chat.consume_rate_limit", return_value=True),
+        patch("api.routes.chat.get_chat_history_repository", return_value=None),
     ):
         response = app.post(
             "/feedback",
-            json={"trace_id": "t1", "value": 1},
+            json={"trace_id": "t1", "visitor_id": "v1", "value": 1},
         )
 
     assert response.status_code == 200
@@ -843,7 +844,7 @@ def test_feedback_thumbs_up_calls_langfuse(app: TestClient) -> None:
         value=1.0,
         data_type="BOOLEAN",
         comment=None,
-        score_id="t1-user-feedback",
+        score_id="t1-v1-user-feedback",
     )
 
 
@@ -855,10 +856,16 @@ def test_feedback_thumbs_down_with_comment(app: TestClient) -> None:
         patch("api.routes.chat.is_langfuse_initialized", return_value=True),
         patch("api.routes.chat.get_client", return_value=mock_client),
         patch("api.routes.chat.consume_rate_limit", return_value=True),
+        patch("api.routes.chat.get_chat_history_repository", return_value=None),
     ):
         response = app.post(
             "/feedback",
-            json={"trace_id": "t2", "value": 0, "comment": "Incorrect answer"},
+            json={
+                "trace_id": "t2",
+                "visitor_id": "v2",
+                "value": 0,
+                "comment": "Incorrect answer",
+            },
         )
 
     assert response.status_code == 200
@@ -868,7 +875,7 @@ def test_feedback_thumbs_down_with_comment(app: TestClient) -> None:
         value=0.0,
         data_type="BOOLEAN",
         comment="Incorrect answer",
-        score_id="t2-user-feedback",
+        score_id="t2-v2-user-feedback",
     )
 
 
@@ -880,10 +887,11 @@ def test_feedback_skipped_when_langfuse_disabled(app: TestClient) -> None:
         patch("api.routes.chat.is_langfuse_initialized", return_value=False),
         patch("api.routes.chat.get_client", return_value=mock_client),
         patch("api.routes.chat.consume_rate_limit", return_value=True),
+        patch("api.routes.chat.get_chat_history_repository", return_value=None),
     ):
         response = app.post(
             "/feedback",
-            json={"trace_id": "t3", "value": 1},
+            json={"trace_id": "t3", "visitor_id": "v3", "value": 1},
         )
 
     assert response.status_code == 200
@@ -895,7 +903,7 @@ def test_feedback_invalid_value_returns_422(app: TestClient) -> None:
     """POST /feedback with value outside [0,1] returns 422."""
     response = app.post(
         "/feedback",
-        json={"trace_id": "t4", "value": 2},
+        json={"trace_id": "t4", "visitor_id": "v4", "value": 2},
     )
     assert response.status_code == 422
 
@@ -904,9 +912,35 @@ def test_feedback_missing_trace_id_returns_422(app: TestClient) -> None:
     """POST /feedback without trace_id returns 422."""
     response = app.post(
         "/feedback",
-        json={"value": 1},
+        json={"visitor_id": "v5", "value": 1},
     )
     assert response.status_code == 422
+
+
+def test_feedback_missing_visitor_id_returns_422(app: TestClient) -> None:
+    """POST /feedback without visitor_id returns 422."""
+    response = app.post(
+        "/feedback",
+        json={"trace_id": "t6", "value": 1},
+    )
+    assert response.status_code == 422
+
+
+def test_feedback_wrong_visitor_returns_403(app: TestClient) -> None:
+    """POST /feedback returns 403 when trace_id doesn't belong to visitor_id."""
+    mock_repo = MagicMock()
+    mock_repo.trace_id_owned_by_visitor = AsyncMock(return_value=False)
+
+    with (
+        patch("api.routes.chat.consume_rate_limit", return_value=True),
+        patch("api.routes.chat.get_chat_history_repository", return_value=mock_repo),
+    ):
+        response = app.post(
+            "/feedback",
+            json={"trace_id": "t7", "visitor_id": "attacker", "value": 1},
+        )
+
+    assert response.status_code == 403
 
 
 def test_feedback_langfuse_error_returns_500(app: TestClient) -> None:
@@ -918,34 +952,43 @@ def test_feedback_langfuse_error_returns_500(app: TestClient) -> None:
         patch("api.routes.chat.is_langfuse_initialized", return_value=True),
         patch("api.routes.chat.get_client", return_value=mock_client),
         patch("api.routes.chat.consume_rate_limit", return_value=True),
+        patch("api.routes.chat.get_chat_history_repository", return_value=None),
     ):
         response = app.post(
             "/feedback",
-            json={"trace_id": "t5", "value": 1},
+            json={"trace_id": "t5", "visitor_id": "v5e", "value": 1},
         )
 
     assert response.status_code == 500
 
 
 def test_feedback_idempotency_key_is_stable(app: TestClient) -> None:
-    """Submitting the same trace_id twice uses identical score id (idempotency)."""
+    """Same visitor submitting twice uses identical score_id (idempotency)."""
     mock_client = MagicMock()
     trace_id = "trace-xyz"
+    visitor_id = "v-idem"
 
     with (
         patch("api.routes.chat.is_langfuse_initialized", return_value=True),
         patch("api.routes.chat.get_client", return_value=mock_client),
         patch("api.routes.chat.consume_rate_limit", return_value=True),
+        patch("api.routes.chat.get_chat_history_repository", return_value=None),
     ):
-        app.post("/feedback", json={"trace_id": trace_id, "value": 1})
-        app.post("/feedback", json={"trace_id": trace_id, "value": 0})
+        app.post(
+            "/feedback",
+            json={"trace_id": trace_id, "visitor_id": visitor_id, "value": 1},
+        )
+        app.post(
+            "/feedback",
+            json={"trace_id": trace_id, "visitor_id": visitor_id, "value": 0},
+        )
 
     calls = mock_client.create_score.call_args_list
     assert len(calls) == 2
     assert (
         calls[0].kwargs["score_id"]
         == calls[1].kwargs["score_id"]
-        == f"{trace_id}-user-feedback"
+        == f"{trace_id}-{visitor_id}-user-feedback"
     )
 
 
@@ -958,12 +1001,14 @@ async def test_feedback_concurrent_submissions_idempotent() -> None:
     from api.main import create_app
 
     trace_id = "concurrent-trace-xyz"
+    visitor_id = "v-concurrent"
     mock_client = MagicMock()
 
     with (
         patch("api.routes.chat.is_langfuse_initialized", return_value=True),
         patch("api.routes.chat.get_client", return_value=mock_client),
         patch("api.routes.chat.consume_rate_limit", return_value=True),
+        patch("api.routes.chat.get_chat_history_repository", return_value=None),
         patch("api.main.init_langfuse"),
         patch("api.main.init_persistence", new=AsyncMock()),
         patch("api.main.shutdown_persistence", new=AsyncMock()),
@@ -977,12 +1022,18 @@ async def test_feedback_concurrent_submissions_idempotent() -> None:
             transport=transport, base_url="http://test"
         ) as client:
             results = await asyncio.gather(
-                client.post("/feedback", json={"trace_id": trace_id, "value": 1}),
-                client.post("/feedback", json={"trace_id": trace_id, "value": 0}),
+                client.post(
+                    "/feedback",
+                    json={"trace_id": trace_id, "visitor_id": visitor_id, "value": 1},
+                ),
+                client.post(
+                    "/feedback",
+                    json={"trace_id": trace_id, "visitor_id": visitor_id, "value": 0},
+                ),
             )
 
     assert all(r.status_code == 200 for r in results)
     calls = mock_client.create_score.call_args_list
     assert len(calls) == 2
     score_ids = {c.kwargs["score_id"] for c in calls}
-    assert score_ids == {f"{trace_id}-user-feedback"}
+    assert score_ids == {f"{trace_id}-{visitor_id}-user-feedback"}

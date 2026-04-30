@@ -1,7 +1,9 @@
 import { useState } from "react";
+import { getOrCreateVisitorId } from "../utils/visitorId";
 
 interface FeedbackPayload {
   trace_id: string;
+  visitor_id: string;
   value: 0 | 1;
   comment?: string;
 }
@@ -17,7 +19,7 @@ export function useFeedback(): UseFeedbackResult {
   async function submitFeedback(traceId: string, value: 0 | 1, comment?: string): Promise<void> {
     setIsSubmitting(true);
     try {
-      const payload: FeedbackPayload = { trace_id: traceId, value };
+      const payload: FeedbackPayload = { trace_id: traceId, visitor_id: getOrCreateVisitorId(), value };
       if (comment) payload.comment = comment;
 
       console.debug("[useFeedback] Submitting feedback:", payload);

@@ -88,6 +88,15 @@ class ChatHistoryRepository(Protocol):
         """Return messages for the session in chronological order."""
         ...
 
+    async def trace_id_owned_by_visitor(
+        self,
+        *,
+        trace_id: str,
+        visitor_id: str,
+    ) -> bool:
+        """Return True if a persisted assistant message with this trace_id belongs to visitor_id."""
+        ...
+
     async def close(self) -> None:
         """Release database connections and other resources."""
         ...

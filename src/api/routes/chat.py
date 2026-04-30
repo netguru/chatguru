@@ -1,6 +1,7 @@
 """Chat API routes."""
 
 import asyncio
+import base64
 import contextlib
 import json
 import uuid
@@ -38,6 +39,43 @@ _MAX_CONTENT_LENGTH = 8000
 _MAX_TRANSCRIPT_MESSAGES = 200
 _MAX_LAST_USER_MESSAGE_LENGTH = 2000
 
+_ALLOWED_MIME_TYPES = frozenset(
+    {
+        "application/pdf",
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp",
+    }
+)
+_MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
+_MAX_ATTACHMENTS_PER_MESSAGE = 5
+
+
+class Attachment(BaseModel):
+    """A file attached to a user message."""
+
+    name: str = Field(
+        ..., min_length=1, max_length=255, description="Original filename"
+    )
+    mime_type: str = Field(..., description="MIME type of the file")
+    data: str = Field(..., description="Base64-encoded file content")
+
+    @model_validator(mode="after")
+    def validate_attachment(self) -> Self:
+        if self.mime_type not in _ALLOWED_MIME_TYPES:
+            msg = f"Unsupported file type: {self.mime_type}. Allowed: {', '.join(sorted(_ALLOWED_MIME_TYPES))}"
+            raise ValueError(msg)
+        try:
+            raw = base64.b64decode(self.data)
+        except ValueError as exc:
+            msg = "Invalid base64 encoding"
+            raise ValueError(msg) from exc
+        if len(raw) > _MAX_FILE_SIZE_BYTES:
+            msg = f"File exceeds {_MAX_FILE_SIZE_BYTES // (1024 * 1024)}MB limit"
+            raise ValueError(msg)
+        return self
+
 
 class HistoryMessage(BaseModel):
     """Individual message in conversation history."""
@@ -45,6 +83,11 @@ class HistoryMessage(BaseModel):
     role: str = Field(..., description="Message role: 'user' or 'assistant'")
     content: str = Field(
         ..., max_length=_MAX_CONTENT_LENGTH, description="Message content"
+    )
+    attachments: list[Attachment] | None = Field(
+        default=None,
+        max_length=_MAX_ATTACHMENTS_PER_MESSAGE,
+        description="File attachments (only allowed on the last user message)",
     )
 
 
@@ -74,11 +117,24 @@ class ChatMessage(BaseModel):
             msg = "'messages' must be a non-empty array"
             raise ValueError(msg)
 
+        # Only the last message may carry attachments.
+        for m in self.messages[:-1]:
+            if m.attachments:
+                msg = "Only the last (current) message may contain attachments"
+                raise ValueError(msg)
+
         last = self.messages[-1]
         if last.role != "user":
             msg = 'Last message in messages must have role "user" (current turn)'
             raise ValueError(msg)
-        if len(last.content) < 1 or len(last.content) > _MAX_LAST_USER_MESSAGE_LENGTH:
+
+        has_attachments = bool(last.attachments)
+        # When attachments are present, allow empty text content.
+        if has_attachments:
+            if len(last.content) > _MAX_LAST_USER_MESSAGE_LENGTH:
+                msg = "Last user message content must be at most 2000 characters"
+                raise ValueError(msg)
+        elif len(last.content) < 1 or len(last.content) > _MAX_LAST_USER_MESSAGE_LENGTH:
             msg = "Last user message content must be between 1 and 2000 characters"
             raise ValueError(msg)
         return self
@@ -105,6 +161,12 @@ class FeedbackRequest(BaseModel):
         min_length=1,
         max_length=512,
         description="Langfuse trace ID for the message",
+    )
+    visitor_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=512,
+        description="Visitor ID that originated the message — used to verify ownership",
     )
     value: Literal[0, 1] = Field(..., description="1 = thumbs up, 0 = thumbs down")
     comment: str | None = Field(
@@ -364,10 +426,27 @@ async def submit_feedback(payload: FeedbackRequest, request: Request) -> dict[st
     if client_ip is not None and not await consume_rate_limit(client_ip):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
+    # Verify the trace_id belongs to the calling visitor before scoring.
+    # When persistence is disabled we cannot validate, so we allow the request
+    # through — trace_ids are unguessable UUIDs from Langfuse in that case.
+    repo = get_chat_history_repository()
+    if repo is not None:
+        owned = await repo.trace_id_owned_by_visitor(
+            trace_id=payload.trace_id,
+            visitor_id=payload.visitor_id,
+        )
+        if not owned:
+            raise HTTPException(
+                status_code=403,
+                detail="trace_id does not belong to this visitor",
+            )
+
     if not is_langfuse_initialized():
         return {"status": "skipped"}
 
     safe_trace_id = payload.trace_id.replace("\n", "\\n").replace("\r", "\\r")
+    # Scope score_id per visitor so different visitors cannot overwrite each other's scores.
+    score_id = f"{payload.trace_id}-{payload.visitor_id}-user-feedback"
     try:
         get_client().create_score(
             trace_id=payload.trace_id,
@@ -375,7 +454,7 @@ async def submit_feedback(payload: FeedbackRequest, request: Request) -> dict[st
             value=float(payload.value),
             data_type="BOOLEAN",
             comment=payload.comment,
-            score_id=f"{payload.trace_id}-user-feedback",
+            score_id=score_id,
         )
     except Exception as exc:
         logger.exception(
@@ -389,7 +468,7 @@ async def submit_feedback(payload: FeedbackRequest, request: Request) -> dict[st
     return {"status": "ok"}
 
 
-async def _handle_chat_turn(
+async def _handle_chat_turn(  # noqa: C901, PLR0912
     websocket: WebSocket,
     agent: Agent,
     chat_message: ChatMessage,
@@ -399,7 +478,15 @@ async def _handle_chat_turn(
     """Stream one assistant reply, persisting turns when persistence is enabled."""
     repo = get_chat_history_repository()  # None when PERSISTENCE_DATABASE_URL is unset
     current_user_content = chat_message.messages[-1].content
-    transcript = [{"role": m.role, "content": m.content} for m in chat_message.messages]
+    transcript: list[dict[str, Any]] = []
+    for i, m in enumerate(chat_message.messages):
+        entry: dict[str, Any] = {"role": m.role, "content": m.content}
+        if i == len(chat_message.messages) - 1 and m.attachments:
+            entry["attachments"] = [
+                {"name": a.name, "mime_type": a.mime_type, "data": a.data}
+                for a in m.attachments
+            ]
+        transcript.append(entry)
 
     if repo is not None:
         # Check server-side whether a conversation record already exists for this
