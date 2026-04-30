@@ -55,7 +55,15 @@ async def init_rate_limiting() -> None:
     client: aioredis.Redis = aioredis.from_url(
         settings.redis_url, decode_responses=True
     )
-    await client.ping()  # type: ignore[misc]
+    try:
+        await client.ping()  # type: ignore[misc]
+    except aioredis.RedisError as exc:
+        msg = (
+            f"RATE_LIMIT_ENABLED=true but cannot reach Redis at {settings.redis_url!r}. "
+            "Start Redis (e.g. docker compose --profile rate-limiting up) "
+            "or set RATE_LIMIT_ENABLED=false to disable rate limiting."
+        )
+        raise RuntimeError(msg) from exc
     _redis_client = client
     logger.info(
         "Rate limiting initialized (limit=%d per %ds, redis=%s)",
