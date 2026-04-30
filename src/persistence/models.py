@@ -25,3 +25,4 @@ class StoredChatMessage:
     role: str
     content: str
     created_at: datetime
+    trace_id: str | None = None

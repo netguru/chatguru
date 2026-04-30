@@ -160,6 +160,61 @@ async def test_agent_with_tool_call() -> None:
         assert call_count["count"] == 2
 
 
+@pytest.mark.asyncio
+async def test_last_trace_id_is_none_without_langfuse() -> None:
+    """last_trace_id returns None when Langfuse is not initialised."""
+
+    async def mock_astream(
+        messages: list, *, config: dict | None = None
+    ) -> AsyncIterator[AIMessageChunk]:
+        yield AIMessageChunk(content="Hi")
+
+    with patch("src.agent.service._build_chat_llm") as mock_build:
+        mock_instance = GenericFakeChatModel(messages=iter([]))
+        object.__setattr__(mock_instance, "bind_tools", lambda tools: mock_instance)
+        object.__setattr__(mock_instance, "astream", mock_astream)
+        mock_build.return_value = mock_instance
+
+        with patch("src.agent.service.get_langfuse_handler", return_value=None):
+            agent = Agent()
+            async for _ in agent.astream([{"role": "user", "content": "Hello"}]):
+                pass
+            assert agent.last_trace_id is None
+
+
+@pytest.mark.asyncio
+async def test_last_trace_id_resets_between_calls() -> None:
+    """last_trace_id is reset to None at the start of each astream() call."""
+
+    async def mock_astream(
+        messages: list, *, config: dict | None = None
+    ) -> AsyncIterator[AIMessageChunk]:
+        yield AIMessageChunk(content="Hi")
+
+    mock_handler = MagicMock()
+    mock_handler.last_trace_id = "trace-first"
+
+    with patch("src.agent.service._build_chat_llm") as mock_build:
+        mock_instance = GenericFakeChatModel(messages=iter([]))
+        object.__setattr__(mock_instance, "bind_tools", lambda tools: mock_instance)
+        object.__setattr__(mock_instance, "astream", mock_astream)
+        mock_build.return_value = mock_instance
+
+        with patch("src.agent.service.get_langfuse_handler", return_value=mock_handler):
+            agent = Agent()
+
+            # First call gets a trace ID
+            async for _ in agent.astream([{"role": "user", "content": "Hello"}]):
+                pass
+            assert agent.last_trace_id == "trace-first"
+
+            # Between calls the handler is reset — simulate disabled handler on second call
+            with patch("src.agent.service.get_langfuse_handler", return_value=None):
+                async for _ in agent.astream([{"role": "user", "content": "Hello"}]):
+                    pass
+                assert agent.last_trace_id is None
+
+
 class TestExtractProductQuery:
     """Test suite for _extract_product_query method."""
 

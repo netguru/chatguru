@@ -1,13 +1,22 @@
 """Chat API routes."""
 
 import asyncio
+import base64
 import contextlib
 import json
 import uuid
-from typing import Annotated, Self
+from typing import Annotated, Any, Literal, Self
 
-from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import (
+    APIRouter,
+    HTTPException,
+    Query,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from pydantic import BaseModel, Field, ValidationError, model_validator
+from starlette.requests import HTTPConnection
 
 from agent.service import Agent
 from api.errors import (
@@ -20,6 +29,7 @@ from config import get_app_settings, get_logger, get_rate_limit_settings
 from persistence import get_chat_history_repository, is_persistence_enabled
 from rate_limiting import consume_rate_limit
 from title_generation import generate_title, truncate_title
+from tracing import get_client, is_langfuse_initialized
 from vector_db import VectorDatabase, create_vector_database
 
 logger = get_logger(__name__)
@@ -29,6 +39,43 @@ _MAX_CONTENT_LENGTH = 8000
 _MAX_TRANSCRIPT_MESSAGES = 200
 _MAX_LAST_USER_MESSAGE_LENGTH = 2000
 
+_ALLOWED_MIME_TYPES = frozenset(
+    {
+        "application/pdf",
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp",
+    }
+)
+_MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
+_MAX_ATTACHMENTS_PER_MESSAGE = 5
+
+
+class Attachment(BaseModel):
+    """A file attached to a user message."""
+
+    name: str = Field(
+        ..., min_length=1, max_length=255, description="Original filename"
+    )
+    mime_type: str = Field(..., description="MIME type of the file")
+    data: str = Field(..., description="Base64-encoded file content")
+
+    @model_validator(mode="after")
+    def validate_attachment(self) -> Self:
+        if self.mime_type not in _ALLOWED_MIME_TYPES:
+            msg = f"Unsupported file type: {self.mime_type}. Allowed: {', '.join(sorted(_ALLOWED_MIME_TYPES))}"
+            raise ValueError(msg)
+        try:
+            raw = base64.b64decode(self.data)
+        except ValueError as exc:
+            msg = "Invalid base64 encoding"
+            raise ValueError(msg) from exc
+        if len(raw) > _MAX_FILE_SIZE_BYTES:
+            msg = f"File exceeds {_MAX_FILE_SIZE_BYTES // (1024 * 1024)}MB limit"
+            raise ValueError(msg)
+        return self
+
 
 class HistoryMessage(BaseModel):
     """Individual message in conversation history."""
@@ -36,6 +83,11 @@ class HistoryMessage(BaseModel):
     role: str = Field(..., description="Message role: 'user' or 'assistant'")
     content: str = Field(
         ..., max_length=_MAX_CONTENT_LENGTH, description="Message content"
+    )
+    attachments: list[Attachment] | None = Field(
+        default=None,
+        max_length=_MAX_ATTACHMENTS_PER_MESSAGE,
+        description="File attachments (only allowed on the last user message)",
     )
 
 
@@ -65,11 +117,24 @@ class ChatMessage(BaseModel):
             msg = "'messages' must be a non-empty array"
             raise ValueError(msg)
 
+        # Only the last message may carry attachments.
+        for m in self.messages[:-1]:
+            if m.attachments:
+                msg = "Only the last (current) message may contain attachments"
+                raise ValueError(msg)
+
         last = self.messages[-1]
         if last.role != "user":
             msg = 'Last message in messages must have role "user" (current turn)'
             raise ValueError(msg)
-        if len(last.content) < 1 or len(last.content) > _MAX_LAST_USER_MESSAGE_LENGTH:
+
+        has_attachments = bool(last.attachments)
+        # When attachments are present, allow empty text content.
+        if has_attachments:
+            if len(last.content) > _MAX_LAST_USER_MESSAGE_LENGTH:
+                msg = "Last user message content must be at most 2000 characters"
+                raise ValueError(msg)
+        elif len(last.content) < 1 or len(last.content) > _MAX_LAST_USER_MESSAGE_LENGTH:
             msg = "Last user message content must be between 1 and 2000 characters"
             raise ValueError(msg)
         return self
@@ -85,6 +150,27 @@ class GenerateConversationTitleRequest(BaseModel):
         min_length=1,
         max_length=_MAX_LAST_USER_MESSAGE_LENGTH,
         description="First user message used to generate the title",
+    )
+
+
+class FeedbackRequest(BaseModel):
+    """HTTP payload for submitting user feedback on an assistant message."""
+
+    trace_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=512,
+        description="Langfuse trace ID for the message",
+    )
+    visitor_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=512,
+        description="Visitor ID that originated the message — used to verify ownership",
+    )
+    value: Literal[0, 1] = Field(..., description="1 = thumbs up, 0 = thumbs down")
+    comment: str | None = Field(
+        None, max_length=2000, description="Optional freeform comment"
     )
 
 
@@ -155,11 +241,15 @@ def _validate_message_format(message_data: object) -> None:
         raise InvalidMessageFormatError(msg)
 
 
-def _get_client_ip(websocket: WebSocket) -> str | None:
-    """Extract the real client IP address from a WebSocket connection.
+def _get_client_ip(conn: HTTPConnection) -> str | None:
+    """Extract the real client IP address from an HTTP or WebSocket connection.
+
+    Accepts any Starlette ``HTTPConnection`` — both ``Request`` (HTTP) and
+    ``WebSocket`` extend this base class — so the same logic is shared across
+    the ``/feedback`` endpoint and the WebSocket chat path.
 
     Returns ``None`` when the IP cannot be determined (e.g. certain ASGI
-    transports set ``websocket.client`` to ``None``). Callers must skip rate
+    transports set ``conn.client`` to ``None``). Callers must skip rate
     limiting for a ``None`` result rather than falling back to a shared key —
     a single shared key would let any one client exhaust the quota for every
     other client whose IP is unknown.
@@ -170,13 +260,13 @@ def _get_client_ip(websocket: WebSocket) -> str | None:
     direct-to-internet deployments, as headers can be spoofed by clients.
     """
     if get_rate_limit_settings().trust_proxy:
-        forwarded_for = websocket.headers.get("x-forwarded-for")
+        forwarded_for = conn.headers.get("x-forwarded-for")
         if forwarded_for:
             return forwarded_for.split(",")[0].strip()
-        real_ip = websocket.headers.get("x-real-ip")
+        real_ip = conn.headers.get("x-real-ip")
         if real_ip:
             return real_ip.strip()
-    client = websocket.client
+    client = conn.client
     if client is None:
         logger.info(
             "Cannot determine client IP — rate limiting skipped for this connection"
@@ -270,7 +360,14 @@ async def get_history(
         msg = "persistence router registered but repository is not initialised"
         raise RuntimeError(msg)
     messages = await repo.list_messages(visitor_id=visitor_id, session_id=session_id)
-    return [{"role": m.role, "content": m.content} for m in messages]
+    return [
+        {
+            "role": m.role,
+            "content": m.content,
+            **({"trace_id": m.trace_id} if m.trace_id is not None else {}),
+        }
+        for m in messages
+    ]
 
 
 @persistence_router.post("/conversations/title")
@@ -295,7 +392,11 @@ async def generate_conversation_title(
 
     title = truncate_title(payload.first_message)
     try:
-        title = await generate_title(payload.first_message)
+        title = await generate_title(
+            payload.first_message,
+            session_id=payload.session_id,
+            visitor_id=payload.visitor_id,
+        )
     except Exception:
         logger.exception(
             "Title generation failed (session_id=%s), using fallback",
@@ -310,7 +411,64 @@ async def generate_conversation_title(
     return {"session_id": payload.session_id, "title": title}
 
 
-async def _handle_chat_turn(
+@router.post("/feedback")
+async def submit_feedback(payload: FeedbackRequest, request: Request) -> dict[str, str]:
+    """Submit a user thumbs-up / thumbs-down score for an assistant message.
+
+    Submits a ``BOOLEAN`` score named ``user-feedback`` to Langfuse using the
+    provided trace ID.  The ``score_id`` field on the score acts as an idempotency key
+    so re-submissions overwrite rather than duplicate the existing score.
+
+    Returns ``{"status": "skipped"}`` when Langfuse is not configured so that
+    non-instrumented deployments don't surface errors to users.
+    """
+    client_ip = _get_client_ip(request)
+    if client_ip is not None and not await consume_rate_limit(client_ip):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+    # Verify the trace_id belongs to the calling visitor before scoring.
+    # When persistence is disabled we cannot validate, so we allow the request
+    # through — trace_ids are unguessable UUIDs from Langfuse in that case.
+    repo = get_chat_history_repository()
+    if repo is not None:
+        owned = await repo.trace_id_owned_by_visitor(
+            trace_id=payload.trace_id,
+            visitor_id=payload.visitor_id,
+        )
+        if not owned:
+            raise HTTPException(
+                status_code=403,
+                detail="trace_id does not belong to this visitor",
+            )
+
+    if not is_langfuse_initialized():
+        return {"status": "skipped"}
+
+    safe_trace_id = payload.trace_id.replace("\n", "\\n").replace("\r", "\\r")
+    # Scope score_id per visitor so different visitors cannot overwrite each other's scores.
+    score_id = f"{payload.trace_id}-{payload.visitor_id}-user-feedback"
+    try:
+        get_client().create_score(
+            trace_id=payload.trace_id,
+            name="user-feedback",
+            value=float(payload.value),
+            data_type="BOOLEAN",
+            comment=payload.comment,
+            score_id=score_id,
+        )
+    except Exception as exc:
+        logger.exception(
+            "Failed to submit feedback score to Langfuse (trace_id=%s)",
+            safe_trace_id,
+        )
+        raise HTTPException(
+            status_code=500, detail="Failed to submit feedback"
+        ) from exc
+
+    return {"status": "ok"}
+
+
+async def _handle_chat_turn(  # noqa: C901, PLR0912
     websocket: WebSocket,
     agent: Agent,
     chat_message: ChatMessage,
@@ -320,7 +478,15 @@ async def _handle_chat_turn(
     """Stream one assistant reply, persisting turns when persistence is enabled."""
     repo = get_chat_history_repository()  # None when PERSISTENCE_DATABASE_URL is unset
     current_user_content = chat_message.messages[-1].content
-    transcript = [{"role": m.role, "content": m.content} for m in chat_message.messages]
+    transcript: list[dict[str, Any]] = []
+    for i, m in enumerate(chat_message.messages):
+        entry: dict[str, Any] = {"role": m.role, "content": m.content}
+        if i == len(chat_message.messages) - 1 and m.attachments:
+            entry["attachments"] = [
+                {"name": a.name, "mime_type": a.mime_type, "data": a.data}
+                for a in m.attachments
+            ]
+        transcript.append(entry)
 
     if repo is not None:
         # Check server-side whether a conversation record already exists for this
@@ -387,13 +553,26 @@ async def _handle_chat_turn(
             }
         )
 
-    await websocket.send_json(
-        {
-            "type": "end",
-            "content": full_response,
-            "session_id": session_id,
-        }
+    end_frame: dict[str, Any] = {
+        "type": "end",
+        "content": full_response,
+        "session_id": session_id,
+    }
+    trace_id = agent.last_trace_id
+    safe_trace_id = (
+        trace_id.replace("\n", "\\n").replace("\r", "\\r")
+        if trace_id is not None
+        else None
     )
+    logger.info(
+        "Streaming completed, trace_id=%s, langfuse_initialized=%s",
+        safe_trace_id,
+        is_langfuse_initialized(),
+    )
+    if trace_id is not None:
+        end_frame["trace_id"] = trace_id
+
+    await websocket.send_json(end_frame)
     logger.info("Streaming completed for session: %s", session_id)
 
     if repo is not None:
@@ -403,6 +582,7 @@ async def _handle_chat_turn(
                 session_id=session_id,
                 role="assistant",
                 content=full_response,
+                trace_id=trace_id,
             )
         except Exception:
             # The response has already been delivered to the client via the "end"
@@ -502,7 +682,8 @@ async def websocket_chat(websocket: WebSocket) -> None:
     {
         "type": "token" | "end" | "error",
         "content": "chunk of text" | null,
-        "session_id": "session-id"
+        "session_id": "session-id",
+        "trace_id": "langfuse-trace-id"  # end frames only, omitted when Langfuse is disabled
     }
     """
     await websocket.accept()

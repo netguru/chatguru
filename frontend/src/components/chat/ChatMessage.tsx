@@ -10,6 +10,7 @@ import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
+import { useFeedback } from "../../hooks/useFeedback";
 import { useAppStore } from "../../store/appStore";
 import type { ChatMessage as ChatMessageType } from "../../types/chat";
 import { injectCitationLinks } from "../../utils/citationLinks";
@@ -29,6 +30,8 @@ export function ChatMessage({ message }: Props) {
   const { copied, copy } = useCopyToClipboard();
   const openSourcesPanel = useAppStore((s) => s.openSourcesPanel);
   const [thumbsDownOpen, setThumbsDownOpen] = useState(false);
+  const [feedbackGiven, setFeedbackGiven] = useState<0 | 1 | null>(null);
+  const { submitFeedback, isSubmitting } = useFeedback();
 
   return (
     <>
@@ -96,17 +99,35 @@ export function ChatMessage({ message }: Props) {
                   {message.sources.length} sources
                 </Button>
               )}
-              <div className="ms-auto">
-                <IconButton variant="subtle" aria-label="Thumb up" size="xs">
-                  <ThumbsUpIcon weight="bold" />
+              <div className="ms-auto flex items-center gap-1">
+                <IconButton
+                  variant="subtle"
+                  aria-label="Thumb up"
+                  size="xs"
+                  disabled={!message.traceId || isSubmitting || feedbackGiven !== null}
+                  onClick={() => {
+                    if (message.traceId) {
+                      void submitFeedback(message.traceId, 1);
+                      setFeedbackGiven(1);
+                    }
+                  }}
+                >
+                  <ThumbsUpIcon
+                    weight={feedbackGiven === 1 ? "fill" : "bold"}
+                    className={feedbackGiven === 1 ? "text-text-interactive" : undefined}
+                  />
                 </IconButton>
                 <IconButton
                   variant="subtle"
                   aria-label="Thumb down"
                   size="xs"
+                  disabled={!message.traceId || feedbackGiven !== null}
                   onClick={() => setThumbsDownOpen(true)}
                 >
-                  <ThumbsDownIcon weight="bold" />
+                  <ThumbsDownIcon
+                    weight={feedbackGiven === 0 ? "fill" : "bold"}
+                    className={feedbackGiven === 0 ? "text-semantic-error-strong" : undefined}
+                  />
                 </IconButton>
               </div>
             </div>
@@ -114,7 +135,12 @@ export function ChatMessage({ message }: Props) {
         </div>
       </div>
 
-      <ThumbsDownModal open={thumbsDownOpen} onOpenChange={setThumbsDownOpen} />
+      <ThumbsDownModal
+        open={thumbsDownOpen}
+        onOpenChange={setThumbsDownOpen}
+        traceId={message.traceId}
+        onSent={() => setFeedbackGiven(0)}
+      />
     </>
   );
 }
