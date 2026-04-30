@@ -1,13 +1,19 @@
 """Agent component tests."""
 
 from collections.abc import AsyncIterator
+from typing import Any
 from unittest.mock import MagicMock, patch, AsyncMock
 
+import httpx
 import pytest
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessageChunk
 
-from src.agent.service import Agent
+from src.agent.service import (
+    CATALOG_UNAVAILABLE_MARKER,
+    CATALOG_UNAVAILABLE_TOOL_MESSAGE,
+    Agent,
+)
 
 
 def test_create_agent() -> None:
@@ -158,6 +164,82 @@ async def test_agent_with_tool_call() -> None:
         mock_db.search.assert_called_once()
         # Verify we got multiple iterations (initial + after tool call)
         assert call_count["count"] == 2
+
+
+class TestSearchProductsToolErrorHandling:
+    """Tests for the resilience of the search_products tool.
+
+    These tests verify that when the vector database is not connected
+    (or fails at runtime) the tool returns the CATALOG_UNAVAILABLE
+    sentinel instead of removing itself or returning a generic error.
+    Removing the tool entirely caused the LLM to hallucinate the tool
+    call as plain text and invent products from prior knowledge.
+    """
+
+    def _build_agent(self, db: Any) -> Agent:
+        """Build an Agent with a stubbed LLM and the given vector DB."""
+        with patch("src.agent.service._build_chat_llm") as mock_build:
+            mock_instance = GenericFakeChatModel(messages=iter([]))
+            object.__setattr__(mock_instance, "bind_tools", lambda tools: mock_instance)
+            mock_build.return_value = mock_instance
+            return Agent(vector_database=db)
+
+    def test_tool_is_registered_when_db_is_none(self) -> None:
+        """search_products MUST be registered even when DB is unavailable.
+
+        Otherwise the LLM has no function-calling surface and falls back
+        to emitting hallucinated tool-call JSON as plain assistant text.
+        """
+        agent = self._build_agent(None)
+
+        assert len(agent.tools) == 1
+        assert agent.tools[0].name == "search_products"
+        assert "search_products" in agent.tool_registry
+
+    @pytest.mark.asyncio
+    async def test_tool_returns_marker_when_db_is_none(self) -> None:
+        """Invoking the tool with no DB returns the catalog-unavailable sentinel."""
+        agent = self._build_agent(None)
+
+        result = await agent.tool_registry["search_products"].ainvoke(
+            {"query": "pants"}
+        )
+
+        assert isinstance(result, str)
+        assert CATALOG_UNAVAILABLE_MARKER in result
+        assert result == CATALOG_UNAVAILABLE_TOOL_MESSAGE
+
+    @pytest.mark.asyncio
+    async def test_tool_returns_marker_on_connection_error(self) -> None:
+        """A runtime DB connection error must surface as the same sentinel.
+
+        This guarantees consistent prompt-side handling whether the DB
+        is unreachable at startup or fails mid-conversation.
+        """
+        mock_db = MagicMock()
+        mock_db.search = AsyncMock(side_effect=httpx.ConnectError("connection refused"))
+        agent = self._build_agent(mock_db)
+
+        result = await agent.tool_registry["search_products"].ainvoke(
+            {"query": "pants"}
+        )
+
+        assert CATALOG_UNAVAILABLE_MARKER in result
+        mock_db.search.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_tool_returns_no_match_message_when_db_returns_empty(self) -> None:
+        """Empty results are NOT an outage — must use the regular no-match copy."""
+        mock_db = MagicMock()
+        mock_db.search = AsyncMock(return_value=[])
+        agent = self._build_agent(mock_db)
+
+        result = await agent.tool_registry["search_products"].ainvoke(
+            {"query": "purple hats"}
+        )
+
+        assert CATALOG_UNAVAILABLE_MARKER not in result
+        assert "No products found" in result
 
 
 class TestExtractProductQuery:

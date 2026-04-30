@@ -56,6 +56,18 @@ logger = get_logger("agent.service")
 # Maximum number of tool-calling iterations to prevent infinite loops
 MAX_TOOL_ITERATIONS = 10
 
+# Sentinel marker the LLM uses to recognize that the product catalog is
+# unreachable (DB not connected, HTTP error, etc.). The system prompt
+# instructs the LLM how to respond when it sees this marker so the model
+# does not silently fall back to inventing products from prior knowledge.
+CATALOG_UNAVAILABLE_MARKER = "[CATALOG_UNAVAILABLE]"
+CATALOG_UNAVAILABLE_TOOL_MESSAGE = (
+    f"{CATALOG_UNAVAILABLE_MARKER} The product catalog service is currently "
+    "unreachable. Do NOT invent or recall products from prior knowledge. "
+    "Tell the user the catalog is temporarily unavailable and ask them to "
+    "try again shortly."
+)
+
 # Langfuse initialization state
 _langfuse_initialized = False
 
@@ -172,14 +184,19 @@ class Agent:
 
         llm = _build_chat_llm()
 
-        # Create tools based on available backends
-        self.tools: list[BaseTool] = []
-
+        # Always register search_products. When the database is unavailable
+        # the tool returns an explicit error sentinel instead of being
+        # removed entirely — otherwise the LLM tends to hallucinate the tool
+        # call as plain text and invent products from prior knowledge
+        # (see CATALOG_UNAVAILABLE_TOOL_MESSAGE / system prompt scenario D).
+        self.tools: list[BaseTool] = [Agent._create_rag_tool(vector_database)]
         if vector_database is not None:
-            self.tools.append(Agent._create_rag_tool(vector_database))
             logger.info("Agent initialized with RAG tool")
         else:
-            logger.info("Agent initialized without RAG tool")
+            logger.warning(
+                "Agent initialized with RAG tool stub (vector database "
+                "unavailable — search_products will return an error)"
+            )
 
         self.llm = llm.bind_tools(self.tools)
         self.tool_registry: dict[str, BaseTool] = {
@@ -187,15 +204,22 @@ class Agent:
         }
 
     @staticmethod
-    def _create_rag_tool(db: VectorDatabase) -> BaseTool:
+    def _create_rag_tool(db: VectorDatabase | None) -> BaseTool:
         """
-        Create RAG tool that searches via sqlite-vec database service.
+        Create the RAG search tool bound to the given vector database.
+
+        The tool is registered unconditionally so the LLM has a consistent
+        function-calling surface. When ``db`` is ``None`` (database not
+        configured / not reachable at connection time) or when a runtime call
+        fails (HTTP error, timeout, etc.), the tool returns
+        :data:`CATALOG_UNAVAILABLE_TOOL_MESSAGE`. The system prompt teaches
+        the model how to surface this to the user without hallucinating.
 
         Args:
-            db: The VectorDatabase instance (calls sqlite-vec service via HTTP)
+            db: The VectorDatabase instance, or ``None`` when unavailable.
 
         Returns:
-            LangChain tool for semantic search
+            LangChain tool for semantic search.
         """
 
         @tool
@@ -214,23 +238,32 @@ class Agent:
             Returns:
                 Formatted product information including prices, colors, sizes, and details.
                 If no products found, returns a message indicating no matches.
+                If the catalog service is unreachable, returns the
+                CATALOG_UNAVAILABLE sentinel so the LLM can surface a proper
+                error message rather than inventing products.
             """
+            if db is None:
+                logger.warning(
+                    "search_products invoked but no vector database is "
+                    "available — returning CATALOG_UNAVAILABLE sentinel"
+                )
+                return CATALOG_UNAVAILABLE_TOOL_MESSAGE
+
             try:
                 search_query = Agent._extract_product_query(query)
                 logger.info("RAG searching: '%s' (from: '%s')", search_query, query)
 
                 products = await db.search(query=search_query, limit=10)
+            except Exception:
+                logger.exception("RAG search failed — catalog service unreachable")
+                return CATALOG_UNAVAILABLE_TOOL_MESSAGE
 
-                if not products:
-                    logger.info("No products found for query")
-                    return "No products found matching that description in our current catalog."
+            if not products:
+                logger.info("No products found for query")
+                return "No products found matching that description in our current catalog."
 
-                logger.info("RAG retrieved %d products", len(products))
-                return str(db.format_products(products))
-
-            except Exception as e:
-                logger.exception("RAG search failed")
-                return f"Error searching products: {e}"
+            logger.info("RAG retrieved %d products", len(products))
+            return str(db.format_products(products))
 
         return search_products
 
