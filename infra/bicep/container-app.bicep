@@ -302,7 +302,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               value: 'mongodb'
             }
             {
-              name: 'VECTOR_DB_MONGODB_URL'
+              name: 'VECTOR_DB_MONGODB_API_URL'
               value: 'http://mongo-vector-db:8002'
             }
             {
