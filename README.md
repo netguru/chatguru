@@ -1,4 +1,5 @@
 <div align="center">
+  <img src="frontend/public/branding/chatguru-logotype.svg" alt="chatguru" width="320" />
   <h1>chatguru AI Agent</h1>
 </div>
 

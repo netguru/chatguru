@@ -377,7 +377,9 @@ def test_websocket_rate_limit_allowed_continues_to_stream(
         patch("api.routes.chat.Agent") as mock_agent_class,
         patch("api.routes.chat.consume_rate_limit", new=AsyncMock(return_value=True)),
     ):
-        mock_agent_class.return_value = MagicMock(astream=_mock_astream_chunks(chunks))
+        mock_agent_class.return_value = MagicMock(
+            astream=_mock_astream_chunks(chunks), last_trace_id=None
+        )
 
         with async_app.websocket_connect("/ws") as ws:
             ws.send_json(
@@ -412,7 +414,9 @@ def test_websocket_rate_limit_skipped_when_ip_unknown(async_app: TestClient) -> 
         patch("api.routes.chat.consume_rate_limit", consume_mock),
         patch("api.routes.chat._get_client_ip", return_value=None),
     ):
-        mock_agent_class.return_value = MagicMock(astream=_mock_astream_chunks(chunks))
+        mock_agent_class.return_value = MagicMock(
+            astream=_mock_astream_chunks(chunks), last_trace_id=None
+        )
 
         with async_app.websocket_connect("/ws") as ws:
             ws.send_json(

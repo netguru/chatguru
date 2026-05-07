@@ -93,6 +93,9 @@ ignore = [
 "alembic/**/*.py" = ["INP001", "TCH002"]
 "src/**/alembic/**/*.py" = ["INP001", "TCH002"]
 
+[tool.ruff.lint.pylint]
+max-args = 6
+
 [tool.ruff.lint.isort]
 # Treat flat modules under `src/` as first-party for import sorting
 known-first-party = ["api", "agent", "rag", "config", "product_db", "persistence", "title_generation", "document_rag"]

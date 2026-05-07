@@ -1,7 +1,7 @@
 import json
 import re
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from langchain_core.messages import (
     AIMessage,
@@ -14,19 +14,30 @@ from langchain_core.messages import (
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, ToolException, tool
 from langchain_openai import AzureChatOpenAI, ChatOpenAI
-from langfuse import Langfuse, get_client, propagate_attributes
-from langfuse.langchain import CallbackHandler as LangfuseCallbackHandler
 from pydantic import BaseModel, Field
 
 from agent.prompt import SYSTEM_PROMPT
-from config import get_langfuse_settings, get_llm_settings, get_logger
+from config import get_llm_settings, get_logger
 from document_rag.repository import DocumentRagRepository
+from tracing import (
+    flush_langfuse_async,
+    get_langfuse_handler,
+    init_langfuse,
+    propagate_attributes,
+)
 from vector_db import VectorDatabase
+
+if TYPE_CHECKING:
+    from langfuse.langchain import CallbackHandler as LangfuseCallbackHandler
 
 
 def _build_chat_llm() -> ChatOpenAI | AzureChatOpenAI:
     """Build a ChatOpenAI client pointed at OPENAI_ENDPOINT."""
     settings = get_llm_settings()
+    extra_kwargs: dict[str, Any] = {}
+    if settings.reasoning_effort:
+        extra_kwargs["reasoning_effort"] = settings.reasoning_effort
+
     compat_base = settings.openai_base_url.strip()
     if compat_base:
         return ChatOpenAI(
@@ -36,6 +47,7 @@ def _build_chat_llm() -> ChatOpenAI | AzureChatOpenAI:
             default_headers={"api-key": settings.api_key},
             streaming=True,
             temperature=settings.temperature,
+            **extra_kwargs,
         )
     return AzureChatOpenAI(
         azure_deployment=settings.deployment_name,
@@ -45,6 +57,7 @@ def _build_chat_llm() -> ChatOpenAI | AzureChatOpenAI:
         default_headers={"api-key": settings.api_key},
         streaming=True,
         temperature=settings.temperature,
+        **extra_kwargs,
     )
 
 
@@ -52,9 +65,6 @@ logger = get_logger("agent.service")
 
 # Maximum number of tool-calling iterations to prevent infinite loops
 MAX_TOOL_ITERATIONS = 10
-
-# Langfuse initialization state
-_langfuse_initialized = False
 
 
 class StructuredSource(BaseModel):
@@ -72,56 +82,6 @@ class GroundedResponse(BaseModel):
         default_factory=list,
         description="Only sources directly used to support the answer",
     )
-
-
-def _init_langfuse() -> bool:
-    """
-    Initialize Langfuse client if enabled and configured.
-
-    Uses the singleton pattern - Langfuse client is initialized once at startup.
-
-    Returns:
-        True if Langfuse was successfully initialized, False otherwise
-    """
-    global _langfuse_initialized  # noqa: PLW0603
-    if _langfuse_initialized:
-        return True
-
-    settings = get_langfuse_settings()
-    if settings.enabled and settings.public_key and settings.secret_key:
-        try:
-            Langfuse(
-                public_key=settings.public_key,
-                secret_key=settings.secret_key,
-                host=settings.host,
-            )
-            _langfuse_initialized = True
-            logger.info("Langfuse tracing initialized successfully")
-        except Exception:
-            logger.exception("Failed to initialize Langfuse")
-            return False
-    else:
-        logger.info("Langfuse tracing disabled or not configured")
-    return _langfuse_initialized
-
-
-def _get_langfuse_handler() -> LangfuseCallbackHandler | None:
-    """
-    Get a Langfuse callback handler for tracing if available.
-
-    Returns a new handler instance only when Langfuse has been successfully
-    initialized; otherwise returns None.
-
-    Note: In Langfuse v3, session_id and user_id are passed via config metadata,
-    not through the CallbackHandler constructor.
-
-    Returns:
-        LangfuseCallbackHandler instance if Langfuse is initialized, None otherwise
-    """
-    if not _langfuse_initialized:
-        return None
-
-    return LangfuseCallbackHandler()
 
 
 def _convert_history_to_messages(history: list[dict[str, str]]) -> list[BaseMessage]:
@@ -227,8 +187,8 @@ class Agent:
         Args:
             vector_database: VectorDatabase for RAG search (calls sqlite-vec service)
         """
-        # Initialize Langfuse tracing (singleton)
-        _init_langfuse()
+        # Initialize Langfuse tracing (idempotent; also called at app startup)
+        init_langfuse()
 
         llm = _build_chat_llm()
 
@@ -250,6 +210,7 @@ class Agent:
             tool.name: tool for tool in self.tools
         }
         self._last_used_sources: list[dict[str, Any]] = []
+        self._last_langfuse_handler: LangfuseCallbackHandler | None = None
 
     @staticmethod
     def _create_rag_tool(db: VectorDatabase) -> BaseTool:
@@ -385,14 +346,29 @@ class Agent:
         messages.extend(_convert_history_to_messages(transcript))
         return messages
 
-    @staticmethod
-    def _build_config() -> RunnableConfig:
-        """Build the LLM config with Langfuse callback if available."""
+    def _build_config(self) -> RunnableConfig:
+        """Build the LLM config with Langfuse callback if available.
+
+        Stores the callback handler instance on ``self._last_langfuse_handler``
+        so that ``last_trace_id`` can be read after the agentic loop completes.
+        """
         config: RunnableConfig = {}
-        langfuse_handler = _get_langfuse_handler()
-        if langfuse_handler:
-            config["callbacks"] = [langfuse_handler]
+        handler = get_langfuse_handler()
+        self._last_langfuse_handler = handler
+        if handler:
+            config["callbacks"] = [handler]
         return config
+
+    @property
+    def last_trace_id(self) -> str | None:
+        """Return the Langfuse trace ID from the most recent ``astream()`` call.
+
+        Returns ``None`` when Langfuse is disabled, not yet initialised, or when
+        the handler has not produced a trace ID (e.g. the stream was never consumed).
+        """
+        if self._last_langfuse_handler is None:
+            return None
+        return self._last_langfuse_handler.last_trace_id
 
     async def _process_tool_calls(
         self,
@@ -441,23 +417,20 @@ class Agent:
         Yields:
             Response chunks as strings (including tool call notifications)
         """
+        self._last_langfuse_handler = None
         lc_messages = Agent._build_messages_from_transcript(messages)
-        config = Agent._build_config()
+        config = self._build_config()
         self._last_used_sources = []
 
         # Propagate session_id and user_id to all Langfuse traces (when provided)
         with propagate_attributes(session_id=session_id, user_id=visitor_id):
-            async for chunk in self._run_agentic_loop(
-                lc_messages, config, self._last_used_sources
-            ):
-                yield chunk
-
-            # Flush Langfuse events at the end of the request
-            if _langfuse_initialized:
-                try:
-                    get_client().flush()
-                except Exception:
-                    logger.exception("Failed to flush Langfuse events")
+            try:
+                async for chunk in self._run_agentic_loop(
+                    lc_messages, config, self._last_used_sources
+                ):
+                    yield chunk
+            finally:
+                await flush_langfuse_async()
 
     async def _run_agentic_loop(
         self,
@@ -525,42 +498,38 @@ class Agent:
     ) -> GroundedResponse:
         """Run tool-calling loop and return final structured response in one pass."""
         lc_messages = Agent._build_messages_from_transcript(messages)
-        config = Agent._build_config()
+        config = self._build_config()
 
         with propagate_attributes(session_id=session_id, user_id=visitor_id):
-            for iteration in range(MAX_TOOL_ITERATIONS):
-                response = await self.llm.ainvoke(lc_messages, config=config)
-                ai_message = response if isinstance(response, AIMessage) else None
+            try:
+                for iteration in range(MAX_TOOL_ITERATIONS):
+                    response = await self.llm.ainvoke(lc_messages, config=config)
+                    ai_message = response if isinstance(response, AIMessage) else None
 
-                tool_calls = ai_message.tool_calls if ai_message else []
-                if not tool_calls:
-                    parsed = Agent._parse_grounded_response(
-                        ai_message.content if ai_message else response
+                    tool_calls = ai_message.tool_calls if ai_message else []
+                    if not tool_calls:
+                        parsed = Agent._parse_grounded_response(
+                            ai_message.content if ai_message else response
+                        )
+                        logger.info(
+                            "Structured loop completed after %d iterations",
+                            iteration + 1,
+                        )
+                        return parsed
+
+                    if ai_message is None:
+                        return GroundedResponse(response=str(response), sources=[])
+
+                    await self._process_tool_calls(
+                        ai_message, lc_messages, self._last_used_sources
                     )
-                    if _langfuse_initialized:
-                        try:
-                            get_client().flush()
-                        except Exception:
-                            logger.exception("Failed to flush Langfuse events")
-                    logger.info(
-                        "Structured loop completed after %d iterations", iteration + 1
-                    )
-                    return parsed
 
-                if ai_message is None:
-                    return GroundedResponse(response=str(response), sources=[])
-
-                await self._process_tool_calls(
-                    ai_message, lc_messages, self._last_used_sources
+                logger.warning(
+                    "Reached maximum tool iterations (%d)", MAX_TOOL_ITERATIONS
                 )
-
-            logger.warning("Reached maximum tool iterations (%d)", MAX_TOOL_ITERATIONS)
-            if _langfuse_initialized:
-                try:
-                    get_client().flush()
-                except Exception:
-                    logger.exception("Failed to flush Langfuse events")
-            return GroundedResponse(
-                response="I reached the maximum tool-call limit. Please rephrase your question.",
-                sources=[],
-            )
+                return GroundedResponse(
+                    response="I reached the maximum tool-call limit. Please rephrase your question.",
+                    sources=[],
+                )
+            finally:
+                await flush_langfuse_async()

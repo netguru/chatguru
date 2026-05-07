@@ -1,4 +1,5 @@
 import { useState, useTransition } from "react";
+import { useFeedback } from "../../hooks/useFeedback";
 import { Button } from "../ui/button";
 import { Chip, ChipLabel } from "../ui/chip";
 import { Modal, ModalBody, ModalContent, ModalFooter, ModalHeader, ModalTitle } from "../ui/modal";
@@ -16,12 +17,15 @@ const CHIPS = [
 interface ThumbsDownModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  traceId?: string;
+  onSent?: () => void;
 }
 
-export function ThumbsDownModal({ open, onOpenChange }: ThumbsDownModalProps) {
+export function ThumbsDownModal({ open, onOpenChange, traceId, onSent }: ThumbsDownModalProps) {
   const [selectedChip, setSelectedChip] = useState<string | null>(null);
   const [text, setText] = useState("");
   const [isPending, startTransition] = useTransition();
+  const { submitFeedback } = useFeedback();
 
   function reset() {
     setSelectedChip(null);
@@ -40,10 +44,14 @@ export function ThumbsDownModal({ open, onOpenChange }: ThumbsDownModalProps) {
 
   function handleSend() {
     startTransition(async () => {
-      // TODO: call API endpoint
-      console.log({ text });
+      if (traceId) {
+        await submitFeedback(traceId, 0, text || undefined);
+      } else {
+        console.warn("[ThumbsDownModal] no traceId — feedback not submitted");
+      }
       onOpenChange(false);
       reset();
+      onSent?.();
     });
   }
 

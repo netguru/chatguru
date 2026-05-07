@@ -195,6 +195,7 @@ class SqlAlchemyChatHistoryRepository(ChatHistoryRepository):
         session_id: str,
         role: str,
         content: str,
+        trace_id: str | None = None,
     ) -> None:
         validate_chat_message_role(role)
         message_id = str(uuid.uuid4())
@@ -208,6 +209,7 @@ class SqlAlchemyChatHistoryRepository(ChatHistoryRepository):
                     role=role,
                     content=content,
                     created_at=created_at,
+                    trace_id=trace_id,
                 )
             )
 
@@ -238,9 +240,30 @@ class SqlAlchemyChatHistoryRepository(ChatHistoryRepository):
                 role=str(r["role"]),
                 content=str(r["content"]),
                 created_at=_as_utc_datetime(r["created_at"]),
+                trace_id=str(r["trace_id"]) if r["trace_id"] is not None else None,
             )
             for r in rows
         ]
+
+    async def trace_id_owned_by_visitor(
+        self,
+        *,
+        trace_id: str,
+        visitor_id: str,
+    ) -> bool:
+        """Return True if an assistant message with this trace_id belongs to visitor_id."""
+        async with self._engine.connect() as conn:
+            result = await conn.execute(
+                select(chat_messages.c.id)
+                .where(
+                    and_(
+                        chat_messages.c.trace_id == trace_id,
+                        chat_messages.c.visitor_id == visitor_id,
+                    )
+                )
+                .limit(1)
+            )
+            return result.first() is not None
 
     async def close(self) -> None:
         await self._engine.dispose()

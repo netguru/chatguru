@@ -15,6 +15,7 @@ from document_rag import init_document_rag, shutdown_document_rag
 from persistence import init_persistence, is_persistence_enabled, shutdown_persistence
 from rate_limiting import init_rate_limiting, shutdown_rate_limiting
 from title_generation import init_title_generation, shutdown_title_generation
+from tracing import init_langfuse
 
 logger = get_logger(__name__)
 app_settings = get_app_settings()
@@ -40,6 +41,7 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
         bool(llm.api_key),
     )
 
+    init_langfuse()
     await init_persistence()
     await init_document_rag()
     await init_title_generation()

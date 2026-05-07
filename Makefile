@@ -9,7 +9,7 @@
 #   2. make env-setup      # Copy environment template
 #   3. make dev            # Start backend development server
 
-.PHONY: help install setup test coverage rag-eval ragas-llm-eval rag_dashboard dev run docker-build docker-run docker-run-detached docker-stop docker-down docker-logs docker-logs-backend docker-clean pre-commit-install pre-commit promptfoo-eval promptfoo-view promptfoo-test env-setup version clean migrate db-downgrade db-revision ingest-docs
+.PHONY: help install setup test coverage rag-eval ragas-llm-eval rag_dashboard vector-db dev run docker-build docker-run docker-run-detached docker-stop docker-down docker-logs docker-logs-backend docker-clean pre-commit-install pre-commit promptfoo-eval promptfoo-view promptfoo-test env-setup version clean migrate db-downgrade db-revision ingest-docs
 
 # ============================================================================
 # Default Target
@@ -57,6 +57,13 @@ env-setup: ## Copy environment template from env.example to .env
 # Development Commands
 # ============================================================================
 # Commands for running the application in development and production modes.
+
+vector-db: ## Run the SQLite vector database service locally on port 8001
+	@echo "🗄️  Starting SQLite vector database service on port 8001..."
+	@mkdir -p data
+	VECTOR_SQLITE_DB_PATH=$(CURDIR)/data/chatguru.db \
+	VECTOR_SQLITE_PRODUCTS_PATH=$(CURDIR)/src/rag/products.json \
+	uv run --directory src uvicorn vector_db.api:app --host 0.0.0.0 --port 8001
 
 dev: ## Run the backend development server with auto-reload
 	@echo "🚀 Starting backend development server with auto-reload..."

@@ -57,7 +57,7 @@ interface AppState {
   addUserMessage: (msg: ChatMessage) => void;
   addAssistantPlaceholder: (msg: ChatMessage) => void;
   appendTokenToLastMessage: (token: string) => void;
-  finalizeLastMessage: (content: string, sources: Source[] | null) => void;
+  finalizeLastMessage: (content: string, sources: Source[] | null, traceId?: string | null) => void;
   markLastMessageError: (content: string) => void;
   addToHistory: (entry: HistoryMessage) => void;
 
@@ -148,7 +148,7 @@ export const useAppStore = create<AppState>((set) => ({
       }),
     })),
 
-  finalizeLastMessage: (content, sources) =>
+  finalizeLastMessage: (content, sources, traceId) =>
     set((state) => ({
       sessions: state.sessions.map((s) => {
         if (s.id !== state.currentSessionId) return s;
@@ -160,6 +160,7 @@ export const useAppStore = create<AppState>((set) => ({
           content,
           sources: sources ?? undefined,
           isStreaming: false,
+          ...(traceId != null ? { traceId } : {}),
         };
         return { ...s, messages: msgs };
       }),
@@ -224,6 +225,7 @@ export const useAppStore = create<AppState>((set) => ({
           id: crypto.randomUUID(),
           role: entry.role,
           content: entry.content,
+          ...(entry.traceId ? { traceId: entry.traceId } : {}),
         }));
         return {
           ...s,

@@ -94,8 +94,7 @@ export function useChat() {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const host = import.meta.env.VITE_WS_HOST ?? window.location.host;
-    const ws = new WebSocket(`${protocol}//${host}${WS_PATH}`);
+    const ws = new WebSocket(`${protocol}//${window.location.host}${WS_PATH}`);
     wsRef.current = ws;
 
     ws.onopen = () => setConnected(true);
@@ -131,7 +130,7 @@ export function useChat() {
       } else if (data.type === "end") {
         const endEvent = data as WsEndEvent;
         setStreaming(false);
-        finalizeLastMessage(endEvent.content, mapBackendSources(endEvent.sources));
+        finalizeLastMessage(endEvent.content, mapBackendSources(endEvent.sources), endEvent.trace_id ?? null);
         addToHistory({ role: "assistant", content: endEvent.content });
       } else if (data.type === "error") {
         const errorEvent = data as WsErrorEvent;

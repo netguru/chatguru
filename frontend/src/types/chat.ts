@@ -5,6 +5,7 @@ export type MessageRole = "user" | "assistant" | "system";
 export interface HistoryMessage {
   role: MessageRole;
   content: string;
+  traceId?: string;
 }
 
 export interface Source {
@@ -20,6 +21,7 @@ export interface ChatMessage {
   content: string;
   sources?: Source[];
   isStreaming?: boolean;
+  traceId?: string;
 }
 
 // Outbound WebSocket message — matches backend ChatMessage schema.
@@ -59,6 +61,7 @@ export interface BackendSource {
 export interface WsEndEvent extends WsBaseEvent {
   type: "end";
   content: string;
+  trace_id?: string;
   sources?: BackendSource[] | null;
 }
 

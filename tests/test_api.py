@@ -54,6 +54,7 @@ def test_websocket_chat_success(async_app: TestClient) -> None:
 
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
+        mock_agent_instance.last_trace_id = None
         mock_agent_instance.astream = _mock_astream(chunks)
         mock_agent_class.return_value = mock_agent_instance
 
@@ -90,6 +91,7 @@ def test_websocket_chat_without_session_id(async_app: TestClient) -> None:
 
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
+        mock_agent_instance.last_trace_id = None
         mock_agent_instance.astream = _mock_astream(["Hello!"])
         mock_agent_class.return_value = mock_agent_instance
 
@@ -116,6 +118,7 @@ def test_websocket_chat_with_empty_string_session_id(async_app: TestClient) -> N
 
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
+        mock_agent_instance.last_trace_id = None
         mock_agent_instance.astream = _mock_astream(["Hello!"])
         mock_agent_class.return_value = mock_agent_instance
 
@@ -231,6 +234,7 @@ def test_websocket_streaming_multiple_chunks(async_app: TestClient) -> None:
 
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
+        mock_agent_instance.last_trace_id = None
         mock_agent_instance.astream = _mock_astream(chunks)
         mock_agent_class.return_value = mock_agent_instance
 
@@ -301,6 +305,7 @@ def test_websocket_chat_with_conversation_history(async_app: TestClient) -> None
 
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
+        mock_agent_instance.last_trace_id = None
 
         async def astream_gen(
             messages: list[dict[str, str]],
@@ -374,6 +379,7 @@ def test_websocket_session_id_preserved_across_messages(async_app: TestClient) -
 
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
+        mock_agent_instance.last_trace_id = None
         mock_agent_instance.astream = _mock_astream(chunks)
         mock_agent_class.return_value = mock_agent_instance
 
@@ -419,6 +425,7 @@ def test_websocket_error_response_includes_session_id(async_app: TestClient) -> 
     """Test that error responses include session_id for client recovery."""
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
+        mock_agent_instance.last_trace_id = None
 
         async def astream_gen(
             messages: list[dict[str, str]],
@@ -472,6 +479,7 @@ def test_websocket_history_with_multiple_turns(async_app: TestClient) -> None:
 
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
+        mock_agent_instance.last_trace_id = None
 
         async def astream_gen(
             messages: list[dict[str, str]],
@@ -532,6 +540,7 @@ def test_websocket_missing_visitor_id_returns_error(async_app: TestClient) -> No
     """When persistence is enabled, omitting visitor_id returns an error message."""
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
+        mock_agent_instance.last_trace_id = None
         mock_agent_instance.astream = _mock_astream(["Hello!"])
         mock_agent_class.return_value = mock_agent_instance
 
@@ -729,6 +738,7 @@ def test_websocket_omitted_visitor_id_succeeds_without_persistence() -> None:
         patch("api.routes.chat.Agent") as mock_agent_class,
     ):
         mock_agent_instance = MagicMock()
+        mock_agent_instance.last_trace_id = None
         mock_agent_instance.astream = _mock_astream(["Hi!"])
         mock_agent_class.return_value = mock_agent_instance
 
@@ -788,3 +798,57 @@ def test_document_source_endpoint_blocks_path_traversal(async_app: TestClient) -
     response = async_app.get("/documents/../secrets.txt")
 
     assert response.status_code == 400
+
+
+def test_end_frame_includes_trace_id_when_langfuse_active(
+    async_app: TestClient,
+) -> None:
+    """The end frame carries trace_id when agent.last_trace_id is set."""
+    with patch("api.routes.chat.Agent") as mock_agent_class:
+        mock_agent_instance = MagicMock()
+        mock_agent_instance.last_trace_id = "trace-abc123"
+        mock_agent_instance.astream = _mock_astream(["Hi!"])
+        mock_agent_class.return_value = mock_agent_instance
+
+        with async_app.websocket_connect("/ws") as websocket:
+            websocket.send_json(
+                {
+                    "session_id": "s1",
+                    "visitor_id": "v1",
+                    "messages": [{"role": "user", "content": "Hello!"}],
+                }
+            )
+
+            while True:
+                data = websocket.receive_json()
+                if data["type"] == "end":
+                    assert data.get("trace_id") == "trace-abc123"
+                    break
+                elif data["type"] == "error":
+                    pytest.fail(f"Unexpected error: {data['content']}")
+
+
+def test_end_frame_omits_trace_id_when_langfuse_disabled(async_app: TestClient) -> None:
+    """The end frame omits trace_id entirely when agent.last_trace_id is None."""
+    with patch("api.routes.chat.Agent") as mock_agent_class:
+        mock_agent_instance = MagicMock()
+        mock_agent_instance.last_trace_id = None
+        mock_agent_instance.astream = _mock_astream(["Hi!"])
+        mock_agent_class.return_value = mock_agent_instance
+
+        with async_app.websocket_connect("/ws") as websocket:
+            websocket.send_json(
+                {
+                    "session_id": "s1",
+                    "visitor_id": "v1",
+                    "messages": [{"role": "user", "content": "Hello!"}],
+                }
+            )
+
+            while True:
+                data = websocket.receive_json()
+                if data["type"] == "end":
+                    assert "trace_id" not in data
+                    break
+                elif data["type"] == "error":
+                    pytest.fail(f"Unexpected error: {data['content']}")

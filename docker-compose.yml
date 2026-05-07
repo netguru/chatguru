@@ -72,6 +72,7 @@ services:
   # --------------------------------------------------------------------------
   mongodb:
     image: mongodb/mongodb-atlas-local:8.0
+    hostname: mongodb
     ports:
       - "27017:27017"
     volumes:
@@ -198,6 +199,7 @@ services:
 
     volumes:
       - rag-ingest-state:/app/rag_ingest_state
+      - chatguru-data:/data
 
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
@@ -278,21 +280,23 @@ services:
       - chatguru-network
 
   # --------------------------------------------------------------------------
-  # Frontend Service (React + Vite dev server)
+  # Frontend Service (React + nginx, production build)
   # --------------------------------------------------------------------------
   frontend:
     build:
       context: .
       dockerfile: docker/Dockerfile.frontend
     ports:
-      - "5173:5173"
-    environment:
-      - VITE_API_URL=http://localhost:8000
-      # Vite proxies /ws to this target inside the Docker network
-      - WS_PROXY_TARGET=http://chatguru-agent:8000
+      - "${FRONTEND_PORT:-80}:80"
     depends_on:
       - chatguru-agent
     restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "wget", "-qO-", "http://localhost/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
     networks:
       - chatguru-network
 
@@ -300,6 +304,8 @@ services:
 # Volumes
 # --------------------------------------------------------------------------
 volumes:
+  chatguru-data:
+    driver: local
   vector-db-data:
     driver: local
   mongodb-data:
