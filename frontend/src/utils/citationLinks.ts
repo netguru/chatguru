@@ -25,7 +25,7 @@ export function injectCitationLinks(content: string, sources: Source[]): string 
       fullUrl = s.url;
     }
     sourceUrls.push(fullUrl);
-    sourceTitles.push(s.file);
+    sourceTitles.push(s.file ?? "");
   }
 
   const citationRe =
@@ -38,8 +38,8 @@ export function injectCitationLinks(content: string, sources: Source[]): string 
     let u = sourceUrls[idx];
     const pageNum = pageInMatch
       ? parseInt(pageInMatch, 10)
-      : sources[idx].pages?.length > 0
-        ? sources[idx].pages[0]
+      : (sources[idx].pages?.length ?? 0) > 0
+        ? sources[idx].pages![0]
         : null;
 
     if (pageNum != null && pageNum > 0) u = `${u}#page=${pageNum}`;

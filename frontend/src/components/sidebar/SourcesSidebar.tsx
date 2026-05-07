@@ -72,7 +72,7 @@ export function SourcesSidebar() {
                       <span className="truncate">{source.file}</span>
                       {(source.pages?.length ?? 0) > 0 && (
                         <span className="text-t5 text-text-tertiary">
-                          p. {source.pages.join(", ")}
+                          p. {source.pages?.join(", ")}
                         </span>
                       )}
                     </div>

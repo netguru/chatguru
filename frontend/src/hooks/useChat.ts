@@ -1,23 +1,14 @@
 import { useCallback, useEffect, useRef } from "react";
 import { selectCurrentHistory, selectCurrentSession, useAppStore } from "../store/appStore";
 import type {
-  BackendSource,
   HistoryMessage,
-  Source,
   WsEndEvent,
   WsErrorEvent,
   WsEvent,
   WsOutboundMessage,
   WsTokenEvent,
 } from "../types/chat";
-
-function mapBackendSources(raw: BackendSource[] | null | undefined): Source[] | null {
-  if (!raw || raw.length === 0) return null;
-  return raw.map((s) => ({
-    file: s.source_uri ?? undefined,
-    pages: s.page != null ? [s.page] : [],
-  }));
-}
+import { mapBackendSources } from "../utils/sourceMapping";
 import { getOrCreateVisitorId } from "../utils/visitorId";
 
 // WebSocket path — matches backend @router.websocket("/ws") included without prefix.

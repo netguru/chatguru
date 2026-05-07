@@ -67,7 +67,7 @@ class ChatHistoryRepository(Protocol):
     # Messages
     # ------------------------------------------------------------------
 
-    async def append_message(
+    async def append_message(  # noqa: PLR0913
         self,
         *,
         visitor_id: str,
@@ -75,6 +75,7 @@ class ChatHistoryRepository(Protocol):
         role: str,
         content: str,
         trace_id: str | None = None,
+        sources: str | None = None,
     ) -> None:
         """Persist one message. Roles are typically ``user`` or ``assistant``."""
         ...

@@ -6,6 +6,7 @@ export interface HistoryMessage {
   role: MessageRole;
   content: string;
   traceId?: string;
+  sources?: Source[];
 }
 
 export interface Source {

@@ -396,7 +396,7 @@ async def get_history(
         str, Query(min_length=1, max_length=512, description="Visitor ID")
     ],
     session_id: Annotated[str, Query(description="Session ID")] = "default",
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     """Return persisted messages for a visitor+session pair, oldest first.
 
     Note: visitor_id is client-supplied and not authenticated. This endpoint
@@ -408,14 +408,16 @@ async def get_history(
         msg = "persistence router registered but repository is not initialised"
         raise RuntimeError(msg)
     messages = await repo.list_messages(visitor_id=visitor_id, session_id=session_id)
-    return [
-        {
-            "role": m.role,
-            "content": m.content,
-            **({"trace_id": m.trace_id} if m.trace_id is not None else {}),
-        }
-        for m in messages
-    ]
+    result = []
+    for m in messages:
+        entry: dict[str, Any] = {"role": m.role, "content": m.content}
+        if m.trace_id is not None:
+            entry["trace_id"] = m.trace_id
+        if m.sources is not None:
+            with contextlib.suppress(Exception):
+                entry["sources"] = json.loads(m.sources)
+        result.append(entry)
+    return result
 
 
 @persistence_router.post("/conversations/title")
@@ -625,6 +627,7 @@ async def _handle_chat_turn(
                 role="assistant",
                 content=resolved_answer,
                 trace_id=trace_id,
+                sources=json.dumps(sources) if sources else None,
             )
         except Exception:
             # The response has already been delivered to the client via the "end"
