@@ -5,6 +5,10 @@
 #      unless already ingested (sentinel at /app/rag_ingest_state/.ingested).
 #      Set DOCUMENT_RAG_INGEST_FULL_REPLACE=1 to force a full re-ingest.
 #
+# Binaries (alembic, python) are called directly from the virtualenv via PATH
+# (/app/.venv/bin is prepended in the Dockerfile ENV), so uv is not required
+# at runtime.
+#
 # The container exits non-zero on failure so the health-check never turns green.
 set -e
 
@@ -12,7 +16,7 @@ if [ -n "$PERSISTENCE_DATABASE_URL" ]; then
     case "$PERSISTENCE_DATABASE_URL" in
         sqlite+*|postgresql+*|mysql+*|mariadb+*|mssql+*|oracle+*|cockroachdb+*)
             echo "[entrypoint] SQLAlchemy URL detected — running database migrations..."
-            uv run alembic -c /app/src/persistence/sqlalchemy/alembic.ini upgrade head
+            alembic -c /app/src/persistence/sqlalchemy/alembic.ini upgrade head
             echo "[entrypoint] Migrations complete."
             ;;
         *)
@@ -28,7 +32,7 @@ if [ "$_rag_enabled" = "true" ] && [ -d /app/rag_data ] && [ -n "$(ls -A /app/ra
     if [ -n "${DOCUMENT_RAG_INGEST_FULL_REPLACE}" ] || [ ! -f "$_sentinel" ]; then
         echo "[entrypoint] DOCUMENT_RAG_ENABLED=true — ingesting documents from /app/rag_data ..."
         mkdir -p "$(dirname "$_sentinel")"
-        cd /app && uv run python -m document_rag.ingestion.cli \
+        cd /app && python -m document_rag.ingestion.cli \
             --source-dir /app/rag_data \
             ${DOCUMENT_RAG_INGEST_FULL_REPLACE:+--full-replace}
         touch "$_sentinel"
