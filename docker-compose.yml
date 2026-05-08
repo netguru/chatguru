@@ -152,7 +152,7 @@ services:
 
       # Vector Database Service
       - VECTOR_DB_TYPE=mongodb
-      - VECTOR_DB_MONGODB_URL=http://mongo-vector-db:8002
+      - VECTOR_DB_MONGODB_API_URL=http://mongo-vector-db:8002
 
       # Chat history persistence (optional).
       # Unset = disabled (stateless). Set to enable; migrations run automatically on startup.
