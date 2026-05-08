@@ -23,6 +23,7 @@ from tracing import (
     flush_langfuse_async,
     get_client,
     init_langfuse,
+    is_langfuse_initialized,
     propagate_attributes,
 )
 from vector_db import VectorDatabase
@@ -358,26 +359,32 @@ class Agent:
         # this same list) always starts a new turn with an empty source set.
         self._last_used_sources.clear()
 
-        langfuse = get_client()
-        with (
-            langfuse.start_as_current_observation(
-                as_type="span",
-                name="chat-response",
-            ),
-            propagate_attributes(
-                trace_name="chat-response",
-                session_id=session_id,
-                user_id=visitor_id,
-            ),
-        ):
-            handler = CallbackHandler()
-            self._last_langfuse_handler = handler
-            config: RunnableConfig = {"callbacks": [handler]}
-            try:
-                async for chunk in self._run_agentic_loop(lc_messages, config):
-                    yield chunk
-            finally:
-                await flush_langfuse_async()
+        config: RunnableConfig = {}
+
+        if is_langfuse_initialized():
+            langfuse = get_client()
+            with (
+                langfuse.start_as_current_observation(
+                    as_type="span",
+                    name="chat-response",
+                ),
+                propagate_attributes(
+                    trace_name="chat-response",
+                    session_id=session_id,
+                    user_id=visitor_id,
+                ),
+            ):
+                handler = CallbackHandler()
+                self._last_langfuse_handler = handler
+                config = {"callbacks": [handler]}
+                try:
+                    async for chunk in self._run_agentic_loop(lc_messages, config):
+                        yield chunk
+                finally:
+                    await flush_langfuse_async()
+        else:
+            async for chunk in self._run_agentic_loop(lc_messages, config):
+                yield chunk
 
     async def _run_agentic_loop(
         self,

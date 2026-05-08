@@ -58,10 +58,13 @@ export function injectCitationLinks(content: string, sources: Source[]): string 
   // strips uncited entries and renumbers from 1.
   const remap = new Map(citedNums.map((old, i) => [old, i + 1]));
 
-  // Renumber all [N…] occurrences in the content.
-  const renumbered = content.replace(/\[(\d+)([^\]]*)\]/g, (match, numStr, rest) => {
-    const newNum = remap.get(parseInt(numStr, 10));
-    return newNum != null ? `[${newNum}${rest}]` : match;
+  // Renumber citation markers using the strict pattern so markdown reference
+  // links ("[1]: …") and unrelated bracketed numbers are left untouched.
+  const renumbered = content.replace(CITATION_RE, (match, numStr) => {
+    const oldNum = parseInt(numStr, 10);
+    const newNum = remap.get(oldNum);
+    if (newNum == null) return match;
+    return match.replace(`[${numStr}`, `[${newNum}`);
   });
 
   // Build a compact sources array aligned with the new 1-based numbering.
