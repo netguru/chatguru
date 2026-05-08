@@ -422,10 +422,17 @@ def main() -> int:
         msg = "Ingestion repository not initialized"
         raise RuntimeError(msg)
 
+    if not chunks:
+        print(
+            "ERROR: No chunks were generated. "
+            "All files were skipped (empty or conversion failed).",
+            file=sys.stderr,
+        )
+        return 1
+
     changed = ingestion_repo.upsert_chunks(chunks)
-    embedding_dimensions = len(chunks[0].embedding) if chunks else 1536
-    if chunks:
-        ingestion_repo.ensure_ready(embedding_dimensions=embedding_dimensions)
+    embedding_dimensions = len(chunks[0].embedding)
+    ingestion_repo.ensure_ready(embedding_dimensions=embedding_dimensions)
 
     print(f"Upserted/updated chunks: {changed}")
     print("Done. Backend:", runtime_settings.backend)

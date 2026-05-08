@@ -66,6 +66,9 @@ def get_langfuse_handler() -> LangfuseCallbackHandler | None:
     """
     Return a new LangChain callback handler wired to the Langfuse client.
 
+    Must be called inside a ``propagate_attributes`` context manager so the
+    handler inherits the current trace context (trace ID, session ID, user ID).
+
     Returns None when Langfuse has not been initialised so callers can safely
     skip attaching callbacks without extra guards.
     """

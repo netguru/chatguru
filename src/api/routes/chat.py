@@ -518,7 +518,7 @@ async def submit_feedback(payload: FeedbackRequest, request: Request) -> dict[st
     return {"status": "ok"}
 
 
-async def _handle_chat_turn(
+async def _handle_chat_turn(  # noqa: C901, PLR0912
     websocket: WebSocket,
     agent: Agent,
     chat_message: ChatMessage,
@@ -588,13 +588,23 @@ async def _handle_chat_turn(
             )
             return
 
-    structured = await agent.arun_structured(
+    full_response = ""
+    async for chunk in agent.astream(
         transcript,
         session_id=session_id,
         visitor_id=visitor_id,
-    )
-    resolved_answer = structured.response
-    sources = [s.model_dump() for s in structured.sources]
+    ):
+        full_response += chunk
+        await websocket.send_json(
+            {
+                "type": "token",
+                "content": chunk,
+                "session_id": session_id,
+            }
+        )
+
+    resolved_answer = full_response
+    sources = agent.get_last_used_sources()
 
     end_frame: dict[str, Any] = {
         "type": "end",

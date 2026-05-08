@@ -55,6 +55,7 @@ def test_websocket_chat_success(async_app: TestClient) -> None:
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = None
+        mock_agent_instance.get_last_used_sources.return_value = []
         mock_agent_instance.astream = _mock_astream(chunks)
         mock_agent_class.return_value = mock_agent_instance
 
@@ -92,6 +93,7 @@ def test_websocket_chat_without_session_id(async_app: TestClient) -> None:
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = None
+        mock_agent_instance.get_last_used_sources.return_value = []
         mock_agent_instance.astream = _mock_astream(["Hello!"])
         mock_agent_class.return_value = mock_agent_instance
 
@@ -119,6 +121,7 @@ def test_websocket_chat_with_empty_string_session_id(async_app: TestClient) -> N
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = None
+        mock_agent_instance.get_last_used_sources.return_value = []
         mock_agent_instance.astream = _mock_astream(["Hello!"])
         mock_agent_class.return_value = mock_agent_instance
 
@@ -235,6 +238,7 @@ def test_websocket_streaming_multiple_chunks(async_app: TestClient) -> None:
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = None
+        mock_agent_instance.get_last_used_sources.return_value = []
         mock_agent_instance.astream = _mock_astream(chunks)
         mock_agent_class.return_value = mock_agent_instance
 
@@ -306,6 +310,7 @@ def test_websocket_chat_with_conversation_history(async_app: TestClient) -> None
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = None
+        mock_agent_instance.get_last_used_sources.return_value = []
 
         async def astream_gen(
             messages: list[dict[str, str]],
@@ -380,6 +385,7 @@ def test_websocket_session_id_preserved_across_messages(async_app: TestClient) -
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = None
+        mock_agent_instance.get_last_used_sources.return_value = []
         mock_agent_instance.astream = _mock_astream(chunks)
         mock_agent_class.return_value = mock_agent_instance
 
@@ -426,6 +432,7 @@ def test_websocket_error_response_includes_session_id(async_app: TestClient) -> 
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = None
+        mock_agent_instance.get_last_used_sources.return_value = []
 
         async def astream_gen(
             messages: list[dict[str, str]],
@@ -480,6 +487,7 @@ def test_websocket_history_with_multiple_turns(async_app: TestClient) -> None:
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = None
+        mock_agent_instance.get_last_used_sources.return_value = []
 
         async def astream_gen(
             messages: list[dict[str, str]],
@@ -541,6 +549,7 @@ def test_websocket_missing_visitor_id_returns_error(async_app: TestClient) -> No
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = None
+        mock_agent_instance.get_last_used_sources.return_value = []
         mock_agent_instance.astream = _mock_astream(["Hello!"])
         mock_agent_class.return_value = mock_agent_instance
 
@@ -739,6 +748,7 @@ def test_websocket_omitted_visitor_id_succeeds_without_persistence() -> None:
     ):
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = None
+        mock_agent_instance.get_last_used_sources.return_value = []
         mock_agent_instance.astream = _mock_astream(["Hi!"])
         mock_agent_class.return_value = mock_agent_instance
 
@@ -795,9 +805,13 @@ def test_document_source_endpoint_serves_pdf(async_app: TestClient) -> None:
 
 
 def test_document_source_endpoint_blocks_path_traversal(async_app: TestClient) -> None:
+    # The HTTP client resolves `..` before sending, so /documents/../secrets.txt
+    # becomes /secrets.txt — the route never matches and FastAPI returns 404.
+    # The handler's own .. check is a defense-in-depth for mid-path segments
+    # (e.g. /documents/a/../../../etc/passwd) that survive routing.
     response = async_app.get("/documents/../secrets.txt")
 
-    assert response.status_code == 400
+    assert response.status_code == 404
 
 
 def test_end_frame_includes_trace_id_when_langfuse_active(
@@ -807,6 +821,7 @@ def test_end_frame_includes_trace_id_when_langfuse_active(
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = "trace-abc123"
+        mock_agent_instance.get_last_used_sources.return_value = []
         mock_agent_instance.astream = _mock_astream(["Hi!"])
         mock_agent_class.return_value = mock_agent_instance
 
@@ -833,6 +848,7 @@ def test_end_frame_omits_trace_id_when_langfuse_disabled(async_app: TestClient) 
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = None
+        mock_agent_instance.get_last_used_sources.return_value = []
         mock_agent_instance.astream = _mock_astream(["Hi!"])
         mock_agent_class.return_value = mock_agent_instance
 

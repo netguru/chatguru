@@ -1,7 +1,7 @@
-import json
 import re
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import Any
 
 from langchain_core.messages import (
     AIMessage,
@@ -14,21 +14,18 @@ from langchain_core.messages import (
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, ToolException, tool
 from langchain_openai import AzureChatOpenAI, ChatOpenAI
-from pydantic import BaseModel, Field
+from langfuse.langchain import CallbackHandler
 
 from agent.prompt import SYSTEM_PROMPT
 from config import get_llm_settings, get_logger
 from document_rag.repository import DocumentRagRepository
 from tracing import (
     flush_langfuse_async,
-    get_langfuse_handler,
+    get_client,
     init_langfuse,
     propagate_attributes,
 )
 from vector_db import VectorDatabase
-
-if TYPE_CHECKING:
-    from langfuse.langchain import CallbackHandler as LangfuseCallbackHandler
 
 
 def _build_chat_llm() -> ChatOpenAI | AzureChatOpenAI:
@@ -67,23 +64,6 @@ logger = get_logger("agent.service")
 MAX_TOOL_ITERATIONS = 10
 
 
-class StructuredSource(BaseModel):
-    source_id: str
-    source_uri: str | None = None
-    title: str | None = None
-    chunk_id: str | None = None
-    source_type: str | None = None
-    page: int | None = None
-
-
-class GroundedResponse(BaseModel):
-    response: str = Field(description="Final user-facing answer")
-    sources: list[StructuredSource] = Field(
-        default_factory=list,
-        description="Only sources directly used to support the answer",
-    )
-
-
 def _convert_history_to_messages(history: list[dict[str, str]]) -> list[BaseMessage]:
     """Convert history dicts to LangChain message objects."""
     messages: list[BaseMessage] = []
@@ -97,75 +77,23 @@ def _convert_history_to_messages(history: list[dict[str, str]]) -> list[BaseMess
     return messages
 
 
-def _extract_document_sources_from_tool_output(
-    tool_output: str,
-) -> list[dict[str, Any]]:
-    """Extract structured document sources from search_documents tool output."""
-    try:
-        payload = json.loads(tool_output)
-    except json.JSONDecodeError:
-        return []
-
-    hits = payload.get("hits") if isinstance(payload, dict) else None
-    if not isinstance(hits, list):
-        return []
-
-    unique: dict[tuple[str, str], dict[str, Any]] = {}
-    for hit in hits:
-        if not isinstance(hit, dict):
-            continue
-        source = hit.get("source")
-        if not isinstance(source, dict):
-            continue
-        source_id = str(source.get("source_id", "")).strip()
-        chunk_id = str(source.get("chunk_id", "")).strip()
-        if not source_id:
-            continue
-        key = (source_id, chunk_id)
-        unique[key] = {
-            "source_id": source_id,
-            "source_uri": source.get("source_uri"),
-            "title": source.get("title"),
-            "chunk_id": source.get("chunk_id"),
-            "source_type": source.get("source_type"),
-            "page": source.get("page"),
-            "snippet": hit.get("snippet"),
-        }
-
-    return list(unique.values())
-
-
 async def _execute_tool(
-    tool_name: str, tool_args: dict[str, Any], tool_registry: dict[str, BaseTool]
-) -> tuple[str, bool, list[dict[str, Any]]]:
-    """
-    Execute a tool and return the result with success status.
-
-    Args:
-        tool_name: Name of the tool to execute
-        tool_args: Arguments to pass to the tool
-        tool_registry: Registry mapping tool names to tool instances
-
-    Returns:
-        Tuple of (result_string, success_bool)
-    """
+    tool_name: str,
+    tool_args: dict[str, Any],
+    tool_registry: dict[str, BaseTool],
+    config: RunnableConfig | None = None,
+) -> tuple[str, bool]:
+    """Execute a tool and return (result_string, success_bool)."""
     if tool_name not in tool_registry:
-        return f"Unknown tool: {tool_name}", False, []
+        return f"Unknown tool: {tool_name}", False
 
     tool_func = tool_registry[tool_name]
     try:
-        result = await tool_func.ainvoke(tool_args)
+        result = await tool_func.ainvoke(tool_args, config=config)
+        return str(result), True
     except (ToolException, ValueError, TypeError, KeyError) as e:
         logger.exception("Tool execution failed: %s", tool_name)
-        return f"Error executing tool: {e}", False, []
-
-    result_str = str(result)
-    sources = (
-        _extract_document_sources_from_tool_output(result_str)
-        if tool_name == "search_documents"
-        else []
-    )
-    return result_str, True, sources
+        return f"Error executing tool: {e}", False
 
 
 class Agent:
@@ -186,6 +114,7 @@ class Agent:
 
         Args:
             vector_database: VectorDatabase for RAG search (calls sqlite-vec service)
+            document_repository: DocumentRagRepository for document knowledge search
         """
         # Initialize Langfuse tracing (idempotent; also called at app startup)
         init_langfuse()
@@ -195,6 +124,10 @@ class Agent:
         # Create tools based on available backends
         self.tools: list[BaseTool] = []
 
+        # Mutable list shared with the document RAG tool closure. Cleared at the
+        # start of each astream() call so citations are always fresh per turn.
+        self._last_used_sources: list[dict[str, Any]] = []
+
         if vector_database is not None:
             self.tools.append(Agent._create_rag_tool(vector_database))
             logger.info("Agent initialized with RAG tool")
@@ -202,15 +135,18 @@ class Agent:
             logger.info("Agent initialized without RAG tool")
 
         if document_repository is not None:
-            self.tools.append(Agent._create_document_rag_tool(document_repository))
+            self.tools.append(
+                Agent._create_document_rag_tool(
+                    document_repository, self._last_used_sources
+                )
+            )
             logger.info("Agent initialized with document RAG tool")
 
         self.llm = llm.bind_tools(self.tools)
         self.tool_registry: dict[str, BaseTool] = {
             tool.name: tool for tool in self.tools
         }
-        self._last_used_sources: list[dict[str, Any]] = []
-        self._last_langfuse_handler: LangfuseCallbackHandler | None = None
+        self._last_langfuse_handler: CallbackHandler | None = None
 
     @staticmethod
     def _create_rag_tool(db: VectorDatabase) -> BaseTool:
@@ -261,35 +197,64 @@ class Agent:
         return search_products
 
     @staticmethod
-    def _create_document_rag_tool(repo: DocumentRagRepository) -> BaseTool:
-        """Create document retrieval tool returning snippets and source references."""
+    def _create_document_rag_tool(
+        repo: DocumentRagRepository,
+        sources: list[dict[str, Any]],
+    ) -> BaseTool:
+        """Create document retrieval tool with citation-numbered output.
+
+        Results are appended to *sources* in citation order so callers can
+        read ``sources`` after streaming to build the ``end`` frame payload.
+        All chunks from the same document share a single citation number so
+        the model references the document as one unit regardless of how many
+        chunks were retrieved. Numbers are stable across multi-turn tool calls.
+        """
 
         @tool
         async def search_documents(query: str, limit: int = 5) -> str:
-            """Search indexed documents and return snippets with source references."""
+            """Search indexed documents and return snippets with numbered citation references."""
             try:
                 hits = await repo.search(query=query, limit=limit)
                 if not hits:
-                    return json.dumps({"hits": []})
+                    return "No relevant documents found."
 
-                payload = {
-                    "hits": [
-                        {
-                            "snippet": hit.snippet,
-                            "score": hit.score,
-                            "source": {
-                                "source_id": hit.source.source_id,
-                                "source_uri": hit.source.source_uri,
-                                "title": hit.source.title,
-                                "chunk_id": hit.source.chunk_id,
-                                "source_type": hit.source.source_type,
-                                "page": getattr(hit.source, "page", None),
-                            },
-                        }
-                        for hit in hits
-                    ]
+                # Map source_id → 1-based citation number. All chunks from the
+                # same document share one number; documents already tracked from
+                # a previous call keep their existing number.
+                seen: dict[str, int] = {
+                    s["source_id"]: i + 1 for i, s in enumerate(sources)
                 }
-                return json.dumps(payload)
+
+                snippet_lines: list[str] = []
+                meta_lines: list[str] = [
+                    "\n---",
+                    "Citation metadata (use these numbers for inline references):",
+                ]
+
+                for hit in hits:
+                    src = hit.source
+                    if src.source_id not in seen:
+                        sources.append(
+                            {
+                                "source_id": src.source_id,
+                                "source_uri": src.source_uri,
+                                "title": src.title,
+                                "chunk_id": src.chunk_id,
+                                "source_type": src.source_type,
+                                "page": src.page,
+                            }
+                        )
+                        seen[src.source_id] = len(sources)
+
+                    num = seen[src.source_id]
+                    name = Path(src.source_uri or src.source_id).name
+                    page_info = f" (page {src.page})" if src.page is not None else ""
+                    snippet_lines.append(f"[{num}]{page_info} {name}:\n{hit.snippet}")
+
+                    page_str = f", page {src.page}" if src.page is not None else ""
+                    meta_lines.append(f"- [{num}] {name}{page_str}")
+
+                return "\n\n".join(snippet_lines) + "\n".join(meta_lines)
             except Exception as e:
                 logger.exception("Document RAG search failed")
                 return f"Error searching documents: {e}"
@@ -346,19 +311,6 @@ class Agent:
         messages.extend(_convert_history_to_messages(transcript))
         return messages
 
-    def _build_config(self) -> RunnableConfig:
-        """Build the LLM config with Langfuse callback if available.
-
-        Stores the callback handler instance on ``self._last_langfuse_handler``
-        so that ``last_trace_id`` can be read after the agentic loop completes.
-        """
-        config: RunnableConfig = {}
-        handler = get_langfuse_handler()
-        self._last_langfuse_handler = handler
-        if handler:
-            config["callbacks"] = [handler]
-        return config
-
     @property
     def last_trace_id(self) -> str | None:
         """Return the Langfuse trace ID from the most recent ``astream()`` call.
@@ -374,7 +326,7 @@ class Agent:
         self,
         full_response: AIMessageChunk | AIMessage,
         messages: list[BaseMessage],
-        collected_sources: list[dict[str, Any]],
+        config: RunnableConfig | None = None,
     ) -> None:
         """Execute tool calls and append results to messages."""
         logger.info("Processing %d tool call(s)", len(full_response.tool_calls))
@@ -385,11 +337,9 @@ class Agent:
             tool_args = tool_call["args"]
             tool_call_id = tool_call["id"]
 
-            result, _, sources = await _execute_tool(
-                tool_name, tool_args, self.tool_registry
+            result, _ = await _execute_tool(
+                tool_name, tool_args, self.tool_registry, config=config
             )
-            if sources:
-                collected_sources.extend(sources)
             messages.append(ToolMessage(content=result, tool_call_id=tool_call_id))
 
     async def astream(
@@ -419,15 +369,27 @@ class Agent:
         """
         self._last_langfuse_handler = None
         lc_messages = Agent._build_messages_from_transcript(messages)
-        config = self._build_config()
-        self._last_used_sources = []
+        # Clear in-place so the document tool closure (which holds a reference to
+        # this same list) always starts a new turn with an empty source set.
+        self._last_used_sources.clear()
 
-        # Propagate session_id and user_id to all Langfuse traces (when provided)
-        with propagate_attributes(session_id=session_id, user_id=visitor_id):
+        langfuse = get_client()
+        with (
+            langfuse.start_as_current_observation(
+                as_type="span",
+                name="chat-response",
+            ),
+            propagate_attributes(
+                trace_name="chat-response",
+                session_id=session_id,
+                user_id=visitor_id,
+            ),
+        ):
+            handler = CallbackHandler()
+            self._last_langfuse_handler = handler
+            config: RunnableConfig = {"callbacks": [handler]}
             try:
-                async for chunk in self._run_agentic_loop(
-                    lc_messages, config, self._last_used_sources
-                ):
+                async for chunk in self._run_agentic_loop(lc_messages, config):
                     yield chunk
             finally:
                 await flush_langfuse_async()
@@ -436,7 +398,6 @@ class Agent:
         self,
         messages: list[BaseMessage],
         config: RunnableConfig,
-        collected_sources: list[dict[str, Any]],
     ) -> AsyncIterator[str]:
         """Run the agentic loop until no more tool calls or max iterations."""
         for iteration in range(MAX_TOOL_ITERATIONS):
@@ -459,77 +420,10 @@ class Agent:
                 logger.info("Agentic loop completed after %d iterations", iteration + 1)
                 return
 
-            await self._process_tool_calls(full_response, messages, collected_sources)
+            await self._process_tool_calls(full_response, messages, config=config)
         logger.warning("Reached maximum tool iterations (%d)", MAX_TOOL_ITERATIONS)
         yield "\n\n⚠️ Reached maximum tool call limit. Please rephrase your question."
 
     def get_last_used_sources(self) -> list[dict[str, Any]]:
-        """Return structured sources used in the most recent streamed response."""
+        """Return structured sources collected during the most recent astream() call."""
         return list(self._last_used_sources)
-
-    @staticmethod
-    def _parse_grounded_response(content: Any) -> GroundedResponse:
-        """Parse final model content into grounded structured response."""
-        text = (
-            "".join(str(part) for part in content)
-            if isinstance(content, list)
-            else str(content or "")
-        )
-
-        text = text.strip()
-        if text.startswith("```"):
-            text = text.strip("`")
-            if text.lower().startswith("json"):
-                text = text[4:].strip()
-
-        try:
-            payload = json.loads(text)
-            return GroundedResponse.model_validate(payload)
-        except Exception:
-            logger.exception("Failed to parse grounded response JSON")
-            return GroundedResponse(response=str(content or ""), sources=[])
-
-    async def arun_structured(
-        self,
-        messages: list[dict[str, str]],
-        *,
-        session_id: str | None = None,
-        visitor_id: str | None = None,
-    ) -> GroundedResponse:
-        """Run tool-calling loop and return final structured response in one pass."""
-        lc_messages = Agent._build_messages_from_transcript(messages)
-        config = self._build_config()
-
-        with propagate_attributes(session_id=session_id, user_id=visitor_id):
-            try:
-                for iteration in range(MAX_TOOL_ITERATIONS):
-                    response = await self.llm.ainvoke(lc_messages, config=config)
-                    ai_message = response if isinstance(response, AIMessage) else None
-
-                    tool_calls = ai_message.tool_calls if ai_message else []
-                    if not tool_calls:
-                        parsed = Agent._parse_grounded_response(
-                            ai_message.content if ai_message else response
-                        )
-                        logger.info(
-                            "Structured loop completed after %d iterations",
-                            iteration + 1,
-                        )
-                        return parsed
-
-                    if ai_message is None:
-                        return GroundedResponse(response=str(response), sources=[])
-
-                    await self._process_tool_calls(
-                        ai_message, lc_messages, self._last_used_sources
-                    )
-
-                logger.warning(
-                    "Reached maximum tool iterations (%d)", MAX_TOOL_ITERATIONS
-                )
-                return GroundedResponse(
-                    response="I reached the maximum tool-call limit. Please rephrase your question.",
-                    sources=[],
-                )
-            finally:
-                await flush_langfuse_async()
