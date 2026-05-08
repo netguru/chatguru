@@ -31,8 +31,12 @@ export function useFeedback(): UseFeedbackResult {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
+
       await res.json().catch(() => null);
-    } catch {
+
+      if (!res.ok) {
+        throw new Error(`Failed to submit feedback: ${res.status} ${res.statusText}`);
+      }
     } finally {
       setIsSubmitting(false);
     }
