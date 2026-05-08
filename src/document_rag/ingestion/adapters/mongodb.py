@@ -106,11 +106,7 @@ class MongoDocumentRagIngestionRepository:
                         break
                 time.sleep(5)
 
-            msg = (
-                "Index "
-                f"'{index_name}' did not reach READY within {timeout_seconds}s "
-                f"(last status: {last_status})."
-            )
+            msg = f"Index '{index_name}' did not reach READY within {timeout_seconds}s (last status: {last_status})."
             logger.warning(
                 msg,
             )
