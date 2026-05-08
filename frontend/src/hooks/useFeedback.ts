@@ -19,23 +19,20 @@ export function useFeedback(): UseFeedbackResult {
   async function submitFeedback(traceId: string, value: 0 | 1, comment?: string): Promise<void> {
     setIsSubmitting(true);
     try {
-      const payload: FeedbackPayload = { trace_id: traceId, visitor_id: getOrCreateVisitorId(), value };
+      const payload: FeedbackPayload = {
+        trace_id: traceId,
+        visitor_id: getOrCreateVisitorId(),
+        value,
+      };
       if (comment) payload.comment = comment;
 
-      console.debug("[useFeedback] Submitting feedback:", payload);
       const res = await fetch("/feedback", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      const body = await res.json().catch(() => null);
-      if (!res.ok) {
-        console.error("[useFeedback] Feedback submission failed:", res.status, body);
-      } else {
-        console.debug("[useFeedback] Response:", res.status, body);
-      }
-    } catch (err) {
-      console.error("[useFeedback] Failed to submit feedback:", err);
+      await res.json().catch(() => null);
+    } catch {
     } finally {
       setIsSubmitting(false);
     }

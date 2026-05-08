@@ -26,8 +26,21 @@ interface Props {
   message: ChatMessageType;
 }
 
+function isDocumentCitationHref(href: string | undefined): boolean {
+  if (!href) return false;
+  try {
+    return new URL(href, window.location.origin).pathname.startsWith("/documents/");
+  } catch {
+    return false;
+  }
+}
+
 export function ChatMessage({ message }: Props) {
   const isUser = message.role === "user";
+  const citedSources =
+    !isUser && message.sources?.length && message.content
+      ? filterCitedSources(message.content, message.sources)
+      : [];
   const { copied, copy } = useCopyToClipboard();
   const openSourcesPanel = useAppStore((s) => s.openSourcesPanel);
   const [thumbsDownOpen, setThumbsDownOpen] = useState(false);
@@ -85,17 +98,7 @@ export function ChatMessage({ message }: Props) {
                   remarkPlugins={[remarkGfm]}
                   components={{
                     a: ({ node: _node, href, ...props }) => {
-                      const isDocLink =
-                        !!href &&
-                        (() => {
-                          try {
-                            return new URL(href, window.location.origin).pathname.startsWith(
-                              "/documents/"
-                            );
-                          } catch {
-                            return false;
-                          }
-                        })();
+                      const isDocLink = isDocumentCitationHref(href);
                       if (isDocLink && href) {
                         return (
                           <a
@@ -133,22 +136,17 @@ export function ChatMessage({ message }: Props) {
                   {copied ? <CheckIcon weight="bold" /> : <CopyIcon weight="bold" />}
                 </IconButton>
               )}
-              {message.sources &&
-                message.sources.length > 0 &&
-                (() => {
-                  const cited = filterCitedSources(message.content, message.sources);
-                  return cited.length > 0 ? (
-                    <Button
-                      variant="subtle"
-                      color="neutral"
-                      size="s"
-                      onClick={() => openSourcesPanel(cited)}
-                    >
-                      <FoldersIcon weight="bold" />
-                      {cited.length} sources
-                    </Button>
-                  ) : null;
-                })()}
+              {citedSources.length > 0 && (
+                <Button
+                  variant="subtle"
+                  color="neutral"
+                  size="s"
+                  onClick={() => openSourcesPanel(citedSources)}
+                >
+                  <FoldersIcon weight="bold" />
+                  {citedSources.length} sources
+                </Button>
+              )}
               <div className="ms-auto flex items-center gap-1">
                 <IconButton
                   variant="subtle"

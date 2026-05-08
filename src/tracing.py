@@ -8,8 +8,6 @@ from langfuse import (
     get_client,
     propagate_attributes,
 )
-
-# (get_client re-exported)
 from langfuse.langchain import CallbackHandler as LangfuseCallbackHandler
 
 from config import get_langfuse_settings, get_logger

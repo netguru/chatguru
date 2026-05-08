@@ -216,18 +216,7 @@ async def _send_error(
 
 
 def _extract_session_id(data: str) -> str:
-    """
-    Extract session_id from raw JSON data for error handling.
-
-    This function safely extracts session_id even when JSON parsing fails,
-    ensuring error responses always include a session_id field.
-
-    Args:
-        data: Raw JSON string from WebSocket message
-
-    Returns:
-        Extracted session_id or "unknown" if extraction fails
-    """
+    """Best-effort session_id from raw JSON for error frames; falls back to the string unknown."""
     try:
         raw_data = json.loads(data)
         if isinstance(raw_data, dict):
@@ -252,22 +241,10 @@ def _validate_message_format(message_data: object) -> None:
 
 
 def _get_client_ip(conn: HTTPConnection) -> str | None:
-    """Extract the real client IP address from an HTTP or WebSocket connection.
+    """Client IP from ``HTTPConnection`` (HTTP or WebSocket).
 
-    Accepts any Starlette ``HTTPConnection`` — both ``Request`` (HTTP) and
-    ``WebSocket`` extend this base class — so the same logic is shared across
-    the ``/feedback`` endpoint and the WebSocket chat path.
-
-    Returns ``None`` when the IP cannot be determined (e.g. certain ASGI
-    transports set ``conn.client`` to ``None``). Callers must skip rate
-    limiting for a ``None`` result rather than falling back to a shared key —
-    a single shared key would let any one client exhaust the quota for every
-    other client whose IP is unknown.
-
-    When ``RATE_LIMIT_TRUST_PROXY`` is True, the ``X-Forwarded-For`` and
-    ``X-Real-IP`` headers are checked first.  Only enable proxy trust when
-    the application is behind a known, trusted reverse proxy — never in
-    direct-to-internet deployments, as headers can be spoofed by clients.
+    Returns ``None`` if unknown — callers must skip rate limiting instead of using a shared fallback key.
+    With ``RATE_LIMIT_TRUST_PROXY``, reads ``X-Forwarded-For`` / ``X-Real-IP`` first (only behind a trusted proxy).
     """
     if get_rate_limit_settings().trust_proxy:
         forwarded_for = conn.headers.get("x-forwarded-for")
@@ -318,9 +295,7 @@ async def _initialize_vector_database() -> VectorDatabase | None:
         logger.exception("Failed to initialize vector database")
         _vector_database_cache = None
 
-    # Only mark as initialized when the database is actually reachable.
-    # This intentionally allows retries on subsequent WebSocket connections
-    # after a transient startup failure (e.g., vector-db container not ready yet).
+    # Set only when healthy so later connections can retry after transient startup failures.
     _vector_database_initialized = _vector_database_cache is not None
     return _vector_database_cache
 

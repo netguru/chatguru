@@ -28,8 +28,7 @@ const ZOOM_MIN = 0.5;
 const ZOOM_MAX = 3.0;
 const ZOOM_DEFAULT = 1.0;
 const THUMBNAIL_WIDTH = 84;
-// Estimated height per thumbnail item:
-// wrapper: no padding (0px) + button p-4 top+bottom (32px) + Page canvas A4 at width=84 (119px) + gap-2 (8px) + Badge (~24px) ≈ 183px
+// Row height for thumbnail virtualizer (~wrapper + canvas at THUMBNAIL_WIDTH + badge).
 const THUMB_ITEM_HEIGHT = 183;
 
 type LoadState = "loading" | "loaded" | "error";
@@ -68,9 +67,6 @@ export function PdfViewerModal({ source, onClose }: Props) {
   const [viewerEl, setViewerEl] = useState<HTMLDivElement | null>(null);
   const [containerWidth, setContainerWidth] = useState<number | undefined>();
 
-  // Virtualizer for the thumbnail panel — only renders visible thumbnails.
-  // count=0 when document hasn't loaded yet; overscan=3 pre-renders items
-  // just outside the viewport so scrolling feels instant.
   const thumbnailVirtualizer = useVirtualizer({
     count: numPages ?? 0,
     getScrollElement: () => thumbPanelRef.current,
@@ -83,7 +79,6 @@ export function PdfViewerModal({ source, onClose }: Props) {
   useEffect(() => {
     if (!viewerEl) return;
     const resizeObserver = new ResizeObserver(([entry]) => {
-      console.log("Viewer resized:", entry.contentRect.width);
       setContainerWidth(entry.contentRect.width - 48); // minus p-6 on each side
     });
     resizeObserver.observe(viewerEl);
@@ -96,8 +91,6 @@ export function PdfViewerModal({ source, onClose }: Props) {
     setLoadState("loading");
   }, [source?.file]);
 
-  // Scroll the virtualizer to keep the active thumbnail visible.
-  // "auto" alignment: only scrolls if the item is outside the viewport.
   useEffect(() => {
     if (!showThumbnails || numPages === null) return;
     thumbnailVirtualizer.scrollToIndex(pageNumber - 1, { align: "auto", behavior: "smooth" });
