@@ -52,6 +52,7 @@ class MongoDocumentRagIngestionRepository:
         """Create the vector search index if absent, then wait until it is READY."""
         namespace_not_found = 26
         index_name = self._settings.mongodb_index_name
+        last_status = "not_found"
 
         with self._mongo_client() as client:
             collection = self._collection(client)
@@ -91,23 +92,22 @@ class MongoDocumentRagIngestionRepository:
                 indexes = list(collection.list_search_indexes())
                 for idx in indexes:
                     if idx.get("name") == index_name:
-                        status = idx.get("status", "")
-                        if status == "READY":
+                        last_status = idx.get("status", "") or "unknown"
+                        if last_status == "READY":
                             logger.info(
                                 "Vector search index '%s' is READY.", index_name
                             )
                             return
                         logger.info(
-                            "Index '%s' status: %s — waiting ...", index_name, status
+                            "Index '%s' status: %s — waiting ...",
+                            index_name,
+                            last_status,
                         )
                         break
                 time.sleep(5)
 
-            logger.warning(
-                "Index '%s' did not reach READY within %ds.",
-                index_name,
-                timeout_seconds,
-            )
+            msg = f"Index '{index_name}' did not reach READY within {timeout_seconds}s (last status: {last_status})."
+            raise TimeoutError(msg)
 
     def upsert_chunks(self, chunks: list[DocumentChunk]) -> int:
         operations = [
