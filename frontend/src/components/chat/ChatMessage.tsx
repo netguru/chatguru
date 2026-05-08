@@ -12,9 +12,10 @@ import remarkGfm from "remark-gfm";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { useFeedback } from "../../hooks/useFeedback";
 import { useAppStore } from "../../store/appStore";
-import type { ChatMessage as ChatMessageType } from "../../types/chat";
-import { injectCitationLinks } from "../../utils/citationLinks";
+import type { ChatMessage as ChatMessageType, Source } from "../../types/chat";
+import { filterCitedSources, injectCitationLinks } from "../../utils/citationLinks";
 import { cn } from "../../utils/utils";
+import { PdfViewerModal } from "../modals/PdfViewerModal";
 import { ThumbsDownModal } from "../modals/ThumbsDownModal";
 import { Avatar, AvatarFallback } from "../ui/avatar";
 import { Button } from "../ui/button";
@@ -31,7 +32,27 @@ export function ChatMessage({ message }: Props) {
   const openSourcesPanel = useAppStore((s) => s.openSourcesPanel);
   const [thumbsDownOpen, setThumbsDownOpen] = useState(false);
   const [feedbackGiven, setFeedbackGiven] = useState<0 | 1 | null>(null);
+  const [activePdfSource, setActivePdfSource] = useState<Source | null>(null);
   const { submitFeedback, isSubmitting } = useFeedback();
+
+  function handleCitationLinkClick(href: string) {
+    try {
+      const url = new URL(href, window.location.origin);
+      const isDocumentLink = url.pathname.startsWith("/documents/");
+      if (!isDocumentLink) return false;
+      const sourceUri = url.pathname.replace("/documents/", "");
+      const pageMatch = url.hash.match(/^#page=(\d+)$/);
+      const page = pageMatch ? parseInt(pageMatch[1], 10) : undefined;
+      setActivePdfSource({
+        file: sourceUri,
+        url: url.pathname,
+        pages: page != null ? [page] : [],
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
 
   return (
     <>
@@ -63,9 +84,33 @@ export function ChatMessage({ message }: Props) {
                 <ReactMarkdown
                   remarkPlugins={[remarkGfm]}
                   components={{
-                    a: ({ node: _node, ...props }) => (
-                      <a {...props} target="_blank" rel="noopener noreferrer" />
-                    ),
+                    a: ({ node: _node, href, ...props }) => {
+                      const isDocLink =
+                        !!href &&
+                        (() => {
+                          try {
+                            return new URL(href, window.location.origin).pathname.startsWith(
+                              "/documents/"
+                            );
+                          } catch {
+                            return false;
+                          }
+                        })();
+                      if (isDocLink && href) {
+                        return (
+                          <a
+                            {...props}
+                            href={href}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              handleCitationLinkClick(href);
+                            }}
+                            style={{ cursor: "pointer" }}
+                          />
+                        );
+                      }
+                      return <a {...props} href={href} target="_blank" rel="noopener noreferrer" />;
+                    },
                   }}
                 >
                   {injectCitationLinks(message.content, message.sources ?? [])}
@@ -88,17 +133,22 @@ export function ChatMessage({ message }: Props) {
                   {copied ? <CheckIcon weight="bold" /> : <CopyIcon weight="bold" />}
                 </IconButton>
               )}
-              {message.sources && message.sources.length > 0 && (
-                <Button
-                  variant="subtle"
-                  color="neutral"
-                  size="s"
-                  onClick={() => openSourcesPanel(message.sources ?? [])}
-                >
-                  <FoldersIcon weight="bold" />
-                  {message.sources.length} sources
-                </Button>
-              )}
+              {message.sources &&
+                message.sources.length > 0 &&
+                (() => {
+                  const cited = filterCitedSources(message.content, message.sources);
+                  return cited.length > 0 ? (
+                    <Button
+                      variant="subtle"
+                      color="neutral"
+                      size="s"
+                      onClick={() => openSourcesPanel(cited)}
+                    >
+                      <FoldersIcon weight="bold" />
+                      {cited.length} sources
+                    </Button>
+                  ) : null;
+                })()}
               <div className="ms-auto flex items-center gap-1">
                 <IconButton
                   variant="subtle"
@@ -141,6 +191,8 @@ export function ChatMessage({ message }: Props) {
         traceId={message.traceId}
         onSent={() => setFeedbackGiven(0)}
       />
+
+      <PdfViewerModal source={activePdfSource} onClose={() => setActivePdfSource(null)} />
     </>
   );
 }
