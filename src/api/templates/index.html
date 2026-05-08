@@ -125,54 +125,6 @@
             overflow: hidden;
         }
 
-        .source-panel {
-            width: 380px;
-            flex-shrink: 0;
-            background: #fafafa;
-            border-left: 1px solid #ddd;
-            display: none;
-            flex-direction: column;
-        }
-
-        .source-panel.open {
-            display: flex;
-        }
-
-        .source-panel-header {
-            padding: 12px 14px;
-            border-bottom: 1px solid #e0e0e0;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            background: #fff;
-        }
-
-        .source-panel-title {
-            font-size: 13px;
-            color: #222;
-            font-weight: 600;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            max-width: 280px;
-        }
-
-        .source-close-btn {
-            border: none;
-            background: transparent;
-            font-size: 18px;
-            line-height: 1;
-            cursor: pointer;
-            color: #666;
-        }
-
-        .source-frame {
-            width: 100%;
-            height: 100%;
-            border: none;
-            background: white;
-        }
-
         .chat-header {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
@@ -261,66 +213,12 @@
             background: #e8f4f8;
         }
 
-        .message-meta {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            margin-bottom: 6px;
-        }
-
-        .sources-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            font-size: 11px;
-            font-weight: 600;
-            color: #2c4f9e;
-            background: #e8eeff;
-            border: 1px solid #cfd8ff;
-            border-radius: 999px;
-            padding: 3px 8px;
-        }
-
-        .message-sources {
-            margin-top: 8px;
-            display: flex;
-            flex-wrap: wrap;
-            gap: 6px;
-            max-width: 70%;
-        }
-
-        .source-chip {
-            border: 1px solid #cfd8ff;
-            background: #eef2ff;
-            color: #3046a0;
-            border-radius: 999px;
-            font-size: 12px;
-            padding: 4px 10px;
-            cursor: pointer;
-        }
-
-        .source-chip:hover {
-            background: #dde6ff;
-        }
-
         .input-container {
             padding: 20px;
             background: white;
             border-top: 1px solid #e0e0e0;
             display: flex;
             gap: 10px;
-        }
-
-        @media (max-width: 1024px) {
-            .source-panel {
-                position: fixed;
-                top: 0;
-                right: 0;
-                bottom: 0;
-                width: min(90vw, 420px);
-                z-index: 30;
-                box-shadow: -8px 0 20px rgba(0,0,0,0.15);
-            }
         }
 
         #messageInput {
@@ -396,14 +294,6 @@
                 <button id="sendButton">Send</button>
             </div>
         </div>
-
-        <div class="source-panel" id="sourcePanel">
-            <div class="source-panel-header">
-                <div class="source-panel-title" id="sourcePanelTitle">Source preview</div>
-                <button class="source-close-btn" id="sourceCloseButton" aria-label="Close source panel">×</button>
-            </div>
-            <iframe class="source-frame" id="sourceFrame" title="Document source preview"></iframe>
-        </div>
     </div>
 
     <script>
@@ -423,10 +313,6 @@
         const sendButton = document.getElementById('sendButton');
         const conversationsList = document.getElementById('conversationsList');
         const chatTitle = document.getElementById('chatTitle');
-        const sourcePanel = document.getElementById('sourcePanel');
-        const sourcePanelTitle = document.getElementById('sourcePanelTitle');
-        const sourceFrame = document.getElementById('sourceFrame');
-        const sourceCloseButton = document.getElementById('sourceCloseButton');
 
         // ── Identity ────────────────────────────────────────────────────────
         function loadVisitorId() {
@@ -548,56 +434,6 @@
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
         }
 
-        function getSourceLabel(source) {
-            return source.title || source.source_uri || source.source_id || 'Source';
-        }
-
-        function stripTrailingSourcesBlock(text) {
-            if (typeof text !== 'string') return '';
-            return text.replace(/\n?Sources:\s*[\s\S]*$/i, '').trim();
-        }
-
-        function getSourcePath(source) {
-            return source.source_uri || source.source_id || '';
-        }
-
-        function openSourcePreview(source) {
-            const sourcePath = getSourcePath(source);
-            if (!sourcePath) return;
-            const encodedPath = sourcePath.split('/').map(encodeURIComponent).join('/');
-            const pageSuffix = Number.isInteger(source.page) ? `#page=${source.page}` : '';
-            sourceFrame.src = `/documents/${encodedPath}${pageSuffix}`;
-            sourcePanelTitle.textContent = getSourceLabel(source);
-            sourcePanel.classList.add('open');
-        }
-
-        function attachSourcesToMessage(messageElement, sources) {
-            if (!Array.isArray(sources) || sources.length === 0) return;
-
-            const meta = document.createElement('div');
-            meta.className = 'message-meta';
-
-            const badge = document.createElement('span');
-            badge.className = 'sources-badge';
-            badge.textContent = `Sources used (${sources.length})`;
-            meta.appendChild(badge);
-            messageElement.appendChild(meta);
-
-            const container = document.createElement('div');
-            container.className = 'message-sources';
-
-            for (const source of sources) {
-                const chip = document.createElement('button');
-                chip.type = 'button';
-                chip.className = 'source-chip';
-                chip.textContent = getSourceLabel(source);
-                chip.addEventListener('click', () => openSourcePreview(source));
-                container.appendChild(chip);
-            }
-
-            messageElement.appendChild(container);
-        }
-
         function createMessageElement(type, content, streaming = false) {
             const messageDiv = document.createElement('div');
             messageDiv.className = `message ${type}`;
@@ -638,25 +474,14 @@
 
             } else if (data.type === 'end') {
                 let assistantContent = '';
-                const sources = Array.isArray(data.sources) ? data.sources : [];
                 if (currentAssistantMessage) {
                     const bubble = currentAssistantMessage.querySelector('.message-bubble');
                     bubble.classList.remove('streaming');
                     assistantContent = bubble.textContent;
-                    if (sources.length > 0) {
-                        assistantContent = stripTrailingSourcesBlock(assistantContent);
-                        bubble.textContent = assistantContent;
-                    }
-                    attachSourcesToMessage(currentAssistantMessage, sources);
                     currentAssistantMessage = null;
                 } else if (data.content) {
-                    const normalizedContent = sources.length > 0
-                        ? stripTrailingSourcesBlock(data.content)
-                        : data.content;
-                    const assistantMessage = createMessageElement('assistant', normalizedContent);
-                    attachSourcesToMessage(assistantMessage, sources);
-                    messagesContainer.appendChild(assistantMessage);
-                    assistantContent = normalizedContent;
+                    messagesContainer.appendChild(createMessageElement('assistant', data.content));
+                    assistantContent = data.content;
                 }
                 if (assistantContent) {
                     conversationHistory.push({ role: 'assistant', content: assistantContent });
@@ -718,10 +543,6 @@
 
         // ── Init ─────────────────────────────────────────────────────────────
         document.getElementById('newChatButton').addEventListener('click', startNewConversation);
-        sourceCloseButton.addEventListener('click', () => {
-            sourcePanel.classList.remove('open');
-            sourceFrame.src = '';
-        });
         sendButton.addEventListener('click', sendMessage);
         messageInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }

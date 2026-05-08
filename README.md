@@ -29,10 +29,6 @@
 
 Read the full Docs at: <a href="https://github.com/netguru/chatguru">https://github.com/netguru/chatguru</a>
 
-- [Architecture](docs/architecture.md)
-- [Chat History Persistence](docs/persistence.md)
-- [Document RAG Repository](docs/document-rag.md)
-
 ## Preview <a name="Preview"></a>
 
 chatguru Agent ships with WebSocket streaming, RAG capabilities, and comprehensive observability!
@@ -113,7 +109,6 @@ asyncio.run(chat())
 - **🧪 Minimal Test UI**: Lightweight HTML at `/` for smoke testing only
 - **🎨 Whitelabel Design**: Easily customizable for different brands and tenants
 - **🧠 RAG Capabilities**: Semantic product search with sqlite-vec vector database
-- **📄 Document RAG Repository**: Modular retrieval repository (`search_documents`) with typed source references
 - **🛒 Agentic Commerce**: Ready for MCP (Model Context Protocol) integration
 - **📊 Observability**: Built-in Langfuse tracing and monitoring
 - **✅ Testing**: Comprehensive test suite with promptfoo LLM evaluation
@@ -293,16 +288,6 @@ The application uses environment variables for configuration. Copy `env.example`
 | `VECTOR_DB_TYPE` | Database type | `sqlite` |
 | `VECTOR_DB_SQLITE_URL` | SQLite service URL | `http://product-db:8001` |
 | `PERSISTENCE_DATABASE_URL` | Async SQLAlchemy URL for chat history storage | *(unset — disabled)* |
-| `DOCUMENT_RAG_ENABLED` | Enable document RAG bootstrap | `false` |
-| `DOCUMENT_RAG_BACKEND` | Document RAG backend | `mongodb` |
-| `DOCUMENT_RAG_MONGODB_URI` | MongoDB URI for document RAG | `mongodb://localhost:27017` |
-| `DOCUMENT_RAG_MONGODB_DATABASE` | MongoDB database for document chunks | `chatguru` |
-| `DOCUMENT_RAG_MONGODB_COLLECTION` | MongoDB collection for document chunks | `documents` |
-| `DOCUMENT_RAG_MONGODB_INDEX_NAME` | MongoDB vector index name for documents | `document_vector_index` |
-| `DOCUMENT_RAG_SEARCH_LIMIT_DEFAULT` | Default limit for `search_documents` tool | `5` |
-| `DOCUMENT_RAG_EMBEDDING_PROVIDER` | Embedding provider for document RAG (`openai` or `custom`) | `openai` |
-| `DOCUMENT_RAG_EMBEDDING_CUSTOM_CLASS` | Custom embedding provider class path (`module.path:ClassName`) | *(empty)* |
-| `DOCUMENT_RAG_MONGODB_FILES_BUCKET` | GridFS bucket storing full source documents | `document_sources` |
 | `LLM_API_VERSION` | API version for native Azure OpenAI setups | *(empty)* |
 | `LLM_OPENAI_BASE_URL` | OpenAI v1-compatible chat base URL; when set, chat uses `ChatOpenAI` instead of native Azure routing | *(empty)* |
 | `TITLE_GENERATION_PROVIDER` | Title provider: `openai`, `fallback`, `custom` | `openai` |
@@ -344,39 +329,6 @@ PERSISTENCE_DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/chatguru
 
 See [docs/persistence.md](docs/persistence.md) for the full architecture and instructions on adding new database adapters.
 
-#### Document RAG repository
-
-Document RAG is a separate retrieval domain with persistence-style lifecycle bootstrap.
-
-- **Disabled by default** (`DOCUMENT_RAG_ENABLED=false`) — startup succeeds and document retrieval tool is not registered.
-- **Enabled** (`DOCUMENT_RAG_ENABLED=true`) — startup validates repository initialization and fails fast on misconfiguration/connectivity errors.
-- **Current backend** — MongoDB vector search (`DOCUMENT_RAG_BACKEND=mongodb`).
-- **Embeddings** — default is OpenAI-compatible embeddings, but you can plug a custom provider class.
-- **Scope** — retrieval-only; no ingestion/upsert/delete in this module.
-
-See [docs/document-rag.md](docs/document-rag.md) for architecture, contract, and full configuration details.
-
-To ingest local files into document RAG MongoDB (local dev):
-
-```bash
-make ingest-docs SOURCE_DIR=./rag_data BACKEND=mongodb
-```
-
-To fully replace existing document RAG data during ingest:
-
-```bash
-make ingest-docs SOURCE_DIR=./rag_data BACKEND=mongodb FULL_REPLACE=1
-```
-
-**Docker startup ingestion** — when running via Docker Compose with `DOCUMENT_RAG_ENABLED=true`, files in `rag_data/` are indexed automatically on first startup. Subsequent restarts skip ingestion (data persists in the `mongodb-data` volume). To force a full re-ingest from scratch:
-
-```bash
-# .env
-DOCUMENT_RAG_INGEST_FULL_REPLACE=1
-```
-
-Then `docker compose up --build`. Remove the variable afterwards to restore normal behaviour. See [docs/document-rag.md](docs/document-rag.md#docker-startup-ingestion) for full details.
-
 **LLM URL modes:** `LLM_OPENAI_BASE_URL` (universal OpenAI-compatible API) vs. `OPENAI_ENDPOINT` with empty `LLM_OPENAI_BASE_URL` (native Azure OpenAI client) is documented in [docs/design-decisions.md](docs/design-decisions.md#llm-endpoint-modes).
 
 See [env.example](env.example) for a complete template with detailed comments.
@@ -402,31 +354,18 @@ The primary interface for chat is via WebSocket at `ws://localhost:8000/ws`.
 
 #### Response Format
 
-Responses are returned as JSON messages:
+Responses are streamed as JSON messages:
 
 ```json
-// Final response
-{
-  "type": "end",
-  "content": "assistant response",
-  "session_id": "session-id",
-  "sources": [
-    {
-      "source_id": "guide.pdf",
-      "source_uri": "guide.pdf",
-      "title": "Guide",
-      "chunk_id": "guide.pdf#3:abcd1234",
-      "source_type": "pdf",
-      "page": 12
-    }
-  ]
-}
+// Token chunk (streamed multiple times)
+{"type": "token", "content": "chunk of text", "session_id": "session-id"}
+
+// End of stream (includes the full response as safety)
+{"type": "end", "content": "full assistant response", "session_id": "session-id"}
 
 // Error response
 {"type": "error", "content": "error message", "session_id": "session-id"}
 ```
-
-`sources` is populated when the model uses document RAG context to answer.
 
 ### REST API
 
