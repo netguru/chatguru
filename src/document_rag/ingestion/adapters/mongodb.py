@@ -107,9 +107,7 @@ class MongoDocumentRagIngestionRepository:
                 time.sleep(5)
 
             msg = f"Index '{index_name}' did not reach READY within {timeout_seconds}s (last status: {last_status})."
-            raise TimeoutError(
-                msg
-            )
+            raise TimeoutError(msg)
 
     def upsert_chunks(self, chunks: list[DocumentChunk]) -> int:
         operations = [
