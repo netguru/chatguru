@@ -6,6 +6,7 @@ import contextlib
 import json
 import mimetypes
 import uuid
+from collections.abc import AsyncIterator
 from typing import Annotated, Any, Literal, Self
 
 from fastapi import (
@@ -16,8 +17,8 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import Response
-from gridfs import GridFSBucket
+from fastapi.responses import StreamingResponse
+from gridfs import GridFSBucket, GridOut
 from gridfs.errors import NoFile
 from pydantic import BaseModel, Field, ValidationError, model_validator
 from pymongo import MongoClient
@@ -320,41 +321,63 @@ async def _initialize_vector_database() -> VectorDatabase | None:
 
 
 @router.get("/documents/{source_path:path}")
-async def get_document_source(source_path: str) -> Response:
-    """Serve full source document bytes from MongoDB GridFS."""
+async def get_document_source(source_path: str) -> StreamingResponse:
+    """Serve a source document from MongoDB GridFS.
+
+    Blocking PyMongo/GridFS calls are offloaded to the default thread-pool
+    executor so the async event loop is never blocked.  The file is streamed
+    in chunks to avoid loading the entire document into memory.
+    """
     settings = get_document_rag_settings()
     if not source_path.strip():
         raise HTTPException(status_code=400, detail="Invalid document path")
     if source_path.startswith("/") or ".." in source_path.split("/"):
         raise HTTPException(status_code=400, detail="Invalid document path")
 
-    client: MongoClient[dict[str, Any]] = MongoClient(
-        settings.mongodb_uri,
-        serverSelectionTimeoutMS=settings.mongodb_connection_timeout_ms,
-        connectTimeoutMS=settings.mongodb_connection_timeout_ms,
-    )
-    with client:
+    loop = asyncio.get_event_loop()
+
+    def _open_gridfs_stream() -> tuple[GridOut | None, str | None, str | None]:
+        client: MongoClient[dict[str, Any]] = MongoClient(
+            settings.mongodb_uri,
+            serverSelectionTimeoutMS=settings.mongodb_connection_timeout_ms,
+            connectTimeoutMS=settings.mongodb_connection_timeout_ms,
+        )
         database = client[settings.mongodb_database]
         bucket = GridFSBucket(database, bucket_name=settings.mongodb_files_bucket)
-
         try:
             stream = bucket.open_download_stream_by_name(source_path)
-        except NoFile as exc:
-            raise HTTPException(status_code=404, detail="Document not found") from exc
+        except NoFile:
+            return None, None, None
+        metadata = dict(stream.metadata or {})
+        media_type = metadata.get("content_type")
+        if not media_type:
+            guessed, _ = mimetypes.guess_type(source_path)
+            media_type = guessed or "application/octet-stream"
+        filename = stream.filename
+        return stream, media_type, filename
 
-        with stream:
-            metadata = dict(stream.metadata or {})
-            media_type = metadata.get("content_type")
-            if not media_type:
-                guessed, _ = mimetypes.guess_type(source_path)
-                media_type = guessed or "application/octet-stream"
+    stream, media_type, filename = await loop.run_in_executor(None, _open_gridfs_stream)
+    if stream is None:
+        raise HTTPException(status_code=404, detail="Document not found")
 
-            headers = {
-                "Content-Disposition": f'inline; filename="{stream.filename}"',
-            }
-            return Response(
-                content=stream.read(), media_type=media_type, headers=headers
-            )
+    chunk_size = 256 * 1024  # 256 KB
+
+    async def _stream_chunks() -> AsyncIterator[bytes]:
+        try:
+            while True:
+                chunk = await loop.run_in_executor(None, stream.read, chunk_size)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            await loop.run_in_executor(None, stream.close)
+
+    headers = {
+        "Content-Disposition": f'inline; filename="{filename}"',
+    }
+    return StreamingResponse(
+        content=_stream_chunks(), media_type=media_type, headers=headers
+    )
 
 
 @persistence_router.get("/conversations")

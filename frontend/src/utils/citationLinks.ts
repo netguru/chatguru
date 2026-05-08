@@ -1,18 +1,38 @@
 import type { Source } from "../types/chat";
 
 /**
+ * Matches citation patterns: [1], [2, p. 3], [1, p. 1–2], [1, p. 1; 2, p. 3], etc.
+ * Requires a closing bracket to avoid false positives on markdown reference links
+ * ("[1]: …") or unrelated bracketed numbers ("[2024]" with values > sources.length).
+ */
+const CITATION_RE =
+  /\[(\d+)(?:,\s*p\.\s*(\d+)(?:[\u2013-]\s*\d+)?)?(?:\s*;\s*\d+\s*,\s*p\.\s*\d+(?:[\u2013-]\s*\d+)?)*\]/g;
+
+/**
+ * Collect distinct 1-based citation numbers from the text, clamped to the
+ * valid source range [1..maxNum].  Returns sorted ascending.
+ */
+function collectCitedNums(content: string, maxNum: number): number[] {
+  return [
+    ...new Set(
+      [...content.matchAll(CITATION_RE)]
+        .map((m) => parseInt(m[1], 10))
+        .filter((n) => n >= 1 && n <= maxNum)
+    ),
+  ].sort((a, b) => a - b);
+}
+
+/**
  * Return only the sources actually cited in the content (i.e. referenced via
- * [N] markers), renumbered compactly from 1.  Useful for the sources sidebar
- * so uncited documents are not displayed.
+ * [N] markers), compacted from 1.  Useful for the sources sidebar so uncited
+ * documents are not displayed.
  */
 export function filterCitedSources(content: string, sources: Source[]): Source[] {
   if (!content || !sources || sources.length === 0) return [];
 
-  const citedNums = [
-    ...new Set([...content.matchAll(/\[(\d+)/g)].map((m) => parseInt(m[1], 10))),
-  ].sort((a, b) => a - b);
-
-  return citedNums.map((n) => sources[n - 1]).filter((s): s is Source => s != null);
+  return collectCitedNums(content, sources.length)
+    .map((n) => sources[n - 1])
+    .filter((s): s is Source => s != null);
 }
 
 /**
@@ -29,9 +49,7 @@ export function injectCitationLinks(content: string, sources: Source[]): string 
   if (!content || !sources || sources.length === 0) return content;
 
   // Collect distinct source numbers that appear in the text, sorted ascending.
-  const citedNums = [
-    ...new Set([...content.matchAll(/\[(\d+)/g)].map((m) => parseInt(m[1], 10))),
-  ].sort((a, b) => a - b);
+  const citedNums = collectCitedNums(content, sources.length);
 
   if (citedNums.length === 0) return content;
 
@@ -70,10 +88,7 @@ export function injectCitationLinks(content: string, sources: Source[]): string 
     sourceTitles.push(s.file ?? "");
   }
 
-  const citationRe =
-    /\[(\d+)(?:,\s*p\.\s*(\d+)(?:[\u2013-]\s*\d+)?)?(?:\s*;\s*\d+\s*,\s*p\.\s*\d+(?:[\u2013-]\s*\d+)?)*\]/g;
-
-  return renumbered.replace(citationRe, (match, num, pageInMatch) => {
+  return renumbered.replace(CITATION_RE, (match, num, pageInMatch) => {
     const idx = parseInt(num, 10) - 1;
     if (idx < 0 || idx >= sourceUrls.length || !sourceUrls[idx]) return match;
 

@@ -80,30 +80,49 @@ When document RAG is enabled and initialized, the agent registers:
 
 - `search_documents(query: str, limit: int = 5)`
 
-Tool output is internal JSON containing:
+Tool output is formatted plain text with two sections:
 
-- retrieved snippets
-- source reference metadata (`source_id`, `source_uri`, `title`)
-- chunk/page metadata when available
-- score when available
+1. **Snippets** — one block per retrieved chunk, prefixed with its citation number, optional page, and filename:
+   ```
+   [1] (page 3) report.pdf:
+   The actual chunk text here…
+
+   [2] guide.pdf:
+   Another chunk of text…
+   ```
+
+2. **Citation metadata** — a trailing block the model uses for inline references:
+   ```
+   ---
+   Citation metadata (use these numbers for inline references):
+   - [1] report.pdf, page 3
+   - [2] guide.pdf
+   ```
+
+Citation numbers are stable across multi-turn tool calls: chunks from the same
+document share a single number, and documents already tracked from a previous
+call keep their existing number.
 
 The existing `search_products` flow remains active and unchanged.
 
-## Chat response contract (single-pass structured grounding)
+## Chat response contract
 
-Chat flow for a document-grounded answer is now single-pass:
+Chat flow for a document-grounded answer:
 
 1. user message arrives
-2. model may call `search_documents`
-3. model returns one structured object with answer + selected sources
-4. backend sends one `end` frame containing those fields
+2. model may call `search_documents` (agentic loop)
+3. model streams the final answer as incremental `token` frames (same as non-RAG turns)
+4. backend sends an `end` frame with `sources` attached
+
+Token streaming works identically for all turns — document-grounded or not.
+The only difference is that the `end` frame includes a `sources` array when
+documents were retrieved.
 
 Example end frame:
 
 ```json
 {
   "type": "end",
-  "content": "...assistant answer...",
   "session_id": "abc",
   "sources": [
     {
@@ -118,10 +137,8 @@ Example end frame:
 }
 ```
 
-Frontend can render source chips/links from `sources` and open selected files.
-
-Note: because this is single-pass structured output, the final answer is emitted
-in the `end` frame (not incremental `token` chunks) for document-grounded turns.
+Frontend renders inline citation links from `[N]` markers in the streamed
+content and shows cited sources in the sources sidebar.
 
 ## Fetch full documents for source panel
 
