@@ -52,7 +52,7 @@ class MongoDocumentRagIngestionRepository:
         """Create the vector search index if absent, then wait until it is READY."""
         namespace_not_found = 26
         index_name = self._settings.mongodb_index_name
-        last_status = "missing"
+        last_status = "not_found"
 
         with self._mongo_client() as client:
             collection = self._collection(client)

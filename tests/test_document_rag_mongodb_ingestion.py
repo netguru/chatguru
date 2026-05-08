@@ -19,13 +19,14 @@ def test_mongodb_ingestion_adapter_ensure_ready_raises_on_timeout() -> None:
     collection.list_search_indexes.side_effect = [
         [],
         [{"name": settings.mongodb_index_name, "status": "BUILDING"}],
+        [{"name": settings.mongodb_index_name, "status": "BUILDING"}],
     ]
 
     with (
         patch.object(adapter, "_mongo_client", return_value=client_context),
         patch.object(adapter, "_collection", return_value=collection),
-        # Three monotonic() calls: deadline start, first in-time loop check, then timeout exit.
-        patch("document_rag.ingestion.adapters.mongodb.time.monotonic", side_effect=[0, 0, 121]),
+        # Four monotonic() calls: deadline start, two in-time loop checks, then timeout exit.
+        patch("document_rag.ingestion.adapters.mongodb.time.monotonic", side_effect=[0, 0, 60, 121]),
         patch("document_rag.ingestion.adapters.mongodb.time.sleep"),
         pytest.raises(
             TimeoutError,
@@ -38,3 +39,4 @@ def test_mongodb_ingestion_adapter_ensure_ready_raises_on_timeout() -> None:
         adapter.ensure_ready(embedding_dimensions=1536)
 
     collection.create_search_index.assert_called_once()
+    assert collection.list_search_indexes.call_count == 3
