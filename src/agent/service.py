@@ -83,7 +83,17 @@ async def _execute_tool(
     tool_registry: dict[str, BaseTool],
     config: RunnableConfig | None = None,
 ) -> tuple[str, bool]:
-    """Execute a tool and return (result_string, success_bool)."""
+    """Execute a tool and return the result with success status.
+
+    Args:
+        tool_name: Name of the tool to execute
+        tool_args: Arguments to pass to the tool
+        tool_registry: Registry mapping tool names to tool instances
+        config: Optional LangChain runnable config (e.g. for tracing callbacks)
+
+    Returns:
+        Tuple of (result_string, success_bool)
+    """
     if tool_name not in tool_registry:
         return f"Unknown tool: {tool_name}", False
 
@@ -162,20 +172,9 @@ class Agent:
 
         @tool
         async def search_products(query: str) -> str:
-            """
-            Search for fashion products in the catalog using semantic search (RAG).
+            """Search the product catalog (semantic / RAG). Use for clothing, shopping, or inventory questions.
 
-            Use this tool when the customer asks about clothing items, products,
-            or wants to browse/shop. This searches our inventory using AI-powered
-            semantic understanding via sqlite-vec and returns relevant products.
-
-            Args:
-                query: The search query describing the products the customer wants
-                      (e.g., "red jeans", "winter jackets", "cozy sweater")
-
-            Returns:
-                Formatted product information including prices, colors, sizes, and details.
-                If no products found, returns a message indicating no matches.
+            Returns formatted product lines from sqlite-vec, or a short no-match message.
             """
             try:
                 search_query = Agent._extract_product_query(query)
@@ -263,21 +262,7 @@ class Agent:
 
     @staticmethod
     def _extract_product_query(message: str) -> str:
-        """
-        Extract product type from query, removing price constraints and question words.
-        This method is needed to extract user intent. We could do it with LLM, but it's faster to do it here.
-
-        Examples:
-            "gloves under 50$" -> "gloves"
-            "blue jeans less than 100" -> "blue jeans"
-            "show me affordable shirts" -> "shirts"
-
-        Args:
-            message: Original user message
-
-        Returns:
-            Simplified query focusing on product type
-        """
+        """Normalize user text into vector-search terms (strip prices, filler, punctuation)."""
         query = message.lower()
         # Remove price patterns with keywords
         query = re.sub(
