@@ -29,9 +29,6 @@ COPY pyproject.toml uv.lock ./
 
 # CPU-only PyTorch is handled by uv.lock via [tool.uv.sources] in pyproject.toml
 # (pytorch-cpu index, Linux-only marker) — no post-install swap needed.
-#
-# opencv-python ships X11 libs we don't need in a headless container.
-# Uninstall it first, then install the headless variant (same cv2 API, no X11).
 RUN uv sync --frozen --no-dev \
     && uv pip uninstall opencv-python \
     && uv pip install opencv-python-headless
