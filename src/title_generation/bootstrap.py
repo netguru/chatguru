@@ -51,7 +51,11 @@ async def generate_title(
         visitor_id: Optional visitor/user ID forwarded to Langfuse.
     """
     try:
-        with propagate_attributes(session_id=session_id, user_id=visitor_id):
+        with propagate_attributes(
+            trace_name="title-generation",
+            session_id=session_id,
+            user_id=visitor_id,
+        ):
             try:
                 title = str(await get_title_generator().generate(first_message))
             finally:

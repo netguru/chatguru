@@ -8,8 +8,6 @@ from langfuse import (
     get_client,
     propagate_attributes,
 )
-
-# (get_client re-exported)
 from langfuse.langchain import CallbackHandler as LangfuseCallbackHandler
 
 from config import get_langfuse_settings, get_logger
@@ -65,6 +63,9 @@ def is_langfuse_initialized() -> bool:
 def get_langfuse_handler() -> LangfuseCallbackHandler | None:
     """
     Return a new LangChain callback handler wired to the Langfuse client.
+
+    Must be called inside a ``propagate_attributes`` context manager so the
+    handler inherits the current trace context (trace ID, session ID, user ID).
 
     Returns None when Langfuse has not been initialised so callers can safely
     skip attaching callbacks without extra guards.

@@ -80,10 +80,10 @@ services:
       - mongodb-configdb-data:/data/configdb
     restart: unless-stopped
     healthcheck:
-      test: [ "CMD", "mongosh", "--quiet", "--eval", "if (!db.hello().isWritablePrimary) quit(1)" ]
-      interval: 5m
-      timeout: 5s
-      retries: 10
+      test: ["CMD", "bash", "-c", "mongosh --eval \"db.hello().isWritablePrimary\" --quiet | grep -q true"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
       start_period: 30s
     networks:
       - chatguru-network
@@ -152,7 +152,7 @@ services:
 
       # Vector Database Service
       - VECTOR_DB_TYPE=mongodb
-      - VECTOR_DB_MONGODB_URL=http://mongo-vector-db:8002
+      - VECTOR_DB_MONGODB_API_URL=http://mongo-vector-db:8002
 
       # Chat history persistence (optional).
       # Unset = disabled (stateless). Set to enable; migrations run automatically on startup.
@@ -169,6 +169,17 @@ services:
       - RATE_LIMIT_WINDOW_SECONDS=${RATE_LIMIT_WINDOW_SECONDS:-86400}
       - RATE_LIMIT_TRUST_PROXY=${RATE_LIMIT_TRUST_PROXY:-false}
 
+      # Document RAG (startup ingestion from /app/rag_data when enabled)
+      - DOCUMENT_RAG_ENABLED=${DOCUMENT_RAG_ENABLED:-false}
+      - DOCUMENT_RAG_BACKEND=${DOCUMENT_RAG_BACKEND:-mongodb}
+      - DOCUMENT_RAG_MONGODB_URI=mongodb://mongodb:27017/?directConnection=true
+      - DOCUMENT_RAG_MONGODB_DATABASE=${DOCUMENT_RAG_MONGODB_DATABASE:-chatguru}
+      - DOCUMENT_RAG_MONGODB_COLLECTION=${DOCUMENT_RAG_MONGODB_COLLECTION:-documents}
+      - DOCUMENT_RAG_MONGODB_INDEX_NAME=${DOCUMENT_RAG_MONGODB_INDEX_NAME:-document_vector_index}
+      - DOCUMENT_RAG_MONGODB_FILES_BUCKET=${DOCUMENT_RAG_MONGODB_FILES_BUCKET:-document_sources}
+      - DOCUMENT_RAG_EMBEDDING_PROVIDER=${DOCUMENT_RAG_EMBEDDING_PROVIDER:-openai}
+      - DOCUMENT_RAG_INGEST_FULL_REPLACE=${DOCUMENT_RAG_INGEST_FULL_REPLACE:-}
+
       # FastAPI Configuration
       - FASTAPI_HOST=0.0.0.0
       - FASTAPI_PORT=8000
@@ -181,10 +192,13 @@ services:
     depends_on:
       mongo-vector-db:
         condition: service_healthy
+      mongodb:
+        condition: service_healthy
 
     restart: unless-stopped
 
     volumes:
+      - rag-ingest-state:/app/rag_ingest_state
       - chatguru-data:/data
 
     healthcheck:
@@ -299,6 +313,8 @@ volumes:
   mongodb-configdb-data:
     driver: local
   redis-data:
+    driver: local
+  rag-ingest-state:
     driver: local
 
 # --------------------------------------------------------------------------

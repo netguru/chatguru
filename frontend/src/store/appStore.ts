@@ -226,6 +226,7 @@ export const useAppStore = create<AppState>((set) => ({
           role: entry.role,
           content: entry.content,
           ...(entry.traceId ? { traceId: entry.traceId } : {}),
+          ...(entry.sources ? { sources: entry.sources } : {}),
         }));
         return {
           ...s,

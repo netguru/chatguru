@@ -46,6 +46,7 @@ chat_messages = Table(
     Column("content", Text, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("trace_id", String(512), nullable=True),
+    Column("sources", Text, nullable=True),
 )
 
 Index(

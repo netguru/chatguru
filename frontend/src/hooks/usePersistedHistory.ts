@@ -1,6 +1,8 @@
 import { useEffect } from "react";
 import type { MessageRole } from "../types/chat";
+import type { BackendSource } from "../types/chat";
 import { selectCurrentSession, useAppStore } from "../store/appStore";
+import { mapBackendSources } from "../utils/sourceMapping";
 import { getOrCreateVisitorId } from "../utils/visitorId";
 
 interface ConversationDto {
@@ -13,12 +15,14 @@ interface HistoryMessageDto {
   role: string;
   content: string;
   trace_id?: string;
+  sources?: BackendSource[];
 }
 
 interface ValidHistoryMessageDto {
   role: MessageRole;
   content: string;
   trace_id?: string;
+  sources?: BackendSource[];
 }
 
 function isMessageRole(role: string): role is MessageRole {
@@ -91,6 +95,7 @@ export function usePersistedHistory() {
             role: entry.role,
             content: entry.content,
             ...(entry.trace_id ? { traceId: entry.trace_id } : {}),
+            ...(entry.sources ? { sources: mapBackendSources(entry.sources) ?? undefined } : {}),
           }));
 
         hydrateSessionHistory(sessionId, history);
