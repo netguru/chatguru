@@ -102,12 +102,65 @@ async def flush_langfuse_async() -> None:
     loop.run_in_executor(None, flush_langfuse)
 
 
+def get_prompt_text(
+    name: str,
+    *,
+    fallback: str,
+    label: str = "production",
+) -> str:
+    """Fetch a text prompt from Langfuse, falling back to a local string on any failure.
+
+    The Langfuse SDK caches prompts in-memory (default TTL ~60s), so calling this
+    per-request is cheap — most calls are an in-process dict lookup.  Edits made
+    in the Langfuse UI take effect within the cache TTL without a redeploy.
+
+    Returns the local ``fallback`` when:
+      - Langfuse is not initialised (missing creds, disabled in settings, etc.).
+      - The prompt does not exist on the Langfuse server (or the configured
+        ``label`` has no matching version).
+      - The fetched value is empty / not a string (e.g. someone configured a
+        chat prompt under this name by mistake).
+      - Any network or SDK error occurs.
+
+    Args:
+        name: The prompt name as registered in Langfuse (e.g. ``CHAT_SYSTEM_PROMPT``).
+        fallback: Local string to return when the remote fetch cannot be used.
+            Must always be a sensible default — the chat path depends on it.
+        label: Langfuse prompt label to fetch.  Defaults to ``"production"``.
+
+    Returns:
+        Either the remote prompt text or the supplied fallback.  Never raises.
+    """
+    if not _langfuse_initialized:
+        return fallback
+
+    try:
+        prompt_obj = get_client().get_prompt(name, label=label)
+    except Exception:
+        logger.exception(
+            "Failed to fetch Langfuse prompt %r (label=%r); using local fallback",
+            name,
+            label,
+        )
+        return fallback
+
+    text = getattr(prompt_obj, "prompt", None)
+    if not isinstance(text, str) or not text.strip():
+        logger.warning(
+            "Langfuse prompt %r returned empty / non-string content; using local fallback",
+            name,
+        )
+        return fallback
+    return text
+
+
 __all__ = [
     "LangfuseCallbackHandler",
     "flush_langfuse",
     "flush_langfuse_async",
     "get_client",
     "get_langfuse_handler",
+    "get_prompt_text",
     "init_langfuse",
     "is_langfuse_initialized",
     "propagate_attributes",

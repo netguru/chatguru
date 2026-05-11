@@ -19,6 +19,7 @@ from config import get_llm_settings, get_logger
 from tracing import (
     flush_langfuse_async,
     get_langfuse_handler,
+    get_prompt_text,
     init_langfuse,
     propagate_attributes,
 )
@@ -62,6 +63,11 @@ logger = get_logger("agent.service")
 
 # Maximum number of tool-calling iterations to prevent infinite loops
 MAX_TOOL_ITERATIONS = 10
+
+# Name of the chat system prompt as registered in Langfuse prompt management.
+# When the fetch fails (Langfuse disabled, unreachable, or the prompt is missing)
+# the agent falls back to ``agent.prompt.SYSTEM_PROMPT``.
+CHAT_SYSTEM_PROMPT_NAME = "CHAT_SYSTEM_PROMPT"
 
 
 def _convert_history_to_messages(history: list[dict[str, str]]) -> list[BaseMessage]:
@@ -234,8 +240,16 @@ class Agent:
     def _build_messages_from_transcript(
         transcript: list[dict[str, str]],
     ) -> list[BaseMessage]:
-        """Build LangChain messages: system prompt + full conversation transcript."""
-        messages: list[BaseMessage] = [SystemMessage(content=SYSTEM_PROMPT.strip())]
+        """Build LangChain messages: system prompt + full conversation transcript.
+
+        The system prompt is fetched from Langfuse (``CHAT_SYSTEM_PROMPT``) on
+        every turn so edits in the Langfuse UI take effect within the SDK
+        cache TTL (~60 s) without redeploying.  When Langfuse is unavailable
+        the call falls back to the local ``SYSTEM_PROMPT`` (StyleBot) so the
+        chat surface stays functional.
+        """
+        system_prompt = get_prompt_text(CHAT_SYSTEM_PROMPT_NAME, fallback=SYSTEM_PROMPT)
+        messages: list[BaseMessage] = [SystemMessage(content=system_prompt.strip())]
         messages.extend(_convert_history_to_messages(transcript))
         return messages
 
