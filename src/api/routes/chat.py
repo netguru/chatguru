@@ -4,6 +4,7 @@ import asyncio
 import base64
 import contextlib
 import json
+import re
 import uuid
 from typing import Annotated, Any, Literal, Self
 
@@ -35,9 +36,17 @@ from vector_db import VectorDatabase, create_vector_database
 logger = get_logger(__name__)
 
 
-_MAX_CONTENT_LENGTH = 8000
+_MAX_CONTENT_LENGTH = 200_000  # large enough for document attachments
 _MAX_TRANSCRIPT_MESSAGES = 200
-_MAX_LAST_USER_MESSAGE_LENGTH = 2000
+_MAX_LAST_USER_MESSAGE_LENGTH = 200_000  # same ceiling as _MAX_CONTENT_LENGTH
+
+_DOCUMENT_TAG_RE = re.compile(r"<document\b[^>]*>.*?</document>", re.DOTALL)
+
+
+def _strip_document_tags(text: str) -> str:
+    """Remove <document> blocks from a message before title generation."""
+    return _DOCUMENT_TAG_RE.sub("", text).strip()
+
 
 _ALLOWED_MIME_TYPES = frozenset(
     {
@@ -390,10 +399,11 @@ async def generate_conversation_title(
             detail="Conversation not found for visitor_id + session_id",
         )
 
-    title = truncate_title(payload.first_message)
+    first_message_text = _strip_document_tags(payload.first_message)
+    title = truncate_title(first_message_text)
     try:
         title = await generate_title(
-            payload.first_message,
+            first_message_text,
             session_id=payload.session_id,
             visitor_id=payload.visitor_id,
         )
@@ -498,7 +508,7 @@ async def _handle_chat_turn(  # noqa: C901, PLR0912
             visitor_id=visitor_id, session_id=session_id
         )
         if is_first_message:
-            fallback_title = truncate_title(current_user_content)
+            fallback_title = truncate_title(_strip_document_tags(current_user_content))
             try:
                 await repo.create_conversation(
                     visitor_id=visitor_id,
