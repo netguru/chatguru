@@ -15,6 +15,7 @@ graph LR
         API --> AGENT[Agent Service]
         AGENT --> LLM[Azure OpenAI]
         AGENT -->|RAG Tool| PRODUCTDB[Product DB<br/>sqlite-vec]
+        AGENT -->|search_documents| DOCRAG[Document RAG Repo<br/>MongoDB]
         AGENT --> LANGFUSE[Langfuse<br/>Tracing]
         API -.-> MINI_UI[Minimal HTML at /<br/>(tests only)]
     end
@@ -96,7 +97,23 @@ The system is designed to evolve from a simple chat interface to a full agentic 
 Agent → HTTP GET /search?q=... → product-db container → sqlite-vec → Results
 ```
 
-### 4. External Services
+### 4. Document RAG Repository
+
+**Purpose**: Retrieval-only document context for grounded answers (`search_documents` tool).
+
+**Architecture**:
+- Port + adapter + factory + lifecycle bootstrap (mirrors persistence architecture)
+- Typed retrieval models (`DocumentRetrievalHit`, `DocumentSourceReference`)
+- MongoDB vector search adapter as first backend
+
+**Lifecycle policy**:
+- Disabled by default (`DOCUMENT_RAG_ENABLED=false`)
+- Fail-fast startup when explicitly enabled but unavailable/misconfigured
+- Kept independent from product RAG runtime path
+
+See [document-rag.md](document-rag.md) for implementation details.
+
+### 5. External Services
 
 #### Azure OpenAI (Direct Integration)
 - **Purpose**: Large Language Model inference

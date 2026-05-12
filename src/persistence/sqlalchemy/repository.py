@@ -188,7 +188,7 @@ class SqlAlchemyChatHistoryRepository(ChatHistoryRepository):
     # Messages
     # ------------------------------------------------------------------
 
-    async def append_message(
+    async def append_message(  # noqa: PLR0913
         self,
         *,
         visitor_id: str,
@@ -196,6 +196,7 @@ class SqlAlchemyChatHistoryRepository(ChatHistoryRepository):
         role: str,
         content: str,
         trace_id: str | None = None,
+        sources: str | None = None,
     ) -> None:
         validate_chat_message_role(role)
         message_id = str(uuid.uuid4())
@@ -210,6 +211,7 @@ class SqlAlchemyChatHistoryRepository(ChatHistoryRepository):
                     content=content,
                     created_at=created_at,
                     trace_id=trace_id,
+                    sources=sources,
                 )
             )
 
@@ -241,6 +243,7 @@ class SqlAlchemyChatHistoryRepository(ChatHistoryRepository):
                 content=str(r["content"]),
                 created_at=_as_utc_datetime(r["created_at"]),
                 trace_id=str(r["trace_id"]) if r["trace_id"] is not None else None,
+                sources=str(r["sources"]) if r["sources"] is not None else None,
             )
             for r in rows
         ]
