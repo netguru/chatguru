@@ -11,7 +11,12 @@ FROM python:3.12-slim
 
 # Install curl for Docker healthchecks and uv installation
 # Note: Healthcheck endpoint is /health (configured in docker-compose.yml)
-RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      curl \
+      libxcb1 \
+      libgl1 \
+      libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install uv (fast Python package installer)
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
