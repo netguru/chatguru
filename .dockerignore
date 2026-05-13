@@ -1,0 +1,46 @@
+# ============================================================================
+# .dockerignore — keeps the Docker build context lean.
+# Without this file Docker would send the .venv (~1.4 GB) and
+# frontend/node_modules (~350 MB) to the daemon on every build.
+# ============================================================================
+
+# Python virtual environment and caches
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Node modules (re-installed inside the builder stage via npm ci)
+frontend/node_modules/
+frontend/dist/
+
+# Git and IDE
+.git/
+.gitignore
+.github/
+.cursor/
+
+# Dockerfiles themselves don't need to be inside the image
+docker/Dockerfile*
+.dockerignore
+
+# Local config / secrets
+.env
+.env.local
+
+# OS artefacts
+.DS_Store
+Thumbs.db
+
+# SQLite databases that may live in the workspace
+*.db
+*.sqlite
+
+# Docs and non-runtime files
+docs/
+CHANGELOG.md

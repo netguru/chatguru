@@ -6,11 +6,12 @@ export interface HistoryMessage {
   role: MessageRole;
   content: string;
   traceId?: string;
+  sources?: Source[];
 }
 
 export interface Source {
-  file: string;
-  pages: number[];
+  file?: string;
+  pages?: number[];
   url?: string;
   restricted?: boolean;
 }
@@ -47,12 +48,22 @@ export interface WsTokenEvent extends WsBaseEvent {
   content: string;
 }
 
+// Raw source shape sent by the backend in the "end" WebSocket frame.
+// Field names differ from the frontend Source type — useChat maps between them.
+export interface BackendSource {
+  source_id: string;
+  source_uri?: string | null;
+  title?: string | null;
+  chunk_id?: string | null;
+  source_type?: string | null;
+  page?: number | null;
+}
+
 export interface WsEndEvent extends WsBaseEvent {
   type: "end";
   content: string;
   trace_id?: string;
-  // Backend does not currently send sources; reserved for future use.
-  sources?: Source[] | null;
+  sources?: BackendSource[] | null;
 }
 
 export interface WsErrorEvent extends WsBaseEvent {

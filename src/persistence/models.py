@@ -26,3 +26,4 @@ class StoredChatMessage:
     content: str
     created_at: datetime
     trace_id: str | None = None
+    sources: str | None = None

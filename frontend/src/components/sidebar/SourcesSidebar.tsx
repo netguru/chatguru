@@ -61,7 +61,7 @@ export function SourcesSidebar() {
           <SidebarContent>
             <SidebarMenu>
               {sources.map((source) => (
-                <SidebarMenuItem key={`${source.file}-${source.pages.join(",")}`}>
+                <SidebarMenuItem key={`${source.file}-${source.pages?.join(",")}`}>
                   <SidebarMenuButton onClick={() => handleSourceClick(source)}>
                     {source.restricted ? (
                       <LockSimpleIcon weight="bold" />
@@ -70,9 +70,9 @@ export function SourcesSidebar() {
                     )}
                     <div className="flex flex-col min-w-0">
                       <span className="truncate">{source.file}</span>
-                      {source.pages.length > 0 && (
+                      {(source.pages?.length ?? 0) > 0 && (
                         <span className="text-t5 text-text-tertiary">
-                          p. {source.pages.join(", ")}
+                          p. {source.pages?.join(", ")}
                         </span>
                       )}
                     </div>

@@ -4,8 +4,10 @@ import asyncio
 import base64
 import contextlib
 import json
+import mimetypes
 import re
 import uuid
+from collections.abc import AsyncIterator
 from typing import Annotated, Any, Literal, Self
 
 from fastapi import (
@@ -16,7 +18,11 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
+from fastapi.responses import StreamingResponse
+from gridfs import GridFSBucket, GridOut
+from gridfs.errors import NoFile
 from pydantic import BaseModel, Field, ValidationError, model_validator
+from pymongo import MongoClient
 from starlette.requests import HTTPConnection
 
 from agent.service import Agent
@@ -26,7 +32,13 @@ from api.errors import (
     ValidationFailedError,
     WebSocketErrorType,
 )
-from config import get_app_settings, get_logger, get_rate_limit_settings
+from config import (
+    get_app_settings,
+    get_document_rag_settings,
+    get_logger,
+    get_rate_limit_settings,
+)
+from document_rag import get_document_rag_repository
 from persistence import get_chat_history_repository, is_persistence_enabled
 from rate_limiting import consume_rate_limit
 from title_generation import generate_title, truncate_title
@@ -109,9 +121,8 @@ class ChatMessage(BaseModel):
     visitor_id: str | None = Field(
         None,
         description=(
-            "Stable ID for persisted history (per device or user); "
-            "required when persistence is enabled, otherwise a "
-            "per-connection default is generated"
+            "Stable ID for persisted history (per device or user); required when "
+            "persistence is enabled, otherwise a per-connection default is generated"
         ),
     )
     messages: list[HistoryMessage] = Field(
@@ -253,10 +264,6 @@ def _validate_message_format(message_data: object) -> None:
 def _get_client_ip(conn: HTTPConnection) -> str | None:
     """Extract the real client IP address from an HTTP or WebSocket connection.
 
-    Accepts any Starlette ``HTTPConnection`` — both ``Request`` (HTTP) and
-    ``WebSocket`` extend this base class — so the same logic is shared across
-    the ``/feedback`` endpoint and the WebSocket chat path.
-
     Returns ``None`` when the IP cannot be determined (e.g. certain ASGI
     transports set ``conn.client`` to ``None``). Callers must skip rate
     limiting for a ``None`` result rather than falling back to a shared key —
@@ -317,11 +324,69 @@ async def _initialize_vector_database() -> VectorDatabase | None:
         logger.exception("Failed to initialize vector database")
         _vector_database_cache = None
 
-    # Only mark as initialized when the database is actually reachable.
-    # This intentionally allows retries on subsequent WebSocket connections
-    # after a transient startup failure (e.g., vector-db container not ready yet).
+    # Set only when healthy so later connections can retry after transient startup failures.
     _vector_database_initialized = _vector_database_cache is not None
     return _vector_database_cache
+
+
+@router.get("/documents/{source_path:path}")
+async def get_document_source(source_path: str) -> StreamingResponse:
+    """Serve a source document from MongoDB GridFS.
+
+    Blocking PyMongo/GridFS calls are offloaded to the default thread-pool
+    executor so the async event loop is never blocked.  The file is streamed
+    in chunks to avoid loading the entire document into memory.
+    """
+    settings = get_document_rag_settings()
+    if not source_path.strip():
+        raise HTTPException(status_code=400, detail="Invalid document path")
+    if source_path.startswith("/") or ".." in source_path.split("/"):
+        raise HTTPException(status_code=400, detail="Invalid document path")
+
+    loop = asyncio.get_event_loop()
+
+    def _open_gridfs_stream() -> tuple[GridOut | None, str | None, str | None]:
+        client: MongoClient[dict[str, Any]] = MongoClient(
+            settings.mongodb_uri,
+            serverSelectionTimeoutMS=settings.mongodb_connection_timeout_ms,
+            connectTimeoutMS=settings.mongodb_connection_timeout_ms,
+        )
+        database = client[settings.mongodb_database]
+        bucket = GridFSBucket(database, bucket_name=settings.mongodb_files_bucket)
+        try:
+            stream = bucket.open_download_stream_by_name(source_path)
+        except NoFile:
+            return None, None, None
+        metadata = dict(stream.metadata or {})
+        media_type = metadata.get("content_type")
+        if not media_type:
+            guessed, _ = mimetypes.guess_type(source_path)
+            media_type = guessed or "application/octet-stream"
+        filename = stream.filename
+        return stream, media_type, filename
+
+    stream, media_type, filename = await loop.run_in_executor(None, _open_gridfs_stream)
+    if stream is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    chunk_size = 256 * 1024  # 256 KB
+
+    async def _stream_chunks() -> AsyncIterator[bytes]:
+        try:
+            while True:
+                chunk = await loop.run_in_executor(None, stream.read, chunk_size)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            await loop.run_in_executor(None, stream.close)
+
+    headers = {
+        "Content-Disposition": f'inline; filename="{filename}"',
+    }
+    return StreamingResponse(
+        content=_stream_chunks(), media_type=media_type, headers=headers
+    )
 
 
 @persistence_router.get("/conversations")
@@ -357,7 +422,7 @@ async def get_history(
         str, Query(min_length=1, max_length=512, description="Visitor ID")
     ],
     session_id: Annotated[str, Query(description="Session ID")] = "default",
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     """Return persisted messages for a visitor+session pair, oldest first.
 
     Note: visitor_id is client-supplied and not authenticated. This endpoint
@@ -369,14 +434,16 @@ async def get_history(
         msg = "persistence router registered but repository is not initialised"
         raise RuntimeError(msg)
     messages = await repo.list_messages(visitor_id=visitor_id, session_id=session_id)
-    return [
-        {
-            "role": m.role,
-            "content": m.content,
-            **({"trace_id": m.trace_id} if m.trace_id is not None else {}),
-        }
-        for m in messages
-    ]
+    result = []
+    for m in messages:
+        entry: dict[str, Any] = {"role": m.role, "content": m.content}
+        if m.trace_id is not None:
+            entry["trace_id"] = m.trace_id
+        if m.sources is not None:
+            with contextlib.suppress(Exception):
+                entry["sources"] = json.loads(m.sources)
+        result.append(entry)
+    return result
 
 
 @persistence_router.post("/conversations/title")
@@ -563,10 +630,14 @@ async def _handle_chat_turn(  # noqa: C901, PLR0912
             }
         )
 
+    resolved_answer = full_response
+    sources = agent.get_last_used_sources()
+
     end_frame: dict[str, Any] = {
         "type": "end",
-        "content": full_response,
+        "content": resolved_answer,
         "session_id": session_id,
+        "sources": sources,
     }
     trace_id = agent.last_trace_id
     safe_trace_id = (
@@ -591,8 +662,9 @@ async def _handle_chat_turn(  # noqa: C901, PLR0912
                 visitor_id=visitor_id,
                 session_id=session_id,
                 role="assistant",
-                content=full_response,
+                content=resolved_answer,
                 trace_id=trace_id,
+                sources=json.dumps(sources) if sources else None,
             )
         except Exception:
             # The response has already been delivered to the client via the "end"
@@ -701,7 +773,8 @@ async def websocket_chat(websocket: WebSocket) -> None:
 
     try:
         vector_db = await _initialize_vector_database()
-        agent = Agent(vector_database=vector_db)
+        document_repo = get_document_rag_repository()
+        agent = Agent(vector_database=vector_db, document_repository=document_repo)
         connection_visitor_id: str | None = None
         # Extract once per connection — the IP cannot change mid-WebSocket.
         client_ip = _get_client_ip(websocket)

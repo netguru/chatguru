@@ -13,9 +13,10 @@ import remarkGfm from "remark-gfm";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { useFeedback } from "../../hooks/useFeedback";
 import { useAppStore } from "../../store/appStore";
-import type { ChatMessage as ChatMessageType } from "../../types/chat";
-import { injectCitationLinks } from "../../utils/citationLinks";
+import type { ChatMessage as ChatMessageType, Source } from "../../types/chat";
+import { filterCitedSources, injectCitationLinks } from "../../utils/citationLinks";
 import { cn } from "../../utils/utils";
+import { PdfViewerModal } from "../modals/PdfViewerModal";
 import { ThumbsDownModal } from "../modals/ThumbsDownModal";
 import { Avatar, AvatarFallback } from "../ui/avatar";
 import { Button } from "../ui/button";
@@ -30,20 +31,55 @@ const DOCUMENT_TAG_RE = /<document name="([^"]+)">([\s\S]*?)<\/document>/g;
 
 function parseUserMessage(content: string): { documents: string[]; text: string } {
   const documents: string[] = [];
-  const text = content.replace(DOCUMENT_TAG_RE, (_, filename: string) => {
-    documents.push(filename);
-    return "";
-  }).trim();
+  const text = content
+    .replace(DOCUMENT_TAG_RE, (_, filename: string) => {
+      documents.push(filename);
+      return "";
+    })
+    .trim();
   return { documents, text };
+}
+
+function isDocumentCitationHref(href: string | undefined): boolean {
+  if (!href) return false;
+  try {
+    return new URL(href, window.location.origin).pathname.startsWith("/documents/");
+  } catch {
+    return false;
+  }
 }
 
 export function ChatMessage({ message }: Props) {
   const isUser = message.role === "user";
+  const citedSources =
+    !isUser && message.sources?.length && message.content
+      ? filterCitedSources(message.content, message.sources)
+      : [];
   const { copied, copy } = useCopyToClipboard();
   const openSourcesPanel = useAppStore((s) => s.openSourcesPanel);
   const [thumbsDownOpen, setThumbsDownOpen] = useState(false);
   const [feedbackGiven, setFeedbackGiven] = useState<0 | 1 | null>(null);
+  const [activePdfSource, setActivePdfSource] = useState<Source | null>(null);
   const { submitFeedback, isSubmitting } = useFeedback();
+
+  function handleCitationLinkClick(href: string) {
+    try {
+      const url = new URL(href, window.location.origin);
+      const isDocumentLink = url.pathname.startsWith("/documents/");
+      if (!isDocumentLink) return false;
+      const sourceUri = url.pathname.replace("/documents/", "");
+      const pageMatch = url.hash.match(/^#page=(\d+)$/);
+      const page = pageMatch ? parseInt(pageMatch[1], 10) : undefined;
+      setActivePdfSource({
+        file: sourceUri,
+        url: url.pathname,
+        pages: page != null ? [page] : [],
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
 
   return (
     <>
@@ -102,9 +138,23 @@ export function ChatMessage({ message }: Props) {
                 <ReactMarkdown
                   remarkPlugins={[remarkGfm]}
                   components={{
-                    a: ({ node: _node, ...props }) => (
-                      <a {...props} target="_blank" rel="noopener noreferrer" />
-                    ),
+                    a: ({ node: _node, href, ...props }) => {
+                      const isDocLink = isDocumentCitationHref(href);
+                      if (isDocLink && href) {
+                        return (
+                          <a
+                            {...props}
+                            href={href}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              handleCitationLinkClick(href);
+                            }}
+                            style={{ cursor: "pointer" }}
+                          />
+                        );
+                      }
+                      return <a {...props} href={href} target="_blank" rel="noopener noreferrer" />;
+                    },
                   }}
                 >
                   {injectCitationLinks(message.content, message.sources ?? [])}
@@ -127,15 +177,15 @@ export function ChatMessage({ message }: Props) {
                   {copied ? <CheckIcon weight="bold" /> : <CopyIcon weight="bold" />}
                 </IconButton>
               )}
-              {message.sources && message.sources.length > 0 && (
+              {citedSources.length > 0 && (
                 <Button
                   variant="subtle"
                   color="neutral"
                   size="s"
-                  onClick={() => openSourcesPanel(message.sources ?? [])}
+                  onClick={() => openSourcesPanel(citedSources)}
                 >
                   <FoldersIcon weight="bold" />
-                  {message.sources.length} sources
+                  {citedSources.length} sources
                 </Button>
               )}
               <div className="ms-auto flex items-center gap-1">
@@ -180,6 +230,8 @@ export function ChatMessage({ message }: Props) {
         traceId={message.traceId}
         onSent={() => setFeedbackGiven(0)}
       />
+
+      <PdfViewerModal source={activePdfSource} onClose={() => setActivePdfSource(null)} />
     </>
   );
 }

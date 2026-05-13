@@ -18,6 +18,7 @@ from config import (
     get_llm_settings,
     get_logger,
 )
+from document_rag import init_document_rag, shutdown_document_rag
 from persistence import init_persistence, is_persistence_enabled, shutdown_persistence
 from rate_limiting import init_rate_limiting, shutdown_rate_limiting
 from title_generation import init_title_generation, shutdown_title_generation
@@ -49,6 +50,7 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
 
     init_langfuse()
     await init_persistence()
+    await init_document_rag()
     await init_title_generation()
     await init_rate_limiting()
 
@@ -56,6 +58,7 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
 
     await await_background_tasks()
     await shutdown_persistence()
+    await shutdown_document_rag()
     await shutdown_title_generation()
     await shutdown_rate_limiting()
     logger.info("Shutting down API server...")

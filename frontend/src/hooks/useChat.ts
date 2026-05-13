@@ -8,6 +8,7 @@ import type {
   WsOutboundMessage,
   WsTokenEvent,
 } from "../types/chat";
+import { mapBackendSources } from "../utils/sourceMapping";
 import { getOrCreateVisitorId } from "../utils/visitorId";
 
 // WebSocket path — matches backend @router.websocket("/ws") included without prefix.
@@ -120,7 +121,7 @@ export function useChat() {
       } else if (data.type === "end") {
         const endEvent = data as WsEndEvent;
         setStreaming(false);
-        finalizeLastMessage(endEvent.content, endEvent.sources ?? null, endEvent.trace_id ?? null);
+        finalizeLastMessage(endEvent.content, mapBackendSources(endEvent.sources), endEvent.trace_id ?? null);
         addToHistory({ role: "assistant", content: endEvent.content });
       } else if (data.type === "error") {
         const errorEvent = data as WsErrorEvent;

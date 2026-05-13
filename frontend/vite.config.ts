@@ -40,6 +40,10 @@ export default defineConfig({
         target: backendTarget,
         changeOrigin: true,
       },
+      "/documents": {
+        target: backendTarget,
+        changeOrigin: true,
+      },
     },
   },
 });

@@ -32,6 +32,8 @@ classifiers = [
     "Framework :: FastAPI",
 ]
 dependencies = [
+    "torch>=2.0",
+    "torchvision>=0.0",
     "fastapi>=0.104.0",
     "python-multipart>=0.0.9",
     "docling>=2.0.0",
@@ -48,6 +50,7 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0.0",
     "aiosqlite>=0.20.0",
     "alembic>=1.13.0",
+    "docling>=2.88.0",
     "redis[hiredis]>=5.0.0",
 ]
 
@@ -66,6 +69,31 @@ dev = [
     "mypy>=1.7.0",
     "ruff>=0.1.0",
     "pre-commit>=3.5.0",
+]
+
+# ---------------------------------------------------------------------------
+# uv configuration
+# ---------------------------------------------------------------------------
+
+# Use PyTorch CPU-only index so every environment (Docker, CI, dev on Linux)
+# gets ~750 MB CPU wheels instead of ~2.5 GB CUDA wheels.
+# `explicit = true` means this index is only used for packages listed in
+# [tool.uv.sources] — all other packages still resolve from PyPI.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+# On Linux (Docker/CI) use CPU-only wheels; macOS already ships CPU-only from PyPI.
+torch = [
+    { index = "pytorch-cpu", marker = "sys_platform == 'linux'" },
+]
+torchvision = [
+    { index = "pytorch-cpu", marker = "sys_platform == 'linux'" },
+]
+torchaudio = [
+    { index = "pytorch-cpu", marker = "sys_platform == 'linux'" },
 ]
 
 [tool.ruff]
@@ -88,7 +116,8 @@ ignore = [
     "CPY001",   # Missing copyright notice at top of file
 ]
 [tool.ruff.lint.per-file-ignores]
-"src/**/prompt.py" = ["ERA001", "N806", "E501", "S608"]
+"src/**/prompt.py" = ["ERA001", "N806", "E501", "S608", "RUF001"]
+"src/document_rag/ingestion/cli.py" = ["BLE001", "C901", "PLR0912", "PLR0913", "PLR0914", "PLR0915", "PLC0415", "S324", "T201", "UP038"]
 "tests/**/*.py" = ["ALL"]
 "alembic/**/*.py" = ["INP001", "TCH002"]
 "src/**/alembic/**/*.py" = ["INP001", "TCH002"]
@@ -98,7 +127,7 @@ max-args = 6
 
 [tool.ruff.lint.isort]
 # Treat flat modules under `src/` as first-party for import sorting
-known-first-party = ["api", "agent", "rag", "config", "product_db", "persistence", "title_generation"]
+known-first-party = ["api", "agent", "rag", "config", "product_db", "persistence", "title_generation", "document_rag"]
 [tool.mypy]
 python_version = "3.12"
 mypy_path = "."
@@ -155,4 +184,15 @@ dev = [
     "mypy>=1.19.1",
     "ragas>=0.4.2",
     "streamlit>=1.52.2",
+]
+# Minimal set for the mongo-vector-db container.
+# Install with: uv sync --only-group vector-db
+# This skips the main project deps (docling, torch, etc.) entirely.
+vector-db = [
+    "anyio>=4.0.0",
+    "fastapi[standard]>=0.104.0",
+    "langchain-openai>=0.0.5",
+    "pymongo>=4.7.0",
+    "pydantic-settings>=2.0.0",
+    "uvicorn[standard]>=0.24.0",
 ]

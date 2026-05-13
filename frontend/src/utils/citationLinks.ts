@@ -1,21 +1,84 @@
 import type { Source } from "../types/chat";
 
 /**
+ * Matches citation patterns: [1], [2, p. 3], [1, p. 1–2], [1, p. 1; 2, p. 3], etc.
+ * Requires a closing bracket to avoid false positives on markdown reference links
+ * ("[1]: …") or unrelated bracketed numbers ("[2024]" with values > sources.length).
+ */
+const CITATION_RE =
+  /\[(\d+)(?:,\s*p\.\s*(\d+)(?:[\u2013-]\s*\d+)?)?(?:\s*;\s*\d+\s*,\s*p\.\s*\d+(?:[\u2013-]\s*\d+)?)*\]/g;
+
+/**
+ * Collect distinct 1-based citation numbers from the text, clamped to the
+ * valid source range [1..maxNum].  Returns sorted ascending.
+ */
+function collectCitedNums(content: string, maxNum: number): number[] {
+  return [
+    ...new Set(
+      [...content.matchAll(CITATION_RE)]
+        .map((m) => parseInt(m[1], 10))
+        .filter((n) => n >= 1 && n <= maxNum)
+    ),
+  ].sort((a, b) => a - b);
+}
+
+/**
+ * Return only the sources actually cited in the content (i.e. referenced via
+ * [N] markers), compacted from 1.  Useful for the sources sidebar so uncited
+ * documents are not displayed.
+ */
+export function filterCitedSources(content: string, sources: Source[]): Source[] {
+  if (!content || !sources || sources.length === 0) return [];
+
+  return collectCitedNums(content, sources.length)
+    .map((n) => sources[n - 1])
+    .filter((s): s is Source => s != null);
+}
+
+/**
  * Inject inline citation links into response text. Replaces [1], [2], [1, p. 3],
  * [1, p. 1–2], [1, p. 1; 1, p. 2] etc. with markdown links to the document proxy URL.
  * Appends #page=N when the citation has an explicit page or the source has pages.
  * Uses source.file as link title (path). Returns text suitable for react-markdown.
+ *
+ * Citation numbers are compacted before link injection: e.g. if the model only
+ * cited [4] out of sources 1–5, the rendered output will show [1] pointing at
+ * that source. The remapping is purely cosmetic — sources are not reordered.
  */
 export function injectCitationLinks(content: string, sources: Source[]): string {
   if (!content || !sources || sources.length === 0) return content;
 
+  // Collect distinct source numbers that appear in the text, sorted ascending.
+  const citedNums = collectCitedNums(content, sources.length);
+
+  if (citedNums.length === 0) return content;
+
+  // Map old 1-based numbers → new compact 1-based numbers.
+  // Document-level deduplication is handled by the backend; the frontend only
+  // strips uncited entries and renumbers from 1.
+  const remap = new Map(citedNums.map((old, i) => [old, i + 1]));
+
+  // Renumber citation markers using the strict pattern so markdown reference
+  // links ("[1]: …") and unrelated bracketed numbers are left untouched.
+  const renumbered = content.replace(CITATION_RE, (match, numStr) => {
+    const oldNum = parseInt(numStr, 10);
+    const newNum = remap.get(oldNum);
+    if (newNum == null) return match;
+    return match.replace(`[${numStr}`, `[${newNum}`);
+  });
+
+  // Build a compact sources array aligned with the new 1-based numbering.
+  const compactSources: Source[] = citedNums
+    .map((old) => sources[old - 1])
+    .filter((s): s is Source => s != null);
+
   const sourceUrls: string[] = [];
   const sourceTitles: string[] = [];
 
-  for (const s of sources) {
+  for (const s of compactSources) {
     if (!s.url) {
       sourceUrls.push("");
-      sourceTitles.push(s.file.split(/[/\\]/).pop() ?? "");
+      sourceTitles.push(s.file?.split(/[/\\]/).pop() ?? "");
       continue;
     }
     let fullUrl: string;
@@ -25,21 +88,18 @@ export function injectCitationLinks(content: string, sources: Source[]): string 
       fullUrl = s.url;
     }
     sourceUrls.push(fullUrl);
-    sourceTitles.push(s.file);
+    sourceTitles.push(s.file ?? "");
   }
 
-  const citationRe =
-    /\[(\d+)(?:,\s*p\.\s*(\d+)(?:[\u2013-]\s*\d+)?)?(?:\s*;\s*\d+\s*,\s*p\.\s*\d+(?:[\u2013-]\s*\d+)?)*\]/g;
-
-  return content.replace(citationRe, (match, num, pageInMatch) => {
+  return renumbered.replace(CITATION_RE, (match, num, pageInMatch) => {
     const idx = parseInt(num, 10) - 1;
     if (idx < 0 || idx >= sourceUrls.length || !sourceUrls[idx]) return match;
 
     let u = sourceUrls[idx];
     const pageNum = pageInMatch
       ? parseInt(pageInMatch, 10)
-      : sources[idx].pages?.length > 0
-        ? sources[idx].pages[0]
+      : (compactSources[idx].pages?.length ?? 0) > 0
+        ? compactSources[idx].pages?.[0]
         : null;
 
     if (pageNum != null && pageNum > 0) u = `${u}#page=${pageNum}`;

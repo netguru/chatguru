@@ -1,13 +1,38 @@
 """Agent component tests."""
 
+from __future__ import annotations
+
 from collections.abc import AsyncIterator
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessageChunk
 
 from src.agent.service import Agent
+
+
+class _FakeDocumentRepository:
+    async def connect(self) -> None:
+        return
+
+    async def search(self, query: str, limit: int = 5) -> list:
+        from document_rag.models import DocumentRetrievalHit, DocumentSourceReference
+
+        return [
+            DocumentRetrievalHit(
+                snippet=f"Snippet for {query}",
+                score=0.91,
+                source=DocumentSourceReference(
+                    source_id="doc-42",
+                    source_uri="docs/guide.md",
+                    title="Guide",
+                ),
+            )
+        ]
+
+    async def close(self) -> None:
+        return
 
 
 def test_create_agent() -> None:
@@ -161,6 +186,58 @@ async def test_agent_with_tool_call() -> None:
 
 
 @pytest.mark.asyncio
+async def test_document_tool_returns_snippet_with_source_reference() -> None:
+    sources: list[dict] = []
+    tool = Agent._create_document_rag_tool(_FakeDocumentRepository(), sources)
+    result = await tool.ainvoke({"query": "install"})
+    assert "Snippet for install" in result
+    assert "[1]" in result
+    assert "guide.md" in result
+    # Source should be tracked with the correct metadata
+    assert len(sources) == 1
+    assert sources[0]["source_id"] == "doc-42"
+    assert sources[0]["source_uri"] == "docs/guide.md"
+
+
+@pytest.mark.asyncio
+async def test_agent_collects_structured_sources_from_document_tool() -> None:
+    call_count = {"count": 0}
+
+    async def mock_astream(
+        messages: list, *, config: dict | None = None
+    ) -> AsyncIterator[AIMessageChunk]:
+        call_count["count"] += 1
+        if call_count["count"] == 1:
+            chunk = AIMessageChunk(content="Checking docs...")
+            chunk.tool_calls = [
+                {
+                    "name": "search_documents",
+                    "args": {"query": "setup", "limit": 3},
+                    "id": "doc_call_1",
+                }
+            ]
+            yield chunk
+        else:
+            yield AIMessageChunk(content="Done")
+
+    with patch("src.agent.service._build_chat_llm") as mock_build:
+        mock_instance = GenericFakeChatModel(messages=iter([]))
+        object.__setattr__(mock_instance, "bind_tools", lambda tools: mock_instance)
+        object.__setattr__(mock_instance, "astream", mock_astream)
+        mock_build.return_value = mock_instance
+        agent = Agent(document_repository=_FakeDocumentRepository())
+
+        _ = [
+            chunk
+            async for chunk in agent.astream([{"role": "user", "content": "help"}])
+        ]
+
+    sources = agent.get_last_used_sources()
+    assert len(sources) == 1
+    assert sources[0]["source_id"] == "doc-42"
+
+
+@pytest.mark.asyncio
 async def test_last_trace_id_is_none_without_langfuse() -> None:
     """last_trace_id returns None when Langfuse is not initialised."""
 
@@ -175,7 +252,8 @@ async def test_last_trace_id_is_none_without_langfuse() -> None:
         object.__setattr__(mock_instance, "astream", mock_astream)
         mock_build.return_value = mock_instance
 
-        with patch("src.agent.service.get_langfuse_handler", return_value=None):
+        with patch("src.agent.service.CallbackHandler") as mock_cb_cls:
+            mock_cb_cls.return_value = MagicMock(last_trace_id=None)
             agent = Agent()
             async for _ in agent.astream([{"role": "user", "content": "Hello"}]):
                 pass
@@ -200,7 +278,8 @@ async def test_last_trace_id_resets_between_calls() -> None:
         object.__setattr__(mock_instance, "astream", mock_astream)
         mock_build.return_value = mock_instance
 
-        with patch("src.agent.service.get_langfuse_handler", return_value=mock_handler):
+        with patch("src.agent.service.CallbackHandler") as mock_cb_cls:
+            mock_cb_cls.return_value = mock_handler
             agent = Agent()
 
             # First call gets a trace ID
@@ -208,11 +287,28 @@ async def test_last_trace_id_resets_between_calls() -> None:
                 pass
             assert agent.last_trace_id == "trace-first"
 
-            # Between calls the handler is reset — simulate disabled handler on second call
-            with patch("src.agent.service.get_langfuse_handler", return_value=None):
-                async for _ in agent.astream([{"role": "user", "content": "Hello"}]):
-                    pass
-                assert agent.last_trace_id is None
+            # Between calls the handler is reset
+            mock_handler_none = MagicMock(last_trace_id=None)
+            mock_cb_cls.return_value = mock_handler_none
+            async for _ in agent.astream([{"role": "user", "content": "Hello"}]):
+                pass
+            assert agent.last_trace_id is None
+
+
+def test_agent_registers_both_document_and_product_tools() -> None:
+    mock_db = MagicMock()
+    with patch("src.agent.service._build_chat_llm") as mock_build:
+        mock_instance = GenericFakeChatModel(messages=iter([]))
+        object.__setattr__(mock_instance, "bind_tools", lambda tools: mock_instance)
+        mock_build.return_value = mock_instance
+
+        agent = Agent(
+            vector_database=mock_db,
+            document_repository=_FakeDocumentRepository(),
+        )
+
+    assert "search_products" in agent.tool_registry
+    assert "search_documents" in agent.tool_registry
 
 
 class TestExtractProductQuery:
