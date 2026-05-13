@@ -2,6 +2,7 @@
 
 import asyncio
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,7 @@ logger = get_logger(__name__)
 # Module-level singleton — Docling's DocumentConverter is expensive to initialise
 # (loads ML models). We create it lazily on first use and reuse it thereafter.
 _converter = None
+_converter_lock = threading.Lock()
 
 
 def _build_vision_url() -> str:
@@ -54,7 +56,11 @@ def _build_vision_url() -> str:
 
 def _get_converter() -> Any:
     global _converter  # noqa: PLW0603
-    if _converter is None:
+    if _converter is not None:
+        return _converter
+    with _converter_lock:
+        if _converter is not None:
+            return _converter
         from docling.datamodel.base_models import InputFormat  # noqa: PLC0415
         from docling.datamodel.pipeline_options import (  # noqa: PLC0415
             PdfPipelineOptions,

@@ -99,8 +99,8 @@ async def flush_langfuse_async() -> None:
     """
     if not _langfuse_initialized:
         return
-    loop = asyncio.get_event_loop()
-    loop.run_in_executor(None, flush_langfuse)
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, flush_langfuse)
 
 
 __all__ = [

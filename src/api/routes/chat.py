@@ -6,6 +6,7 @@ import contextlib
 import json
 import mimetypes
 import re
+import urllib.parse
 import uuid
 from collections.abc import AsyncIterator
 from typing import Annotated, Any, Literal, Self
@@ -152,10 +153,10 @@ class ChatMessage(BaseModel):
         # When attachments are present, allow empty text content.
         if has_attachments:
             if len(last.content) > _MAX_LAST_USER_MESSAGE_LENGTH:
-                msg = "Last user message content must be at most 2000 characters"
+                msg = f"Last user message content must be at most {_MAX_LAST_USER_MESSAGE_LENGTH} characters"
                 raise ValueError(msg)
         elif len(last.content) < 1 or len(last.content) > _MAX_LAST_USER_MESSAGE_LENGTH:
-            msg = "Last user message content must be between 1 and 2000 characters"
+            msg = f"Last user message content must be between 1 and {_MAX_LAST_USER_MESSAGE_LENGTH} characters"
             raise ValueError(msg)
         return self
 
@@ -343,9 +344,12 @@ async def get_document_source(source_path: str) -> StreamingResponse:
     if source_path.startswith("/") or ".." in source_path.split("/"):
         raise HTTPException(status_code=400, detail="Invalid document path")
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
-    def _open_gridfs_stream() -> tuple[GridOut | None, str | None, str | None]:
+    def _open_gridfs_stream() -> (
+        tuple[MongoClient[dict[str, Any]], GridOut, str, str]
+        | tuple[None, None, None, None]
+    ):
         client: MongoClient[dict[str, Any]] = MongoClient(
             settings.mongodb_uri,
             serverSelectionTimeoutMS=settings.mongodb_connection_timeout_ms,
@@ -356,17 +360,20 @@ async def get_document_source(source_path: str) -> StreamingResponse:
         try:
             stream = bucket.open_download_stream_by_name(source_path)
         except NoFile:
-            return None, None, None
+            client.close()
+            return None, None, None, None
         metadata = dict(stream.metadata or {})
         media_type = metadata.get("content_type")
         if not media_type:
             guessed, _ = mimetypes.guess_type(source_path)
             media_type = guessed or "application/octet-stream"
-        filename = stream.filename
-        return stream, media_type, filename
+        filename = stream.filename or source_path
+        return client, stream, media_type, filename
 
-    stream, media_type, filename = await loop.run_in_executor(None, _open_gridfs_stream)
-    if stream is None:
+    client, stream, media_type, filename = await loop.run_in_executor(
+        None, _open_gridfs_stream
+    )
+    if stream is None or client is None:
         raise HTTPException(status_code=404, detail="Document not found")
 
     chunk_size = 256 * 1024  # 256 KB
@@ -380,9 +387,11 @@ async def get_document_source(source_path: str) -> StreamingResponse:
                 yield chunk
         finally:
             await loop.run_in_executor(None, stream.close)
+            await loop.run_in_executor(None, client.close)
 
+    safe_filename = urllib.parse.quote(filename or source_path, safe="")
     headers = {
-        "Content-Disposition": f'inline; filename="{filename}"',
+        "Content-Disposition": f"inline; filename*=UTF-8''{safe_filename}",
     }
     return StreamingResponse(
         content=_stream_chunks(), media_type=media_type, headers=headers
