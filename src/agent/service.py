@@ -71,14 +71,40 @@ MAX_TOOL_ITERATIONS = 10
 _current_sources: ContextVar[list[dict[str, Any]]] = ContextVar("_current_sources")
 
 
-def _convert_history_to_messages(history: list[dict[str, str]]) -> list[BaseMessage]:
-    """Convert history dicts to LangChain message objects."""
+_IMAGE_MIME_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
+
+
+def _convert_history_to_messages(history: list[dict[str, Any]]) -> list[BaseMessage]:
+    """Convert history dicts to LangChain message objects.
+
+    When a user message carries ``attachments`` with image MIME types the
+    message is built as a multimodal ``HumanMessage`` with interleaved text
+    and ``image_url`` content blocks so the LLM can see the images natively.
+    """
     messages: list[BaseMessage] = []
     for msg in history:
         role = msg.get("role")
         content = msg.get("content", "")
         if role == "user":
-            messages.append(HumanMessage(content=content))
+            attachments: list[dict[str, Any]] = msg.get("attachments") or []
+            image_parts = [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{a['mime_type']};base64,{a['data']}",
+                    },
+                }
+                for a in attachments
+                if a.get("mime_type") in _IMAGE_MIME_TYPES
+            ]
+            if image_parts:
+                parts: list[str | dict[Any, Any]] = [
+                    {"type": "text", "text": content},
+                    *image_parts,
+                ]
+                messages.append(HumanMessage(content=parts))
+            else:
+                messages.append(HumanMessage(content=content))
         elif role == "assistant":
             messages.append(AIMessage(content=content))
     return messages
