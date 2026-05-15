@@ -189,6 +189,13 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - APP_NAME=${APP_NAME:-chatguru Agent}
 
+      # Document Upload (Docling)
+      - DOCLING_ENABLED=${DOCLING_ENABLED:-true}
+      - DOCLING_MAX_FILE_SIZE_BYTES=${DOCLING_MAX_FILE_SIZE_BYTES:-20971520}
+      - DOCLING_PICTURE_DESCRIPTION_ENABLED=${DOCLING_PICTURE_DESCRIPTION_ENABLED:-false}
+      - DOCLING_PICTURE_DESCRIPTION_URL=${DOCLING_PICTURE_DESCRIPTION_URL:-}
+      - DOCLING_PICTURE_DESCRIPTION_API_KEY=${DOCLING_PICTURE_DESCRIPTION_API_KEY:-}
+
     depends_on:
       mongo-vector-db:
         condition: service_healthy
@@ -260,6 +267,13 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - APP_NAME=${APP_NAME:-chatguru Agent}
 
+      # Document Upload (Docling)
+      - DOCLING_ENABLED=${DOCLING_ENABLED:-true}
+      - DOCLING_MAX_FILE_SIZE_BYTES=${DOCLING_MAX_FILE_SIZE_BYTES:-20971520}
+      - DOCLING_PICTURE_DESCRIPTION_ENABLED=${DOCLING_PICTURE_DESCRIPTION_ENABLED:-false}
+      - DOCLING_PICTURE_DESCRIPTION_URL=${DOCLING_PICTURE_DESCRIPTION_URL:-}
+      - DOCLING_PICTURE_DESCRIPTION_API_KEY=${DOCLING_PICTURE_DESCRIPTION_API_KEY:-}
+
     depends_on:
       vector-db:
         condition: service_healthy
@@ -286,6 +300,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.frontend
+      args:
+        - VITE_DOCUMENT_UPLOAD_ENABLED=${VITE_DOCUMENT_UPLOAD_ENABLED:-true}
     ports:
       - "${FRONTEND_PORT:-80}:80"
     depends_on:

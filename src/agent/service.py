@@ -1,6 +1,7 @@
 import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
@@ -65,15 +66,46 @@ logger = get_logger("agent.service")
 # Maximum number of tool-calling iterations to prevent infinite loops
 MAX_TOOL_ITERATIONS = 10
 
+# Per-task source accumulator for the document RAG tool. Each asyncio Task
+# (i.e. each astream() call) gets its own list, so concurrent streams never
+# interfere with each other.
+_current_sources: ContextVar[list[dict[str, Any]]] = ContextVar("_current_sources")
 
-def _convert_history_to_messages(history: list[dict[str, str]]) -> list[BaseMessage]:
-    """Convert history dicts to LangChain message objects."""
+
+_IMAGE_MIME_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
+
+
+def _convert_history_to_messages(history: list[dict[str, Any]]) -> list[BaseMessage]:
+    """Convert history dicts to LangChain message objects.
+
+    When a user message carries ``attachments`` with image MIME types the
+    message is built as a multimodal ``HumanMessage`` with interleaved text
+    and ``image_url`` content blocks so the LLM can see the images natively.
+    """
     messages: list[BaseMessage] = []
     for msg in history:
         role = msg.get("role")
         content = msg.get("content", "")
         if role == "user":
-            messages.append(HumanMessage(content=content))
+            attachments: list[dict[str, Any]] = msg.get("attachments") or []
+            image_parts = [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{a['mime_type']};base64,{a['data']}",
+                    },
+                }
+                for a in attachments
+                if a.get("mime_type") in _IMAGE_MIME_TYPES
+            ]
+            if image_parts:
+                parts: list[str | dict[Any, Any]] = [
+                    {"type": "text", "text": content},
+                    *image_parts,
+                ]
+                messages.append(HumanMessage(content=parts))
+            else:
+                messages.append(HumanMessage(content=content))
         elif role == "assistant":
             messages.append(AIMessage(content=content))
     return messages
@@ -136,10 +168,6 @@ class Agent:
         # Create tools based on available backends
         self.tools: list[BaseTool] = []
 
-        # Mutable list shared with the document RAG tool closure. Cleared at the
-        # start of each astream() call so citations are always fresh per turn.
-        self._last_used_sources: list[dict[str, Any]] = []
-
         if vector_database is not None:
             self.tools.append(Agent._create_rag_tool(vector_database))
             logger.info("Agent initialized with RAG tool")
@@ -147,11 +175,7 @@ class Agent:
             logger.info("Agent initialized without RAG tool")
 
         if document_repository is not None:
-            self.tools.append(
-                Agent._create_document_rag_tool(
-                    document_repository, self._last_used_sources
-                )
-            )
+            self.tools.append(Agent._create_document_rag_tool(document_repository))
             logger.info("Agent initialized with document RAG tool")
 
         self.llm = llm.bind_tools(self.tools)
@@ -200,12 +224,11 @@ class Agent:
     @staticmethod
     def _create_document_rag_tool(
         repo: DocumentRagRepository,
-        sources: list[dict[str, Any]],
     ) -> BaseTool:
         """Create document retrieval tool with citation-numbered output.
 
-        Results are appended to *sources* in citation order so callers can
-        read ``sources`` after streaming to build the ``end`` frame payload.
+        Results are appended to the ``_current_sources`` ContextVar so callers
+        can read sources after streaming to build the ``end`` frame payload.
         All chunks from the same document share a single citation number so
         the model references the document as one unit regardless of how many
         chunks were retrieved. Numbers are stable across multi-turn tool calls.
@@ -215,6 +238,7 @@ class Agent:
         async def search_documents(query: str, limit: int = 5) -> str:
             """Search indexed documents and return snippets with numbered citation references."""
             try:
+                sources = _current_sources.get()
                 hits = await repo.search(query=query, limit=limit)
                 if not hits:
                     return "No relevant documents found."
@@ -392,9 +416,10 @@ class Agent:
         """
         self._last_langfuse_handler = None
         lc_messages = Agent._build_messages_from_transcript(messages)
-        # Clear in-place so the document tool closure (which holds a reference to
-        # this same list) always starts a new turn with an empty source set.
-        self._last_used_sources.clear()
+        # Each astream() call gets a fresh, task-local source list via ContextVar.
+        turn_sources: list[dict[str, Any]] = []
+        self._last_turn_sources = turn_sources
+        _current_sources.set(turn_sources)
 
         async with self._tracing_context(
             session_id=session_id, visitor_id=visitor_id
@@ -434,4 +459,4 @@ class Agent:
 
     def get_last_used_sources(self) -> list[dict[str, Any]]:
         """Return structured sources collected during the most recent astream() call."""
-        return list(self._last_used_sources)
+        return list(getattr(self, "_last_turn_sources", []))

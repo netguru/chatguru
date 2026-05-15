@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.engine.url import URL
 
 from config import (
+    get_docling_settings,
     get_document_rag_settings,
     get_langfuse_settings,
     get_persistence_settings,
@@ -25,6 +26,7 @@ from persistence import upgrade_head
 @pytest.fixture(scope="session")
 def test_env_vars(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, str]]:
     """Set up test environment variables."""
+    get_docling_settings.cache_clear()
     get_document_rag_settings.cache_clear()
     get_langfuse_settings.cache_clear()
     get_persistence_settings.cache_clear()
@@ -54,6 +56,7 @@ def test_env_vars(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str
     # Cleanup
     for key in test_vars:
         os.environ.pop(key, None)
+    get_docling_settings.cache_clear()
     get_document_rag_settings.cache_clear()
     get_langfuse_settings.cache_clear()
     get_persistence_settings.cache_clear()

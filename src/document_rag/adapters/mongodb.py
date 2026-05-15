@@ -62,7 +62,7 @@ class MongoDocumentRagRepository:
                     "index": self._settings.mongodb_index_name,
                     "path": "embedding",
                     "queryVector": query_vector,
-                    "numCandidates": max(limit * 20, limit),
+                    "numCandidates": limit * 20,
                     "limit": limit,
                 }
             },

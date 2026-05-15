@@ -487,3 +487,54 @@ class RateLimitSettings(BaseSettings):
 def get_rate_limit_settings() -> RateLimitSettings:
     """Get rate limit settings."""
     return RateLimitSettings()
+
+
+class DoclingSettings(BaseSettings):
+    """Document ingestion (Docling) upload endpoint settings."""
+
+    model_config = SettingsConfigDict(
+        env_file=get_env_file_path(),
+        env_prefix="DOCLING_",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+    enabled: bool = Field(
+        default=True,
+        description="Enable POST /process-document (DOCLING_ENABLED).",
+    )
+    max_file_size_bytes: int = Field(
+        default=20 * 1024 * 1024,
+        ge=1,
+        description="Maximum upload size in bytes (DOCLING_MAX_FILE_SIZE_BYTES).",
+    )
+    picture_description_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable VLM-based image description for pictures found in documents "
+            "(DOCLING_PICTURE_DESCRIPTION_ENABLED). Requires a vision-capable model "
+            "and DOCLING_PICTURE_DESCRIPTION_URL to be set."
+        ),
+    )
+    picture_description_url: str = Field(
+        default="",
+        description=(
+            "Full OpenAI-compatible chat completions URL used to describe images, "
+            "e.g. https://api.openai.com/v1/chat/completions or an Azure deployment URL "
+            "(DOCLING_PICTURE_DESCRIPTION_URL). Required when DOCLING_PICTURE_DESCRIPTION_ENABLED=true."
+        ),
+    )
+    picture_description_api_key: str = Field(
+        default="",
+        description=(
+            "API key for the picture description endpoint. Falls back to LLM_API_KEY when empty "
+            "(DOCLING_PICTURE_DESCRIPTION_API_KEY)."
+        ),
+    )
+
+
+@lru_cache
+def get_docling_settings() -> DoclingSettings:
+    """Get Docling / document upload settings."""
+    return DoclingSettings()

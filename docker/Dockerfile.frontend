@@ -18,6 +18,12 @@ COPY frontend/package*.json ./
 RUN npm ci
 
 COPY frontend/ .
+
+# Bake the feature flag into the static bundle at build time.
+# Default to enabled; pass --build-arg VITE_DOCUMENT_UPLOAD_ENABLED=false to disable.
+ARG VITE_DOCUMENT_UPLOAD_ENABLED=true
+ENV VITE_DOCUMENT_UPLOAD_ENABLED=$VITE_DOCUMENT_UPLOAD_ENABLED
+
 RUN npm run build
 
 # ---------------------------------------------------------------------------

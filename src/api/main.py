@@ -10,7 +10,14 @@ from fastapi.responses import HTMLResponse
 
 from api.routes.chat import await_background_tasks, persistence_router
 from api.routes.chat import router as chat_router
-from config import get_app_settings, get_fastapi_settings, get_llm_settings, get_logger
+from api.routes.documents import router as documents_router
+from config import (
+    get_app_settings,
+    get_docling_settings,
+    get_fastapi_settings,
+    get_llm_settings,
+    get_logger,
+)
 from document_rag import init_document_rag, shutdown_document_rag
 from persistence import init_persistence, is_persistence_enabled, shutdown_persistence
 from rate_limiting import init_rate_limiting, shutdown_rate_limiting
@@ -78,6 +85,8 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(chat_router)
+    if get_docling_settings().enabled:
+        app.include_router(documents_router)
     if is_persistence_enabled():
         app.include_router(persistence_router)
 

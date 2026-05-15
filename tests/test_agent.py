@@ -188,8 +188,11 @@ async def test_agent_with_tool_call() -> None:
 
 @pytest.mark.asyncio
 async def test_document_tool_returns_snippet_with_source_reference() -> None:
+    from src.agent.service import _current_sources
+
     sources: list[dict] = []
-    tool = Agent._create_document_rag_tool(_FakeDocumentRepository(), sources)
+    _current_sources.set(sources)
+    tool = Agent._create_document_rag_tool(_FakeDocumentRepository())
     result = await tool.ainvoke({"query": "install"})
     assert "Snippet for install" in result
     assert "[1]" in result

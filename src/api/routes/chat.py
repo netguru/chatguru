@@ -5,6 +5,8 @@ import base64
 import contextlib
 import json
 import mimetypes
+import re
+import urllib.parse
 import uuid
 from collections.abc import AsyncIterator
 from typing import Annotated, Any, Literal, Self
@@ -47,9 +49,17 @@ from vector_db import VectorDatabase, create_vector_database
 logger = get_logger(__name__)
 
 
-_MAX_CONTENT_LENGTH = 8000
+_MAX_CONTENT_LENGTH = 200_000  # large enough for document attachments
 _MAX_TRANSCRIPT_MESSAGES = 200
-_MAX_LAST_USER_MESSAGE_LENGTH = 2000
+_MAX_LAST_USER_MESSAGE_LENGTH = 200_000  # same ceiling as _MAX_CONTENT_LENGTH
+
+_DOCUMENT_TAG_RE = re.compile(r"<document\b[^>]*>.*?</document>", re.DOTALL)
+
+
+def _strip_document_tags(text: str) -> str:
+    """Remove <document> blocks from a message before title generation."""
+    return _DOCUMENT_TAG_RE.sub("", text).strip()
+
 
 _ALLOWED_MIME_TYPES = frozenset(
     {
@@ -143,10 +153,10 @@ class ChatMessage(BaseModel):
         # When attachments are present, allow empty text content.
         if has_attachments:
             if len(last.content) > _MAX_LAST_USER_MESSAGE_LENGTH:
-                msg = "Last user message content must be at most 2000 characters"
+                msg = f"Last user message content must be at most {_MAX_LAST_USER_MESSAGE_LENGTH} characters"
                 raise ValueError(msg)
         elif len(last.content) < 1 or len(last.content) > _MAX_LAST_USER_MESSAGE_LENGTH:
-            msg = "Last user message content must be between 1 and 2000 characters"
+            msg = f"Last user message content must be between 1 and {_MAX_LAST_USER_MESSAGE_LENGTH} characters"
             raise ValueError(msg)
         return self
 
@@ -334,9 +344,12 @@ async def get_document_source(source_path: str) -> StreamingResponse:
     if source_path.startswith("/") or ".." in source_path.split("/"):
         raise HTTPException(status_code=400, detail="Invalid document path")
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
-    def _open_gridfs_stream() -> tuple[GridOut | None, str | None, str | None]:
+    def _open_gridfs_stream() -> (
+        tuple[MongoClient[dict[str, Any]], GridOut, str, str]
+        | tuple[None, None, None, None]
+    ):
         client: MongoClient[dict[str, Any]] = MongoClient(
             settings.mongodb_uri,
             serverSelectionTimeoutMS=settings.mongodb_connection_timeout_ms,
@@ -347,17 +360,20 @@ async def get_document_source(source_path: str) -> StreamingResponse:
         try:
             stream = bucket.open_download_stream_by_name(source_path)
         except NoFile:
-            return None, None, None
+            client.close()
+            return None, None, None, None
         metadata = dict(stream.metadata or {})
         media_type = metadata.get("content_type")
         if not media_type:
             guessed, _ = mimetypes.guess_type(source_path)
             media_type = guessed or "application/octet-stream"
-        filename = stream.filename
-        return stream, media_type, filename
+        filename = stream.filename or source_path
+        return client, stream, media_type, filename
 
-    stream, media_type, filename = await loop.run_in_executor(None, _open_gridfs_stream)
-    if stream is None:
+    client, stream, media_type, filename = await loop.run_in_executor(
+        None, _open_gridfs_stream
+    )
+    if stream is None or client is None:
         raise HTTPException(status_code=404, detail="Document not found")
 
     chunk_size = 256 * 1024  # 256 KB
@@ -371,9 +387,11 @@ async def get_document_source(source_path: str) -> StreamingResponse:
                 yield chunk
         finally:
             await loop.run_in_executor(None, stream.close)
+            await loop.run_in_executor(None, client.close)
 
+    safe_filename = urllib.parse.quote(filename or source_path, safe="")
     headers = {
-        "Content-Disposition": f'inline; filename="{filename}"',
+        "Content-Disposition": f"inline; filename*=UTF-8''{safe_filename}",
     }
     return StreamingResponse(
         content=_stream_chunks(), media_type=media_type, headers=headers
@@ -457,10 +475,11 @@ async def generate_conversation_title(
             detail="Conversation not found for visitor_id + session_id",
         )
 
-    title = truncate_title(payload.first_message)
+    first_message_text = _strip_document_tags(payload.first_message)
+    title = truncate_title(first_message_text)
     try:
         title = await generate_title(
-            payload.first_message,
+            first_message_text,
             session_id=payload.session_id,
             visitor_id=payload.visitor_id,
         )
@@ -565,7 +584,7 @@ async def _handle_chat_turn(  # noqa: C901, PLR0912
             visitor_id=visitor_id, session_id=session_id
         )
         if is_first_message:
-            fallback_title = truncate_title(current_user_content)
+            fallback_title = truncate_title(_strip_document_tags(current_user_content))
             try:
                 await repo.create_conversation(
                     visitor_id=visitor_id,
