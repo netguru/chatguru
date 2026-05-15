@@ -2,11 +2,19 @@ export type VectorDbType = "sqlite" | "mongodb";
 
 export type MessageRole = "user" | "assistant" | "system";
 
+export interface ImageAttachment {
+  name: string;
+  mime_type: string;
+  /** Base64-encoded image data */
+  data: string;
+}
+
 export interface HistoryMessage {
   role: MessageRole;
   content: string;
   traceId?: string;
   sources?: Source[];
+  attachments?: ImageAttachment[];
 }
 
 export interface Source {
@@ -23,6 +31,8 @@ export interface ChatMessage {
   sources?: Source[];
   isStreaming?: boolean;
   traceId?: string;
+  /** Base64 data-URLs for images attached to user messages (display only). */
+  imageUrls?: string[];
 }
 
 // Outbound WebSocket message — matches backend ChatMessage schema.

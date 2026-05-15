@@ -104,8 +104,22 @@ export function ChatMessage({ message }: Props) {
           {isUser ? (
             (() => {
               const { documents, text } = parseUserMessage(message.content ?? "");
+              const images = message.imageUrls ?? [];
+              const hasContent = text || documents.length > 0 || images.length > 0;
               return (
                 <>
+                  {images.length > 0 && (
+                    <div className="flex flex-wrap gap-2 mb-2">
+                      {images.map((url) => (
+                        <img
+                          key={url}
+                          src={url}
+                          alt="Attached"
+                          className="max-h-48 max-w-full rounded-m object-contain"
+                        />
+                      ))}
+                    </div>
+                  )}
                   {documents.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 mb-2">
                       {documents.map((filename) => (
@@ -124,7 +138,7 @@ export function ChatMessage({ message }: Props) {
                       {text}
                     </span>
                   )}
-                  {!text && !documents.length && (
+                  {!hasContent && (
                     <span className="text-t2 tracking-m leading-xl whitespace-pre-wrap wrap-break-words">
                       {message.isStreaming ? "" : "—"}
                     </span>
