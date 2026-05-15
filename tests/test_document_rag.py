@@ -1,5 +1,6 @@
 """Behavior tests for the document RAG repository architecture."""
 
+from collections.abc import Iterator
 from dataclasses import asdict
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -201,7 +202,23 @@ async def test_init_document_rag_skips_build_when_disabled() -> None:
     build.assert_not_awaited()
 
 
-def test_api_startup_fails_fast_when_document_rag_enabled_but_init_fails() -> None:
+@pytest.fixture
+def _stub_unrelated_lifespan() -> Iterator[None]:
+    """Stub non-document-RAG lifespan steps to isolate document-RAG startup tests."""
+    with (
+        patch("api.main.init_persistence", new=AsyncMock()),
+        patch("api.main.shutdown_persistence", new=AsyncMock()),
+        patch("api.main.init_title_generation", new=AsyncMock()),
+        patch("api.main.shutdown_title_generation", new=AsyncMock()),
+        patch("api.main.init_rate_limiting", new=AsyncMock()),
+        patch("api.main.shutdown_rate_limiting", new=AsyncMock()),
+    ):
+        yield
+
+
+def test_api_startup_fails_fast_when_document_rag_enabled_but_init_fails(
+    _stub_unrelated_lifespan: None,
+) -> None:
     with (
         patch(
             "api.main.init_document_rag",
@@ -214,7 +231,9 @@ def test_api_startup_fails_fast_when_document_rag_enabled_but_init_fails() -> No
                 pass
 
 
-def test_api_startup_succeeds_when_document_rag_disabled() -> None:
+def test_api_startup_succeeds_when_document_rag_disabled(
+    _stub_unrelated_lifespan: None,
+) -> None:
     get_document_rag_settings.cache_clear()
     with (
         patch("api.main.init_document_rag", new=AsyncMock(return_value=None)),
