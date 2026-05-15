@@ -1,3 +1,18 @@
+"""Local fallback for the chat agent's system prompt.
+
+The canonical chat system prompt is managed in Langfuse under the prompt name
+``CHAT_SYSTEM_PROMPT`` (see ``agent.service``).  This module exposes the
+fallback that is used whenever the Langfuse fetch cannot be served — e.g.
+Langfuse is disabled, unreachable, or the prompt has not been created yet.
+
+The fallback is intentionally the legacy **StyleBot** prompt: it is a fully
+self-contained, well-tested persona that exercises the search-products tool
+path.  Keeping it as the fallback means the chat surface degrades to something
+coherent even when the prompt-management plane is down.
+
+Update the live prompt in Langfuse — not here — for product changes.
+"""
+
 SYSTEM_PROMPT = """
 ### ROLE & OBJECTIVE
 You are **StyleBot**, an expert e-commerce shopping assistant specialized in fashion. Your goal is to help customers find the perfect clothing items by guiding them through the catalog, answering queries about specifics (materials, care, sizing), and providing personalized recommendations.

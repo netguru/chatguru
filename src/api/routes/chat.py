@@ -762,9 +762,13 @@ async def websocket_chat(websocket: WebSocket) -> None:
     logger.info("WebSocket connection accepted")
 
     try:
-        vector_db = await _initialize_vector_database()
+        # Legacy products vector DB is disconnected — the Chatguru/Netguru
+        # consultant persona uses the document RAG knowledge base (services,
+        # case studies, etc.) instead. The Agent still registers
+        # `search_products` as a no-op stub, but the system prompt no longer
+        # mentions it, so the model has no reason to call it.
         document_repo = get_document_rag_repository()
-        agent = Agent(vector_database=vector_db, document_repository=document_repo)
+        agent = Agent(vector_database=None, document_repository=document_repo)
         connection_visitor_id: str | None = None
         # Extract once per connection — the IP cannot change mid-WebSocket.
         client_ip = _get_client_ip(websocket)
