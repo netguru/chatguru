@@ -782,7 +782,7 @@ def test_document_source_endpoint_serves_pdf(async_app: TestClient) -> None:
     mock_stream = MagicMock()
     mock_stream.filename = "guide.pdf"
     mock_stream.metadata = {"content_type": "application/pdf"}
-    mock_stream.read.return_value = b"%PDF-1.4\n%mock\n"
+    mock_stream.read.side_effect = [b"%PDF-1.4\n%mock\n", b""]
     mock_stream.__enter__.return_value = mock_stream
     mock_stream.__exit__.return_value = None
 

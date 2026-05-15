@@ -1,5 +1,6 @@
 import re
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -328,6 +329,42 @@ class Agent:
             )
             messages.append(ToolMessage(content=result, tool_call_id=tool_call_id))
 
+    @asynccontextmanager
+    async def _tracing_context(
+        self,
+        *,
+        session_id: str | None,
+        visitor_id: str | None,
+    ) -> AsyncIterator[RunnableConfig]:
+        """Yield the LangChain ``RunnableConfig`` to use for this turn.
+
+        Opens a Langfuse "chat-response" span and wires a fresh
+        ``CallbackHandler`` into the config when Langfuse is initialised;
+        yields an empty config otherwise.
+        """
+        if not is_langfuse_initialized():
+            yield {}
+            return
+
+        langfuse = get_client()
+        with (
+            langfuse.start_as_current_observation(
+                as_type="span",
+                name="chat-response",
+            ),
+            propagate_attributes(
+                trace_name="chat-response",
+                session_id=session_id,
+                user_id=visitor_id,
+            ),
+        ):
+            handler = CallbackHandler()
+            self._last_langfuse_handler = handler
+            try:
+                yield {"callbacks": [handler]}
+            finally:
+                await flush_langfuse_async()
+
     async def astream(
         self,
         messages: list[dict[str, str]],
@@ -359,30 +396,9 @@ class Agent:
         # this same list) always starts a new turn with an empty source set.
         self._last_used_sources.clear()
 
-        config: RunnableConfig = {}
-
-        if is_langfuse_initialized():
-            langfuse = get_client()
-            with (
-                langfuse.start_as_current_observation(
-                    as_type="span",
-                    name="chat-response",
-                ),
-                propagate_attributes(
-                    trace_name="chat-response",
-                    session_id=session_id,
-                    user_id=visitor_id,
-                ),
-            ):
-                handler = CallbackHandler()
-                self._last_langfuse_handler = handler
-                config = {"callbacks": [handler]}
-                try:
-                    async for chunk in self._run_agentic_loop(lc_messages, config):
-                        yield chunk
-                finally:
-                    await flush_langfuse_async()
-        else:
+        async with self._tracing_context(
+            session_id=session_id, visitor_id=visitor_id
+        ) as config:
             async for chunk in self._run_agentic_loop(lc_messages, config):
                 yield chunk
 
