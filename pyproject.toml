@@ -171,17 +171,22 @@ markers = [
 ]
 asyncio_mode = "strict"
 asyncio_default_fixture_loop_scope = "function"
+timeout = 30
 filterwarnings = [
     # aiosqlite connections run on a background thread; SQLAlchemy raises this
     # SAWarning when the GC reclaims them after the event loop closes — even
     # when engine.dispose() has already been called. This is a known aiosqlite
     # + SQLAlchemy quirk and not a real leak in the application code.
     "ignore:The garbage collector is trying to clean up non-checked-in connection:sqlalchemy.exc.SAWarning",
+    # langgraph raises this from its own serialiser module on import; the
+    # allowed_objects default is an internal langgraph concern, not ours.
+    "ignore:The default value of `allowed_objects` will change:langchain_core._api.deprecation.LangChainPendingDeprecationWarning",
 ]
 
 [dependency-groups]
 dev = [
     "mypy>=1.19.1",
+    "pytest-timeout>=2.4.0",
     "ragas>=0.4.2",
     "streamlit>=1.52.2",
 ]

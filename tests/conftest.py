@@ -1,6 +1,11 @@
 """Pytest configuration and fixtures."""
 
 import os
+
+# Must be set before any import that reads config/tracing so the Langfuse
+# singleton is never initialised with real credentials during tests.
+os.environ.setdefault("LANGFUSE_ENABLED", "false")
+
 from collections.abc import Iterator
 
 import pytest
@@ -10,6 +15,7 @@ from sqlalchemy.engine.url import URL
 from config import (
     get_docling_settings,
     get_document_rag_settings,
+    get_langfuse_settings,
     get_persistence_settings,
     get_rate_limit_settings,
 )
@@ -22,6 +28,7 @@ def test_env_vars(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str
     """Set up test environment variables."""
     get_docling_settings.cache_clear()
     get_document_rag_settings.cache_clear()
+    get_langfuse_settings.cache_clear()
     get_persistence_settings.cache_clear()
     get_rate_limit_settings.cache_clear()
     persist_dir = tmp_path_factory.mktemp("persistence")
@@ -51,6 +58,7 @@ def test_env_vars(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str
         os.environ.pop(key, None)
     get_docling_settings.cache_clear()
     get_document_rag_settings.cache_clear()
+    get_langfuse_settings.cache_clear()
     get_persistence_settings.cache_clear()
     get_rate_limit_settings.cache_clear()
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -255,12 +256,10 @@ async def test_last_trace_id_is_none_without_langfuse() -> None:
         object.__setattr__(mock_instance, "astream", mock_astream)
         mock_build.return_value = mock_instance
 
-        with patch("src.agent.service.CallbackHandler") as mock_cb_cls:
-            mock_cb_cls.return_value = MagicMock(last_trace_id=None)
-            agent = Agent()
-            async for _ in agent.astream([{"role": "user", "content": "Hello"}]):
-                pass
-            assert agent.last_trace_id is None
+        agent = Agent()
+        async for _ in agent.astream([{"role": "user", "content": "Hello"}]):
+            pass
+        assert agent.last_trace_id is None
 
 
 @pytest.mark.asyncio
@@ -272,8 +271,17 @@ async def test_last_trace_id_resets_between_calls() -> None:
     ) -> AsyncIterator[AIMessageChunk]:
         yield AIMessageChunk(content="Hi")
 
-    mock_handler = MagicMock()
-    mock_handler.last_trace_id = "trace-first"
+    handlers = [
+        MagicMock(last_trace_id="trace-first"),
+        MagicMock(last_trace_id=None),
+    ]
+
+    @asynccontextmanager
+    async def fake_tracing_context(
+        self: Agent, *, session_id: str | None, visitor_id: str | None
+    ) -> AsyncIterator[dict]:
+        self._last_langfuse_handler = handlers.pop(0)
+        yield {}
 
     with patch("src.agent.service._build_chat_llm") as mock_build:
         mock_instance = GenericFakeChatModel(messages=iter([]))
@@ -281,18 +289,13 @@ async def test_last_trace_id_resets_between_calls() -> None:
         object.__setattr__(mock_instance, "astream", mock_astream)
         mock_build.return_value = mock_instance
 
-        with patch("src.agent.service.CallbackHandler") as mock_cb_cls:
-            mock_cb_cls.return_value = mock_handler
+        with patch.object(Agent, "_tracing_context", fake_tracing_context):
             agent = Agent()
 
-            # First call gets a trace ID
             async for _ in agent.astream([{"role": "user", "content": "Hello"}]):
                 pass
             assert agent.last_trace_id == "trace-first"
 
-            # Between calls the handler is reset
-            mock_handler_none = MagicMock(last_trace_id=None)
-            mock_cb_cls.return_value = mock_handler_none
             async for _ in agent.astream([{"role": "user", "content": "Hello"}]):
                 pass
             assert agent.last_trace_id is None
