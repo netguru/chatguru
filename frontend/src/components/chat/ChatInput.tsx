@@ -1,7 +1,13 @@
-import { CircleNotchIcon, FileTextIcon, PaperPlaneRightIcon, PlusIcon, XIcon } from "@phosphor-icons/react";
+import {
+  CircleNotchIcon,
+  FileTextIcon,
+  PaperPlaneRightIcon,
+  PlusIcon,
+  XIcon,
+} from "@phosphor-icons/react";
 import * as React from "react";
-import type { ImageAttachment } from "../../types/chat";
 import { useAppStore } from "../../store/appStore";
+import type { ImageAttachment } from "../../types/chat";
 import { processDocument } from "../../utils/documentProcessing";
 import { cn } from "../../utils/utils";
 import {
@@ -81,7 +87,11 @@ export function ChatInput({ onSend, value: valueProp, onValueChange, className }
 
     const images: ImageAttachment[] | undefined =
       attachedImages.length > 0
-        ? attachedImages.map((img) => ({ name: img.filename, mime_type: img.mime_type, data: img.data }))
+        ? attachedImages.map((img) => ({
+            name: img.filename,
+            mime_type: img.mime_type,
+            data: img.data,
+          }))
         : undefined;
 
     onSend(fullMessage, images);
@@ -185,7 +195,10 @@ export function ChatInput({ onSend, value: valueProp, onValueChange, className }
                 aria-label={isProcessingDocument ? "Processing document…" : "Attach file"}
                 disabled={isAttachmentBlocked}
                 onClick={() => fileInputRef.current?.click()}
-                className={cn(iconButtonVariants({ variant: "subtle", size: "s" }), "cursor-pointer")}
+                className={cn(
+                  iconButtonVariants({ variant: "subtle", size: "s" }),
+                  "cursor-pointer"
+                )}
               >
                 {isProcessingDocument ? (
                   <CircleNotchIcon weight="bold" className="animate-spin" />
