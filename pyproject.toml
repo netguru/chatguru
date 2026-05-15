@@ -176,6 +176,9 @@ filterwarnings = [
     # when engine.dispose() has already been called. This is a known aiosqlite
     # + SQLAlchemy quirk and not a real leak in the application code.
     "ignore:The garbage collector is trying to clean up non-checked-in connection:sqlalchemy.exc.SAWarning",
+    # langgraph raises this from its own serialiser module on import; the
+    # allowed_objects default is an internal langgraph concern, not ours.
+    "ignore:The default value of `allowed_objects` will change:langchain_core._api.deprecation.LangChainPendingDeprecationWarning",
 ]
 
 [dependency-groups]
