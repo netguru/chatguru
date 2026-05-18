@@ -207,6 +207,7 @@ services:
     volumes:
       - rag-ingest-state:/app/rag_ingest_state
       - chatguru-data:/data
+      - rag-data:/app/rag_data
 
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
@@ -282,6 +283,8 @@ services:
 
     volumes:
       - vector-db-data:/data
+      - rag-ingest-state:/app/rag_ingest_state
+      - rag-data:/app/rag_data
 
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
@@ -331,6 +334,8 @@ volumes:
   redis-data:
     driver: local
   rag-ingest-state:
+    driver: local
+  rag-data:
     driver: local
 
 # --------------------------------------------------------------------------
