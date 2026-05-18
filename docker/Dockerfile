@@ -17,7 +17,11 @@
 # ----------------------------------------------------------------------------
 FROM python:3.12-slim AS builder
 
-RUN apt-get update && apt-get install -y --no-install-recommends curl \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      curl \
+      libxcb1 \
+      libgl1 \
+      libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh \

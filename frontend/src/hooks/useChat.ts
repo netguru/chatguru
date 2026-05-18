@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { selectCurrentHistory, selectCurrentSession, useAppStore } from "../store/appStore";
 import type {
   HistoryMessage,
+  ImageAttachment,
   WsEndEvent,
   WsErrorEvent,
   WsEvent,
@@ -150,7 +151,7 @@ export function useChat() {
   }, [connect]);
 
   const sendMessage = useCallback(
-    (text: string) => {
+    (text: string, images?: ImageAttachment[]) => {
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN || isStreamingRef.current)
         return;
 
@@ -158,8 +159,14 @@ export function useChat() {
       // current turn explicitly for the outbound payload.
       const historySnapshot = selectCurrentHistory(useAppStore.getState());
 
-      addUserMessage({ id: crypto.randomUUID(), role: "user", content: text });
-      addToHistory({ role: "user", content: text });
+      const imageUrls = images?.map((img) => `data:${img.mime_type};base64,${img.data}`);
+      addUserMessage({
+        id: crypto.randomUUID(),
+        role: "user",
+        content: text,
+        ...(imageUrls?.length ? { imageUrls } : {}),
+      });
+      addToHistory({ role: "user", content: text, ...(images?.length ? { attachments: images } : {}) });
 
       // Read currentSessionId AFTER addUserMessage — the first-ever message triggers
       // lazy session creation inside the store (synchronous Zustand set), so reading
@@ -168,7 +175,11 @@ export function useChat() {
       const { currentSessionId } = stateAfterAdd;
       const currentSession = selectCurrentSession(stateAfterAdd);
       const visitorId = getOrCreateVisitorId();
-      const currentUserMessage: HistoryMessage = { role: "user", content: text };
+      const currentUserMessage: HistoryMessage = {
+        role: "user",
+        content: text,
+        ...(images?.length ? { attachments: images } : {}),
+      };
       const outboundMessages = [...historySnapshot, currentUserMessage];
       // Only treat this as the first message in a new session when hydration has
       // completed (isHydrated === true). Persisted sessions that haven't finished

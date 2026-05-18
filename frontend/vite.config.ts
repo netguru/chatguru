@@ -36,6 +36,10 @@ export default defineConfig({
         target: backendTarget,
         changeOrigin: true,
       },
+      "/process-document": {
+        target: backendTarget,
+        changeOrigin: true,
+      },
       "/documents": {
         target: backendTarget,
         changeOrigin: true,
