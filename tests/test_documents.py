@@ -127,11 +127,16 @@ def test_get_attachment_wrong_visitor_returns_404(
     app: TestClient,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
 ) -> None:
     """An attachment owned by visitor A is not accessible to visitor B."""
     import asyncio
 
-    from attachment_storage import init_attachment_storage
+    from attachment_storage import (
+        get_attachment_storage,
+        init_attachment_storage,
+        shutdown_attachment_storage,
+    )
     from config import get_attachment_storage_settings
     from persistence import get_chat_history_repository
 
@@ -139,10 +144,17 @@ def test_get_attachment_wrong_visitor_returns_404(
     storage_dir.mkdir()
     monkeypatch.setenv("ATTACHMENT_STORAGE_BASE_PATH", str(storage_dir))
     get_attachment_storage_settings.cache_clear()
+    # After the test monkeypatch restores the env var, clear the cache so the
+    # stale tmp_path value is not carried into the next test's singleton init.
+    request.addfinalizer(get_attachment_storage_settings.cache_clear)
 
-    async def _setup() -> str:
+    async def _setup() -> tuple[str, bool]:
+        # The app fixture already initialised the singleton at lifespan startup.
+        # Shut it down first so init_attachment_storage() picks up the new path
+        # set by monkeypatch above instead of returning early as a no-op.
+        await shutdown_attachment_storage()
+        get_attachment_storage_settings.cache_clear()
         await init_attachment_storage()
-        from attachment_storage import get_attachment_storage
 
         storage = get_attachment_storage()
         att_id = str(uuid.uuid4())
@@ -150,6 +162,7 @@ def test_get_attachment_wrong_visitor_returns_404(
         storage_key = await storage.store(img_bytes, att_id)
 
         repo = get_chat_history_repository()
+        persisted = False
         if repo is not None:
             from datetime import UTC, datetime
 
@@ -167,13 +180,18 @@ def test_get_attachment_wrong_visitor_returns_404(
                     created_at=datetime.now(UTC),
                 )
             )
-        return att_id
+            persisted = True
+        return att_id, persisted
 
-    att_id = asyncio.run(_setup())
+    att_id, persisted = asyncio.run(_setup())
 
-    # Owner can reach it (or 503 when storage not configured — acceptable).
     owner_response = app.get(f"/attachments/{att_id}", params={"visitor_id": "owner"})
-    assert owner_response.status_code in {200, 404, 503}
+    if persisted:
+        # Both persistence and storage are active — the owner must get the file.
+        assert owner_response.status_code == 200
+    else:
+        # Setup skipped DB write (persistence disabled) — retrieval cannot succeed.
+        assert owner_response.status_code in {404, 503}
 
     # Intruder always gets 404.
     intruder_response = app.get(
