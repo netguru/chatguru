@@ -558,6 +558,14 @@ class AttachmentStorageSettings(BaseSettings):
         extra="ignore",
     )
 
+    enabled: bool = Field(
+        default=True,
+        description=(
+            "Enable attachment binary storage (ATTACHMENT_STORAGE_ENABLED). "
+            "Set to false to disable file uploads and attachment retrieval entirely. "
+            "When disabled, upload endpoints still accept files but return no attachment_id."
+        ),
+    )
     type: str = Field(
         default="filesystem",
         description=(
