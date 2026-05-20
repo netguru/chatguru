@@ -82,10 +82,14 @@ Accepts a raw image file (JPEG, PNG, WEBP, GIF). When storage is enabled and `vi
 **Response:**
 
 ```json
-{ "attachment_id": "3f2504e0-4f89-11d3-9a0c-0305e82c3301" }
+{
+  "attachment_id": "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+  "name": "photo.jpg",
+  "mime_type": "image/jpeg"
+}
 ```
 
-`attachment_id` is `null` when storage is disabled or `visitor_id` was not provided.
+`attachment_id` is `null` when storage is disabled or `visitor_id` was not provided. `name` and `mime_type` are always present.
 
 ### `POST /process-document`
 
