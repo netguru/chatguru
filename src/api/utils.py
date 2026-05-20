@@ -6,6 +6,42 @@ from config import get_logger, get_rate_limit_settings
 
 logger = get_logger(__name__)
 
+# ── MIME-type helpers ─────────────────────────────────────────────────────────
+
+# Accepted types for the raw image upload endpoint.
+ALLOWED_IMAGE_MIME_TYPES: frozenset[str] = frozenset(
+    {"image/png", "image/jpeg", "image/gif", "image/webp"}
+)
+
+# Types that are safe to store and later serve with their original Content-Type.
+# Anything outside this list is normalised to application/octet-stream so a
+# client-supplied type can never trigger in-browser script execution.
+_SAFE_STORED_MIME_TYPES: frozenset[str] = frozenset(
+    {
+        "application/pdf",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.ms-powerpoint",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "text/plain",
+        "text/markdown",
+        *ALLOWED_IMAGE_MIME_TYPES,
+    }
+)
+
+
+def safe_mime_type(mime: str | None) -> str:
+    """Return *mime* if it is in the safe allowlist, otherwise ``application/octet-stream``.
+
+    Prevents a maliciously crafted Content-Type (e.g. ``text/html``) from
+    being persisted and later served inline to other visitors.
+    """
+    if mime and mime in _SAFE_STORED_MIME_TYPES:
+        return mime
+    return "application/octet-stream"
+
 
 def get_client_ip(conn: HTTPConnection) -> str | None:
     """Extract the real client IP address from an HTTP or WebSocket connection.

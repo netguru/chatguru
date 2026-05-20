@@ -6,7 +6,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, Request, UploadFile
 
-from api.utils import get_client_ip
+from api.utils import ALLOWED_IMAGE_MIME_TYPES, get_client_ip, safe_mime_type
 from attachment_storage import get_attachment_storage, is_attachment_storage_enabled
 from config import get_docling_settings, get_logger
 from document_processing.service import convert_document_to_markdown
@@ -18,44 +18,8 @@ logger = get_logger(__name__)
 
 router = APIRouter()
 
-# ── Mime-type constants ───────────────────────────────────────────────────────
-
-# Accepted types for the raw image upload endpoint.
-ALLOWED_IMAGE_MIME_TYPES: frozenset[str] = frozenset(
-    {"image/png", "image/jpeg", "image/gif", "image/webp"}
-)
-
-# Types that are safe to store and later serve with their original Content-Type.
-# Anything outside this list gets normalized to application/octet-stream so that
-# a client-supplied type can never trigger in-browser script execution.
-_SAFE_STORED_MIME_TYPES: frozenset[str] = frozenset(
-    {
-        "application/pdf",
-        "application/msword",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "application/vnd.ms-powerpoint",
-        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        "application/vnd.ms-excel",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "text/plain",
-        "text/markdown",
-        *ALLOWED_IMAGE_MIME_TYPES,
-    }
-)
-
 # 10 MB — maximum raw binary size for the upload-attachment endpoint.
 _MAX_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024
-
-
-def safe_mime_type(mime: str | None) -> str:
-    """Return *mime* if it is in the safe allowlist, otherwise ``application/octet-stream``.
-
-    Prevents a maliciously crafted Content-Type (e.g. ``text/html``) from
-    being persisted and later served inline to other visitors.
-    """
-    if mime and mime in _SAFE_STORED_MIME_TYPES:
-        return mime
-    return "application/octet-stream"
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
