@@ -6,6 +6,7 @@ Import lifecycle helpers from the package root (re-exported from :mod:`rate_limi
 
 from rate_limiting.bootstrap import (
     consume_rate_limit,
+    consume_upload_rate_limit,
     init_rate_limiting,
     is_rate_limiting_enabled,
     shutdown_rate_limiting,
@@ -13,6 +14,7 @@ from rate_limiting.bootstrap import (
 
 __all__ = [
     "consume_rate_limit",
+    "consume_upload_rate_limit",
     "init_rate_limiting",
     "is_rate_limiting_enabled",
     "shutdown_rate_limiting",

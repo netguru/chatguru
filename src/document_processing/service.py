@@ -107,6 +107,11 @@ def _get_converter() -> Any:
     return _converter
 
 
+async def prewarm_converter() -> None:
+    """Load and cache the Docling converter in a thread pool (non-blocking)."""
+    await asyncio.to_thread(_get_converter)
+
+
 def _convert_sync(file_bytes: bytes, filename: str) -> str:
     """Run Docling conversion in the calling thread (CPU-bound)."""
     converter = _get_converter()
