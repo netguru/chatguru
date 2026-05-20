@@ -2,11 +2,11 @@ export type VectorDbType = "sqlite" | "mongodb";
 
 export type MessageRole = "user" | "assistant" | "system";
 
-export interface ImageAttachment {
+/** A file attachment persisted on the server and retrievable via GET /attachments/{id}. */
+export interface StoredAttachment {
+  id: string;
   name: string;
   mime_type: string;
-  /** Base64-encoded image data */
-  data: string;
 }
 
 export interface HistoryMessage {
@@ -14,7 +14,13 @@ export interface HistoryMessage {
   content: string;
   traceId?: string;
   sources?: Source[];
-  attachments?: ImageAttachment[];
+  /**
+   * IDs of pre-stored attachments (images via POST /upload-attachment,
+   * documents via POST /process-document). Outbound only — sent to the backend.
+   */
+  attachment_ids?: string[];
+  /** Server-persisted attachment metadata (inbound only — received from /history). */
+  storedAttachments?: StoredAttachment[];
 }
 
 export interface Source {
@@ -31,8 +37,10 @@ export interface ChatMessage {
   sources?: Source[];
   isStreaming?: boolean;
   traceId?: string;
-  /** Base64 data-URLs for images attached to user messages (display only). */
+  /** Base64 data-URLs for images attached to user messages (live chat only). */
   imageUrls?: string[];
+  /** Server-persisted attachments — shown in both live chat (after end frame) and history. */
+  storedAttachments?: StoredAttachment[];
 }
 
 // Outbound WebSocket message — matches backend ChatMessage schema.
@@ -74,6 +82,8 @@ export interface WsEndEvent extends WsBaseEvent {
   content: string;
   trace_id?: string;
   sources?: BackendSource[] | null;
+  /** Attachments stored by the backend for the preceding user message. */
+  user_attachments?: StoredAttachment[];
 }
 
 export interface WsErrorEvent extends WsBaseEvent {

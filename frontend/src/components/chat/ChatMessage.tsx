@@ -18,12 +18,14 @@ import { filterCitedSources, injectCitationLinks } from "../../utils/citationLin
 import { markdownProseClass } from "../../utils/markdownProseClass";
 import { isPreviewableSource } from "../../utils/sourceMapping";
 import { cn } from "../../utils/utils";
+import { getOrCreateVisitorId } from "../../utils/visitorId";
 import { SourceViewerModal } from "../modals/SourceViewerModal";
 import { ThumbsDownModal } from "../modals/ThumbsDownModal";
 import { Avatar, AvatarFallback } from "../ui/avatar";
 import { Button } from "../ui/button";
 import { IconButton } from "../ui/icon-button";
 import { Loader } from "../ui/loader";
+import { AttachmentChip } from "./AttachmentChip";
 
 interface Props {
   message: ChatMessageType;
@@ -106,14 +108,37 @@ export function ChatMessage({ message }: Props) {
         >
           {isUser ? (
             (() => {
-              const { documents, text } = parseUserMessage(message.content ?? "");
-              const images = message.imageUrls ?? [];
-              const hasContent = text || documents.length > 0 || images.length > 0;
+              const { documents: parsedDocNames, text } = parseUserMessage(message.content ?? "");
+              const storedAttachments = message.storedAttachments ?? [];
+              const storedImages = storedAttachments.filter((a) =>
+                a.mime_type.startsWith("image/")
+              );
+              const storedDocs = storedAttachments.filter((a) => !a.mime_type.startsWith("image/"));
+
+              // Prefer stored images (server URLs) over base64 data URLs when available.
+              const visitorId = getOrCreateVisitorId();
+              const imageDisplay =
+                storedImages.length > 0
+                  ? storedImages.map(
+                      (a) => `/attachments/${a.id}?visitor_id=${encodeURIComponent(visitorId)}`
+                    )
+                  : (message.imageUrls ?? []);
+
+              // Only show parsed doc-name chips when there are no stored doc attachments
+              // (avoids duplicating document names once they're persisted server-side).
+              const showParsedDocs = storedDocs.length === 0;
+
+              const hasContent =
+                text ||
+                imageDisplay.length > 0 ||
+                storedDocs.length > 0 ||
+                (showParsedDocs && parsedDocNames.length > 0);
+
               return (
                 <>
-                  {images.length > 0 && (
+                  {imageDisplay.length > 0 && (
                     <div className="flex flex-wrap gap-2 mb-2">
-                      {images.map((url) => (
+                      {imageDisplay.map((url) => (
                         <img
                           key={url}
                           src={url}
@@ -123,14 +148,24 @@ export function ChatMessage({ message }: Props) {
                       ))}
                     </div>
                   )}
-                  {documents.length > 0 && (
+                  {storedDocs.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 mb-2">
-                      {documents.map((filename) => (
+                      {storedDocs.map((attachment) => (
+                        <AttachmentChip key={attachment.id} attachment={attachment} />
+                      ))}
+                    </div>
+                  )}
+                  {showParsedDocs && parsedDocNames.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mb-2">
+                      {parsedDocNames.map((filename) => (
                         <span
                           key={filename}
                           className="inline-flex items-center gap-1.5 rounded-full bg-surface-neutral-medium px-2.5 py-1 text-t3 text-text-primary"
                         >
-                          <FileTextIcon weight="bold" className="size-3 shrink-0 text-text-secondary" />
+                          <FileTextIcon
+                            weight="bold"
+                            className="size-3 shrink-0 text-text-secondary"
+                          />
                           <span className="max-w-[200px] truncate">{filename}</span>
                         </span>
                       ))}

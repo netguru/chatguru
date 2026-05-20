@@ -8,9 +8,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 
-from api.routes.chat import await_background_tasks, persistence_router
+from api.routes.chat import await_background_tasks
 from api.routes.chat import router as chat_router
 from api.routes.documents import router as documents_router
+from api.routes.history import persistence_router
+from attachment_storage import init_attachment_storage, shutdown_attachment_storage
 from config import (
     get_app_settings,
     get_docling_settings,
@@ -18,6 +20,7 @@ from config import (
     get_llm_settings,
     get_logger,
 )
+from document_processing.service import prewarm_converter
 from document_rag import init_document_rag, shutdown_document_rag
 from persistence import init_persistence, is_persistence_enabled, shutdown_persistence
 from rate_limiting import init_rate_limiting, shutdown_rate_limiting
@@ -50,14 +53,21 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
 
     init_langfuse()
     await init_persistence()
+    await init_attachment_storage()
     await init_document_rag()
     await init_title_generation()
     await init_rate_limiting()
+
+    if get_docling_settings().enabled:
+        logger.info("Pre-warming Docling converter (loading ML models)…")
+        await prewarm_converter()
+        logger.info("Docling converter ready.")
 
     yield
 
     await await_background_tasks()
     await shutdown_persistence()
+    await shutdown_attachment_storage()
     await shutdown_document_rag()
     await shutdown_title_generation()
     await shutdown_rate_limiting()

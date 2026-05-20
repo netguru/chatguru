@@ -13,9 +13,9 @@ from sqlalchemy import and_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from persistence.models import StoredChatMessage, StoredConversation
+from persistence.models import StoredAttachment, StoredChatMessage, StoredConversation
 from persistence.repository import ChatHistoryRepository
-from persistence.sqlalchemy.tables import chat_messages, conversations
+from persistence.sqlalchemy.tables import chat_attachments, chat_messages, conversations
 from persistence.validation import validate_chat_message_role
 
 
@@ -197,7 +197,7 @@ class SqlAlchemyChatHistoryRepository(ChatHistoryRepository):
         content: str,
         trace_id: str | None = None,
         sources: str | None = None,
-    ) -> None:
+    ) -> str:
         validate_chat_message_role(role)
         message_id = str(uuid.uuid4())
         created_at = datetime.now(UTC)
@@ -214,6 +214,7 @@ class SqlAlchemyChatHistoryRepository(ChatHistoryRepository):
                     sources=sources,
                 )
             )
+        return message_id
 
     async def list_messages(
         self,
@@ -247,6 +248,130 @@ class SqlAlchemyChatHistoryRepository(ChatHistoryRepository):
             )
             for r in rows
         ]
+
+    # ------------------------------------------------------------------
+    # Attachments
+    # ------------------------------------------------------------------
+
+    async def save_attachment(self, attachment: StoredAttachment) -> None:
+        async with self._engine.begin() as conn:
+            await conn.execute(
+                chat_attachments.insert().values(
+                    id=attachment.id,
+                    message_id=attachment.message_id,
+                    visitor_id=attachment.visitor_id,
+                    storage_key=attachment.storage_key,
+                    name=attachment.name,
+                    mime_type=attachment.mime_type,
+                    size=attachment.size,
+                    created_at=attachment.created_at,
+                )
+            )
+
+    async def link_attachments_to_message(
+        self,
+        *,
+        attachment_ids: list[str],
+        message_id: str,
+        visitor_id: str,
+    ) -> None:
+        if not attachment_ids:
+            return
+        async with self._engine.begin() as conn:
+            await conn.execute(
+                chat_attachments.update()
+                .where(
+                    and_(
+                        chat_attachments.c.id.in_(attachment_ids),
+                        chat_attachments.c.visitor_id == visitor_id,
+                        chat_attachments.c.message_id.is_(None),
+                    )
+                )
+                .values(message_id=message_id)
+            )
+
+    async def get_attachments_for_message(
+        self, message_id: str
+    ) -> list[StoredAttachment]:
+        stmt = (
+            select(chat_attachments)
+            .where(chat_attachments.c.message_id == message_id)
+            .order_by(chat_attachments.c.created_at.asc())
+        )
+        async with self._engine.connect() as conn:
+            result = await conn.execute(stmt)
+            rows = result.mappings().all()
+        return [
+            StoredAttachment(
+                id=str(r["id"]),
+                message_id=(
+                    str(r["message_id"]) if r["message_id"] is not None else None
+                ),
+                visitor_id=str(r["visitor_id"]),
+                storage_key=str(r["storage_key"]),
+                name=str(r["name"]),
+                mime_type=str(r["mime_type"]),
+                size=int(r["size"]),
+                created_at=_as_utc_datetime(r["created_at"]),
+            )
+            for r in rows
+        ]
+
+    async def get_attachments_for_messages(
+        self, message_ids: list[str]
+    ) -> list[StoredAttachment]:
+        if not message_ids:
+            return []
+        stmt = (
+            select(chat_attachments)
+            .where(chat_attachments.c.message_id.in_(message_ids))
+            .order_by(chat_attachments.c.created_at.asc())
+        )
+        async with self._engine.connect() as conn:
+            result = await conn.execute(stmt)
+            rows = result.mappings().all()
+        return [
+            StoredAttachment(
+                id=str(r["id"]),
+                message_id=(
+                    str(r["message_id"]) if r["message_id"] is not None else None
+                ),
+                visitor_id=str(r["visitor_id"]),
+                storage_key=str(r["storage_key"]),
+                name=str(r["name"]),
+                mime_type=str(r["mime_type"]),
+                size=int(r["size"]),
+                created_at=_as_utc_datetime(r["created_at"]),
+            )
+            for r in rows
+        ]
+
+    async def get_attachment(
+        self, *, attachment_id: str, visitor_id: str
+    ) -> StoredAttachment | None:
+        stmt = select(chat_attachments).where(
+            and_(
+                chat_attachments.c.id == attachment_id,
+                chat_attachments.c.visitor_id == visitor_id,
+            )
+        )
+        async with self._engine.connect() as conn:
+            result = await conn.execute(stmt)
+            row = result.mappings().first()
+        if row is None:
+            return None
+        return StoredAttachment(
+            id=str(row["id"]),
+            message_id=(
+                str(row["message_id"]) if row["message_id"] is not None else None
+            ),
+            visitor_id=str(row["visitor_id"]),
+            storage_key=str(row["storage_key"]),
+            name=str(row["name"]),
+            mime_type=str(row["mime_type"]),
+            size=int(row["size"]),
+            created_at=_as_utc_datetime(row["created_at"]),
+        )
 
     async def trace_id_owned_by_visitor(
         self,

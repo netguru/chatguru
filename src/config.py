@@ -468,6 +468,14 @@ class RateLimitSettings(BaseSettings):
         ge=1,
         description="Max LLM messages allowed per IP per window (RATE_LIMIT_MAX_MESSAGES).",
     )
+    max_uploads: int = Field(
+        default=10,
+        ge=1,
+        description=(
+            "Max file uploads (POST /process-document) allowed per IP per window "
+            "(RATE_LIMIT_MAX_UPLOADS). Uses the same window as max_messages."
+        ),
+    )
     window_seconds: int = Field(
         default=86400,
         ge=1,
@@ -528,8 +536,7 @@ class DoclingSettings(BaseSettings):
     picture_description_api_key: str = Field(
         default="",
         description=(
-            "API key for the picture description endpoint. Falls back to LLM_API_KEY when empty "
-            "(DOCLING_PICTURE_DESCRIPTION_API_KEY)."
+            "API key for the picture description endpoint. Falls back to LLM_API_KEY when empty (DOCLING_PICTURE_DESCRIPTION_API_KEY)."
         ),
     )
 
@@ -538,3 +545,45 @@ class DoclingSettings(BaseSettings):
 def get_docling_settings() -> DoclingSettings:
     """Get Docling / document upload settings."""
     return DoclingSettings()
+
+
+class AttachmentStorageSettings(BaseSettings):
+    """Attachment binary storage settings."""
+
+    model_config = SettingsConfigDict(
+        env_file=get_env_file_path(),
+        env_prefix="ATTACHMENT_STORAGE_",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+    enabled: bool = Field(
+        default=True,
+        description=(
+            "Enable attachment binary storage (ATTACHMENT_STORAGE_ENABLED). "
+            "Set to false to disable file uploads and attachment retrieval entirely. "
+            "When disabled, upload endpoints still accept files but return no attachment_id."
+        ),
+    )
+    type: str = Field(
+        default="filesystem",
+        description=(
+            "Storage backend for uploaded attachments. Supported: 'filesystem'. Future: 'azure_blob', 's3'."
+        ),
+    )
+    base_path: str = Field(
+        default="./attachments",
+        description=(
+            "Base directory for filesystem attachment storage "
+            "(ATTACHMENT_STORAGE_BASE_PATH). "
+            "Created automatically if it does not exist. "
+            "Use an absolute path or one relative to the working directory."
+        ),
+    )
+
+
+@lru_cache
+def get_attachment_storage_settings() -> AttachmentStorageSettings:
+    """Get attachment storage settings."""
+    return AttachmentStorageSettings()

@@ -8,7 +8,7 @@ from title_generation.bootstrap import (
 )
 from title_generation.factory import build_title_generator
 from title_generation.repository import TitleGenerator
-from title_generation.utils import truncate_title
+from title_generation.utils import strip_document_tags, truncate_title
 
 __all__ = [
     "TitleGenerator",
@@ -17,5 +17,6 @@ __all__ = [
     "get_title_generator",
     "init_title_generation",
     "shutdown_title_generation",
+    "strip_document_tags",
     "truncate_title",
 ]

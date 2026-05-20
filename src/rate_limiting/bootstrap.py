@@ -86,8 +86,29 @@ def _get_redis_client() -> aioredis.Redis | None:
     return _redis_client
 
 
+async def _consume(key: str, max_count: int) -> bool:
+    """Atomic check-and-increment against a Redis key using ``_LUA_CONSUME``.
+
+    Returns True when the slot was consumed (request allowed), False when the
+    limit is already reached (request should be rejected).  Always returns True
+    when rate limiting is disabled or Redis is unavailable.
+    """
+    if not is_rate_limiting_enabled():
+        return True
+
+    client = _get_redis_client()
+    if client is None:
+        return True
+
+    settings = get_rate_limit_settings()
+    result = await client.eval(  # type: ignore[misc]
+        _LUA_CONSUME, 1, key, str(settings.window_seconds), str(max_count)
+    )
+    return bool(result)
+
+
 async def consume_rate_limit(ip: str) -> bool:
-    """Atomically check and consume one rate-limit slot for ``ip``.
+    """Atomically check and consume one chat-message slot for ``ip``.
 
     Uses a single Lua script so the check and increment are one atomic Redis
     operation — concurrent requests from the same IP cannot both slip through
@@ -107,24 +128,42 @@ async def consume_rate_limit(ip: str) -> bool:
         True  — slot consumed; request is allowed.
         False — limit already reached; caller should send a rate_limit_exceeded error.
     """
-    if not is_rate_limiting_enabled():
-        return True
-
-    client = _get_redis_client()
-    if client is None:
-        return True
-
     settings = get_rate_limit_settings()
-    key = f"rate_limit:chat:{ip}"
-    result = await client.eval(  # type: ignore[misc]
-        _LUA_CONSUME, 1, key, str(settings.window_seconds), str(settings.max_messages)
-    )
-    allowed = bool(result)
+    allowed = await _consume(f"rate_limit:chat:{ip}", settings.max_messages)
     if not allowed:
         logger.info(
-            "Rate limit exceeded for ip=%s (limit=%d per %ds)",
+            "Chat rate limit exceeded for ip=%s (limit=%d per %ds)",
             ip,
             settings.max_messages,
+            settings.window_seconds,
+        )
+    return allowed
+
+
+async def consume_upload_rate_limit(ip: str) -> bool:
+    """Atomically check and consume one upload slot for ``ip``.
+
+    Tracks file uploads (POST /process-document, GET /attachments) separately
+    from chat messages so uploading documents does not burn chat quota.
+
+    Uses the same Redis window (``RATE_LIMIT_WINDOW_SECONDS``) with its own
+    counter ceiling (``RATE_LIMIT_MAX_UPLOADS``) and key prefix
+    ``rate_limit:upload:{ip}``.
+
+    Args:
+        ip: Client IP address used as the rate limit key.
+
+    Returns:
+        True  — slot consumed; request is allowed.
+        False — limit already reached; caller should return HTTP 429.
+    """
+    settings = get_rate_limit_settings()
+    allowed = await _consume(f"rate_limit:upload:{ip}", settings.max_uploads)
+    if not allowed:
+        logger.info(
+            "Upload rate limit exceeded for ip=%s (limit=%d per %ds)",
+            ip,
+            settings.max_uploads,
             settings.window_seconds,
         )
     return allowed
