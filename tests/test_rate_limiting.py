@@ -13,6 +13,7 @@ from rate_limiting.bootstrap import (
     _LUA_CONSUME,
     _get_redis_client,
     consume_rate_limit,
+    consume_upload_rate_limit,
     init_rate_limiting,
     is_rate_limiting_enabled,
     shutdown_rate_limiting,
@@ -260,6 +261,49 @@ async def test_concurrent_requests_cannot_both_exceed_limit() -> None:
     assert blocked == 2, f"Expected 2 blocked, got {blocked}"
 
 
+@pytest.mark.asyncio
+async def test_concurrent_uploads_cannot_both_exceed_limit() -> None:
+    """consume_upload_rate_limit must honour its quota under concurrent callers."""
+    import rate_limiting.bootstrap as bootstrap_mod
+
+    counter = {"value": 0}
+    max_uploads = 2
+
+    def atomic_eval(
+        script: str, num_keys: int, key: str, window: str, limit: str
+    ) -> int:
+        if counter["value"] >= int(limit):
+            return 0
+        counter["value"] += 1
+        return 1
+
+    mock_client = AsyncMock()
+    mock_client.eval = AsyncMock(side_effect=atomic_eval)
+
+    with patch("rate_limiting.bootstrap.get_rate_limit_settings") as mock_settings:
+        mock_settings.return_value = MagicMock(
+            max_messages=10, max_uploads=max_uploads, window_seconds=86400, enabled=True
+        )
+        original = bootstrap_mod._redis_client
+        bootstrap_mod._redis_client = mock_client
+        try:
+            results = await asyncio.gather(
+                consume_upload_rate_limit("1.2.3.4"),
+                consume_upload_rate_limit("1.2.3.4"),
+                consume_upload_rate_limit("1.2.3.4"),
+                consume_upload_rate_limit("1.2.3.4"),
+            )
+        finally:
+            bootstrap_mod._redis_client = original
+
+    allowed = sum(1 for r in results if r is True)
+    blocked = sum(1 for r in results if r is False)
+    assert (
+        allowed == max_uploads
+    ), f"Expected exactly {max_uploads} allowed, got {allowed}"
+    assert blocked == 2, f"Expected 2 blocked, got {blocked}"
+
+
 # ---------------------------------------------------------------------------
 # _get_client_ip — unit tests
 # ---------------------------------------------------------------------------
@@ -272,7 +316,7 @@ def test_get_client_ip_returns_direct_connection_ip() -> None:
     mock_ws.client = MagicMock(host="192.168.1.1")
     mock_ws.headers = {}
 
-    with patch("api.routes.chat.get_rate_limit_settings") as mock_settings:
+    with patch("api.utils.get_rate_limit_settings") as mock_settings:
         mock_settings.return_value = MagicMock(trust_proxy=False)
         assert _get_client_ip(mock_ws) == "192.168.1.1"
 
@@ -284,7 +328,7 @@ def test_get_client_ip_returns_none_when_client_is_none() -> None:
     mock_ws.client = None
     mock_ws.headers = {}
 
-    with patch("api.routes.chat.get_rate_limit_settings") as mock_settings:
+    with patch("api.utils.get_rate_limit_settings") as mock_settings:
         mock_settings.return_value = MagicMock(trust_proxy=False)
         assert _get_client_ip(mock_ws) is None
 
@@ -296,7 +340,7 @@ def test_get_client_ip_reads_x_forwarded_for_when_trust_proxy_enabled() -> None:
     mock_ws.client = MagicMock(host="10.0.0.1")
     mock_ws.headers = {"x-forwarded-for": "203.0.113.5, 10.0.0.1"}
 
-    with patch("api.routes.chat.get_rate_limit_settings") as mock_settings:
+    with patch("api.utils.get_rate_limit_settings") as mock_settings:
         mock_settings.return_value = MagicMock(trust_proxy=True)
         assert _get_client_ip(mock_ws) == "203.0.113.5"
 
@@ -308,7 +352,7 @@ def test_get_client_ip_reads_x_real_ip_when_no_forwarded_for() -> None:
     mock_ws.client = MagicMock(host="10.0.0.1")
     mock_ws.headers = {"x-real-ip": "203.0.113.99"}
 
-    with patch("api.routes.chat.get_rate_limit_settings") as mock_settings:
+    with patch("api.utils.get_rate_limit_settings") as mock_settings:
         mock_settings.return_value = MagicMock(trust_proxy=True)
         assert _get_client_ip(mock_ws) == "203.0.113.99"
 
@@ -320,7 +364,7 @@ def test_get_client_ip_ignores_proxy_headers_when_trust_proxy_disabled() -> None
     mock_ws.client = MagicMock(host="10.0.0.1")
     mock_ws.headers = {"x-forwarded-for": "203.0.113.5", "x-real-ip": "203.0.113.99"}
 
-    with patch("api.routes.chat.get_rate_limit_settings") as mock_settings:
+    with patch("api.utils.get_rate_limit_settings") as mock_settings:
         mock_settings.return_value = MagicMock(trust_proxy=False)
         assert _get_client_ip(mock_ws) == "10.0.0.1"
 

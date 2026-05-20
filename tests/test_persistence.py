@@ -2,7 +2,8 @@
 
 import asyncio
 import os
-from datetime import UTC
+import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,7 @@ from persistence import (
     shutdown_persistence,
 )
 from persistence import upgrade_head
+from persistence.models import StoredAttachment
 from persistence.repository import ChatHistoryRepository
 
 
@@ -298,3 +300,176 @@ async def test_init_persistence_twice_same_instance(
     assert first is second
     await shutdown_persistence()
     get_persistence_settings.cache_clear()
+
+
+# ============================================================================
+# Attachment repository tests
+# ============================================================================
+
+
+def _make_attachment(
+    *, attachment_id: str | None = None, visitor_id: str = "v1"
+) -> StoredAttachment:
+    return StoredAttachment(
+        id=attachment_id or str(uuid.uuid4()),
+        message_id=None,
+        visitor_id=visitor_id,
+        storage_key=f"ab/{attachment_id or 'x'}",
+        name="photo.png",
+        mime_type="image/png",
+        size=1024,
+        created_at=datetime.now(UTC),
+    )
+
+
+@pytest.mark.asyncio
+async def test_save_and_get_attachment_roundtrip(tmp_path: Path) -> None:
+    repo = await _open_repo(tmp_path / "att.db")
+    try:
+        att = _make_attachment()
+        await repo.save_attachment(att)
+        fetched = await repo.get_attachment(
+            attachment_id=att.id, visitor_id=att.visitor_id
+        )
+        assert fetched is not None
+        assert fetched.id == att.id
+        assert fetched.name == "photo.png"
+        assert fetched.mime_type == "image/png"
+    finally:
+        await repo.close()
+
+
+@pytest.mark.asyncio
+async def test_get_attachment_wrong_visitor_returns_none(tmp_path: Path) -> None:
+    repo = await _open_repo(tmp_path / "att_vis.db")
+    try:
+        att = _make_attachment(visitor_id="owner")
+        await repo.save_attachment(att)
+        result = await repo.get_attachment(attachment_id=att.id, visitor_id="intruder")
+        assert result is None
+    finally:
+        await repo.close()
+
+
+@pytest.mark.asyncio
+async def test_get_attachment_not_found_returns_none(tmp_path: Path) -> None:
+    repo = await _open_repo(tmp_path / "att_miss.db")
+    try:
+        result = await repo.get_attachment(
+            attachment_id=str(uuid.uuid4()), visitor_id="v"
+        )
+        assert result is None
+    finally:
+        await repo.close()
+
+
+@pytest.mark.asyncio
+async def test_link_attachments_to_message_and_get(tmp_path: Path) -> None:
+    repo = await _open_repo(tmp_path / "att_link.db")
+    try:
+        # Create a conversation + message to link against.
+        await repo.create_conversation(visitor_id="v1", session_id="s1", title="T")
+        msg_id = await repo.append_message(
+            visitor_id="v1", session_id="s1", role="user", content="hi"
+        )
+
+        att1 = _make_attachment()
+        att2 = _make_attachment()
+        await repo.save_attachment(att1)
+        await repo.save_attachment(att2)
+
+        await repo.link_attachments_to_message(
+            attachment_ids=[att1.id, att2.id],
+            message_id=msg_id,
+            visitor_id="v1",
+        )
+
+        linked = await repo.get_attachments_for_message(msg_id)
+        assert len(linked) == 2
+        linked_ids = {a.id for a in linked}
+        assert att1.id in linked_ids
+        assert att2.id in linked_ids
+        # message_id should now be set.
+        for a in linked:
+            assert a.message_id == msg_id
+    finally:
+        await repo.close()
+
+
+@pytest.mark.asyncio
+async def test_link_attachments_wrong_visitor_ignored(tmp_path: Path) -> None:
+    """Attachments owned by a different visitor must not be linkable."""
+    repo = await _open_repo(tmp_path / "att_wrong_vis.db")
+    try:
+        await repo.create_conversation(visitor_id="v1", session_id="s1", title="T")
+        msg_id = await repo.append_message(
+            visitor_id="v1", session_id="s1", role="user", content="hi"
+        )
+        # Attachment owned by "other" — attempting to link as "v1" should be a no-op.
+        att = _make_attachment(visitor_id="other")
+        await repo.save_attachment(att)
+
+        await repo.link_attachments_to_message(
+            attachment_ids=[att.id],
+            message_id=msg_id,
+            visitor_id="v1",
+        )
+
+        linked = await repo.get_attachments_for_message(msg_id)
+        assert linked == []
+    finally:
+        await repo.close()
+
+
+@pytest.mark.asyncio
+async def test_get_attachments_for_message_returns_empty_when_none(
+    tmp_path: Path,
+) -> None:
+    repo = await _open_repo(tmp_path / "att_empty.db")
+    try:
+        await repo.create_conversation(visitor_id="v1", session_id="s1", title="T")
+        msg_id = await repo.append_message(
+            visitor_id="v1", session_id="s1", role="user", content="hi"
+        )
+        result = await repo.get_attachments_for_message(msg_id)
+        assert result == []
+    finally:
+        await repo.close()
+
+
+@pytest.mark.asyncio
+async def test_get_attachments_for_messages_batch(tmp_path: Path) -> None:
+    repo = await _open_repo(tmp_path / "att_batch.db")
+    try:
+        await repo.create_conversation(visitor_id="v1", session_id="s1", title="T")
+        msg1 = await repo.append_message(
+            visitor_id="v1", session_id="s1", role="user", content="msg1"
+        )
+        msg2 = await repo.append_message(
+            visitor_id="v1", session_id="s1", role="user", content="msg2"
+        )
+
+        att1 = _make_attachment()
+        att2 = _make_attachment()
+
+        await repo.save_attachment(att1)
+        await repo.save_attachment(att2)
+
+        await repo.link_attachments_to_message(
+            attachment_ids=[att1.id], message_id=msg1, visitor_id="v1"
+        )
+        await repo.link_attachments_to_message(
+            attachment_ids=[att2.id], message_id=msg2, visitor_id="v1"
+        )
+
+        results = await repo.get_attachments_for_messages([msg1, msg2])
+        assert len(results) == 2
+        result_ids = {a.id for a in results}
+        assert att1.id in result_ids
+        assert att2.id in result_ids
+
+        # Empty input returns empty list without hitting the DB.
+        empty = await repo.get_attachments_for_messages([])
+        assert empty == []
+    finally:
+        await repo.close()

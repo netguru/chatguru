@@ -689,7 +689,7 @@ def test_generate_conversation_title_updates_existing_conversation(
     asyncio.run(_seed())
 
     with patch(
-        "api.routes.chat.generate_title",
+        "api.routes.history.generate_title",
         new=AsyncMock(return_value="Generated title"),
     ):
         response = app.post(
