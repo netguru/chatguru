@@ -15,8 +15,9 @@ import { useFeedback } from "../../hooks/useFeedback";
 import { useAppStore } from "../../store/appStore";
 import type { ChatMessage as ChatMessageType, Source } from "../../types/chat";
 import { filterCitedSources, injectCitationLinks } from "../../utils/citationLinks";
+import { isPreviewableSource } from "../../utils/sourceMapping";
 import { cn } from "../../utils/utils";
-import { PdfViewerModal } from "../modals/PdfViewerModal";
+import { SourceViewerModal } from "../modals/SourceViewerModal";
 import { ThumbsDownModal } from "../modals/ThumbsDownModal";
 import { Avatar, AvatarFallback } from "../ui/avatar";
 import { Button } from "../ui/button";
@@ -59,7 +60,7 @@ export function ChatMessage({ message }: Props) {
   const openSourcesPanel = useAppStore((s) => s.openSourcesPanel);
   const [thumbsDownOpen, setThumbsDownOpen] = useState(false);
   const [feedbackGiven, setFeedbackGiven] = useState<0 | 1 | null>(null);
-  const [activePdfSource, setActivePdfSource] = useState<Source | null>(null);
+  const [activePreviewSource, setActivePreviewSource] = useState<Source | null>(null);
   const { submitFeedback, isSubmitting } = useFeedback();
 
   function handleCitationLinkClick(href: string) {
@@ -68,9 +69,10 @@ export function ChatMessage({ message }: Props) {
       const isDocumentLink = url.pathname.startsWith("/documents/");
       if (!isDocumentLink) return false;
       const sourceUri = url.pathname.replace("/documents/", "");
+      if (!isPreviewableSource(sourceUri)) return false;
       const pageMatch = url.hash.match(/^#page=(\d+)$/);
       const page = pageMatch ? parseInt(pageMatch[1], 10) : undefined;
-      setActivePdfSource({
+      setActivePreviewSource({
         file: sourceUri,
         url: url.pathname,
         pages: page != null ? [page] : [],
@@ -245,7 +247,10 @@ export function ChatMessage({ message }: Props) {
         onSent={() => setFeedbackGiven(0)}
       />
 
-      <PdfViewerModal source={activePdfSource} onClose={() => setActivePdfSource(null)} />
+      <SourceViewerModal
+        source={activePreviewSource}
+        onClose={() => setActivePreviewSource(null)}
+      />
     </>
   );
 }
