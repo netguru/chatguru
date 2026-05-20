@@ -310,7 +310,7 @@ async def test_concurrent_uploads_cannot_both_exceed_limit() -> None:
 
 
 def test_get_client_ip_returns_direct_connection_ip() -> None:
-    from api.routes.chat import _get_client_ip
+    from api.utils import get_client_ip
 
     mock_ws = MagicMock()
     mock_ws.client = MagicMock(host="192.168.1.1")
@@ -318,11 +318,11 @@ def test_get_client_ip_returns_direct_connection_ip() -> None:
 
     with patch("api.utils.get_rate_limit_settings") as mock_settings:
         mock_settings.return_value = MagicMock(trust_proxy=False)
-        assert _get_client_ip(mock_ws) == "192.168.1.1"
+        assert get_client_ip(mock_ws) == "192.168.1.1"
 
 
 def test_get_client_ip_returns_none_when_client_is_none() -> None:
-    from api.routes.chat import _get_client_ip
+    from api.utils import get_client_ip
 
     mock_ws = MagicMock()
     mock_ws.client = None
@@ -330,11 +330,11 @@ def test_get_client_ip_returns_none_when_client_is_none() -> None:
 
     with patch("api.utils.get_rate_limit_settings") as mock_settings:
         mock_settings.return_value = MagicMock(trust_proxy=False)
-        assert _get_client_ip(mock_ws) is None
+        assert get_client_ip(mock_ws) is None
 
 
 def test_get_client_ip_reads_x_forwarded_for_when_trust_proxy_enabled() -> None:
-    from api.routes.chat import _get_client_ip
+    from api.utils import get_client_ip
 
     mock_ws = MagicMock()
     mock_ws.client = MagicMock(host="10.0.0.1")
@@ -342,11 +342,11 @@ def test_get_client_ip_reads_x_forwarded_for_when_trust_proxy_enabled() -> None:
 
     with patch("api.utils.get_rate_limit_settings") as mock_settings:
         mock_settings.return_value = MagicMock(trust_proxy=True)
-        assert _get_client_ip(mock_ws) == "203.0.113.5"
+        assert get_client_ip(mock_ws) == "203.0.113.5"
 
 
 def test_get_client_ip_reads_x_real_ip_when_no_forwarded_for() -> None:
-    from api.routes.chat import _get_client_ip
+    from api.utils import get_client_ip
 
     mock_ws = MagicMock()
     mock_ws.client = MagicMock(host="10.0.0.1")
@@ -354,11 +354,11 @@ def test_get_client_ip_reads_x_real_ip_when_no_forwarded_for() -> None:
 
     with patch("api.utils.get_rate_limit_settings") as mock_settings:
         mock_settings.return_value = MagicMock(trust_proxy=True)
-        assert _get_client_ip(mock_ws) == "203.0.113.99"
+        assert get_client_ip(mock_ws) == "203.0.113.99"
 
 
 def test_get_client_ip_ignores_proxy_headers_when_trust_proxy_disabled() -> None:
-    from api.routes.chat import _get_client_ip
+    from api.utils import get_client_ip
 
     mock_ws = MagicMock()
     mock_ws.client = MagicMock(host="10.0.0.1")
@@ -366,7 +366,7 @@ def test_get_client_ip_ignores_proxy_headers_when_trust_proxy_disabled() -> None
 
     with patch("api.utils.get_rate_limit_settings") as mock_settings:
         mock_settings.return_value = MagicMock(trust_proxy=False)
-        assert _get_client_ip(mock_ws) == "10.0.0.1"
+        assert get_client_ip(mock_ws) == "10.0.0.1"
 
 
 # ---------------------------------------------------------------------------
@@ -456,7 +456,7 @@ def test_websocket_rate_limit_skipped_when_ip_unknown(async_app: TestClient) -> 
     with (
         patch("api.routes.chat.Agent") as mock_agent_class,
         patch("api.routes.chat.consume_rate_limit", consume_mock),
-        patch("api.routes.chat._get_client_ip", return_value=None),
+        patch("api.routes.chat.get_client_ip", return_value=None),
     ):
         mock_agent = MagicMock(astream=_mock_astream_chunks(chunks), last_trace_id=None)
         mock_agent.get_last_used_sources.return_value = []
