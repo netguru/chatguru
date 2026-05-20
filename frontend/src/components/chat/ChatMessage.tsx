@@ -15,8 +15,10 @@ import { useFeedback } from "../../hooks/useFeedback";
 import { useAppStore } from "../../store/appStore";
 import type { ChatMessage as ChatMessageType, Source } from "../../types/chat";
 import { filterCitedSources, injectCitationLinks } from "../../utils/citationLinks";
+import { markdownProseClass } from "../../utils/markdownProseClass";
+import { isPreviewableSource } from "../../utils/sourceMapping";
 import { cn } from "../../utils/utils";
-import { PdfViewerModal } from "../modals/PdfViewerModal";
+import { SourceViewerModal } from "../modals/SourceViewerModal";
 import { ThumbsDownModal } from "../modals/ThumbsDownModal";
 import { Avatar, AvatarFallback } from "../ui/avatar";
 import { Button } from "../ui/button";
@@ -59,7 +61,7 @@ export function ChatMessage({ message }: Props) {
   const openSourcesPanel = useAppStore((s) => s.openSourcesPanel);
   const [thumbsDownOpen, setThumbsDownOpen] = useState(false);
   const [feedbackGiven, setFeedbackGiven] = useState<0 | 1 | null>(null);
-  const [activePdfSource, setActivePdfSource] = useState<Source | null>(null);
+  const [activePreviewSource, setActivePreviewSource] = useState<Source | null>(null);
   const { submitFeedback, isSubmitting } = useFeedback();
 
   function handleCitationLinkClick(href: string) {
@@ -68,9 +70,10 @@ export function ChatMessage({ message }: Props) {
       const isDocumentLink = url.pathname.startsWith("/documents/");
       if (!isDocumentLink) return false;
       const sourceUri = url.pathname.replace("/documents/", "");
+      if (!isPreviewableSource(sourceUri)) return false;
       const pageMatch = url.hash.match(/^#page=(\d+)$/);
       const page = pageMatch ? parseInt(pageMatch[1], 10) : undefined;
-      setActivePdfSource({
+      setActivePreviewSource({
         file: sourceUri,
         url: url.pathname,
         pages: page != null ? [page] : [],
@@ -147,7 +150,7 @@ export function ChatMessage({ message }: Props) {
               );
             })()
           ) : (
-            <div className="text-t2 tracking-m leading-xl [&_p]:mb-2 [&_p:last-child]:mb-0 [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:mb-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:mb-2 [&_li]:mb-0.5 [&_h1]:text-h3 [&_h1]:font-strong [&_h1]:mb-2 [&_h2]:text-h4 [&_h2]:font-strong [&_h2]:mb-2 [&_h3]:text-h5 [&_h3]:font-strong [&_h3]:mb-1 [&_code]:bg-surface-neutral-soft [&_code]:px-1 [&_code]:rounded [&_code]:text-t3 [&_pre]:bg-surface-neutral-soft [&_pre]:p-3 [&_pre]:rounded-m [&_pre]:overflow-x-auto [&_pre]:mb-2 [&_blockquote]:border-l-2 [&_blockquote]:border-border-neutral-soft [&_blockquote]:pl-3 [&_blockquote]:opacity-70 [&_blockquote]:mb-2 [&_a]:text-text-interactive [&_a]:underline [&_a]:underline-offset-2 [&_a]:transition-colors [&_a:hover]:text-text-hover-interactive [&_a:active]:text-text-active-interactive [&_hr]:border-border-neutral-soft [&_hr]:my-3 [&_table]:w-full [&_table]:text-t3 [&_th]:text-left [&_th]:font-strong [&_th]:pb-1 [&_td]:py-0.5">
+            <div className={markdownProseClass}>
               {message.content ? (
                 <ReactMarkdown
                   remarkPlugins={[remarkGfm]}
@@ -245,7 +248,10 @@ export function ChatMessage({ message }: Props) {
         onSent={() => setFeedbackGiven(0)}
       />
 
-      <PdfViewerModal source={activePdfSource} onClose={() => setActivePdfSource(null)} />
+      <SourceViewerModal
+        source={activePreviewSource}
+        onClose={() => setActivePreviewSource(null)}
+      />
     </>
   );
 }
