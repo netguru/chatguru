@@ -273,21 +273,36 @@ make ingest-docs SOURCE_DIR=./rag_data BACKEND=mongodb
 
 ## Docker startup ingestion
 
-When running via Docker Compose, the backend image bundles the contents of `rag_data/`
-at `/app/rag_data` and automatically ingests them on first startup when
+When running via Docker Compose, the corpus served by document RAG lives in the
+`rag-data` Docker volume mounted at `/app/rag_data`. The volume is seeded from
+the files bundled in the image (`COPY rag_data/ /app/rag_data/` in
+`docker/Dockerfile`) the first time it is created, and is authoritative after
+that — operators can update the corpus in production without rebuilding the
+image. Ingestion runs automatically on first startup when
 `DOCUMENT_RAG_ENABLED=true`.
+
+### Volumes involved
+
+| Volume | Mount | Purpose |
+|---|---|---|
+| `rag-data` | `/app/rag_data` | Source corpus the entrypoint reads. Seeded once from the image, then authoritative. |
+| `rag-ingest-state` | `/app/rag_ingest_state` | Holds the `.ingested` sentinel so ingestion is skipped on subsequent boots. |
+| `mongodb-data` | `/data/db` (mongodb service) | Persisted embeddings, chunks, and GridFS source files. |
 
 ### How it works
 
 The `docker/entrypoint.sh` runs the ingestion CLI before starting the server:
 
-1. **First start** — no sentinel exists → ingestion runs → sentinel written to the
-   `rag-ingest-state` Docker volume at `/app/rag_ingest_state/.ingested`.
+1. **First start** — `rag-data` is created and seeded from the image's
+   `/app/rag_data`; no sentinel exists → ingestion runs → sentinel written to
+   the `rag-ingest-state` Docker volume at `/app/rag_ingest_state/.ingested`.
 2. **Subsequent starts** — sentinel found → ingestion skipped, container boots
-   immediately. The indexed data is persisted in the `mongodb-data` volume.
+   immediately. The indexed data is persisted in the `mongodb-data` volume and
+   the source corpus stays in `rag-data`.
 3. **Force re-ingest** — set `DOCUMENT_RAG_INGEST_FULL_REPLACE=1` → sentinel is
-   ignored, existing chunks and GridFS files are deleted, everything in `rag_data/`
-   is re-embedded and re-indexed. The sentinel is updated on success.
+   ignored, existing chunks and GridFS files are deleted, everything currently
+   in the `rag-data` volume is re-embedded and re-indexed. The sentinel is
+   updated on success.
 
 ### Configuration
 
@@ -302,20 +317,48 @@ The `docker/entrypoint.sh` runs the ingestion CLI before starting the server:
 # In .env, set:
 DOCUMENT_RAG_INGEST_FULL_REPLACE=1
 
-# Then restart:
-docker compose up --build
+# Then restart (no image rebuild needed — the volume content is what matters):
+docker compose up -d
 ```
 
 Remove `DOCUMENT_RAG_INGEST_FULL_REPLACE=1` from `.env` afterwards to restore
 the skip-if-done behavior.
 
-### Adding new documents
+### Adding or updating documents in production
 
-Place new files in `rag_data/`, rebuild the image, and set
-`DOCUMENT_RAG_INGEST_FULL_REPLACE=1` for one run to pick up the changes:
+Because the corpus lives in the `rag-data` volume, you do **not** need to
+rebuild the image to refresh content. Two supported workflows:
+
+**Option A — copy files into the running volume (recommended for hosting):**
+
+```bash
+# Copy a file from the host into the running agent's /app/rag_data
+docker compose cp ./new_doc.pdf chatguru-agent:/app/rag_data/
+
+# Re-process everything currently in the volume
+DOCUMENT_RAG_INGEST_FULL_REPLACE=1 docker compose up -d --no-deps chatguru-agent
+```
+
+**Option B — rebuild the image with new bundled defaults (fresh deployments only):**
+
+Place new files in `rag_data/` in the repo and rebuild. The new content seeds
+the `rag-data` volume **only when the volume does not yet exist**. On existing
+deployments the volume is authoritative and a rebuild alone will not refresh
+the corpus — use Option A instead, or `docker volume rm rag-data` between the
+rebuild and the next `up` if you really want to reset.
 
 ```bash
 DOCUMENT_RAG_INGEST_FULL_REPLACE=1 docker compose up --build
+```
+
+### Inspecting / extracting the volume
+
+```bash
+# Where the volume lives on the host (Linux / Docker Desktop differ):
+docker volume inspect chatguru_rag-data
+
+# List the corpus currently visible to the running agent:
+docker compose exec chatguru-agent ls -la /app/rag_data
 ```
 
 ## Troubleshooting

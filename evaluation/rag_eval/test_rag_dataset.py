@@ -6,6 +6,7 @@ from typing import Any, cast
 import pandas as pd
 from datasets import Dataset
 from httpx import ConnectError
+
 from src.config import get_logger
 from src.rag.documents import create_product_document
 from src.rag.simple_retriever import SimpleProductRetriever

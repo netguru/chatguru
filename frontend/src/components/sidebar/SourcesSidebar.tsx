@@ -1,10 +1,11 @@
-import { FilePdfIcon, LockSimpleIcon, XIcon } from "@phosphor-icons/react";
+import { FileIcon, FilePdfIcon, FileTextIcon, LockSimpleIcon, XIcon } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { useAppStore } from "../../store/appStore";
 import type { Source } from "../../types/chat";
-import { PdfViewerModal } from "../modals/PdfViewerModal";
+import { isMarkdownSource, isPdfSource, isPreviewableSource } from "../../utils/sourceMapping";
 import { RequestAccessModal } from "../modals/RequestAccessModal";
+import { SourceViewerModal } from "../modals/SourceViewerModal";
 import {
   Sidebar,
   SidebarContent,
@@ -21,7 +22,7 @@ export function SourcesSidebar() {
   const sourcesPanelOpen = useAppStore((s) => s.sourcesPanelOpen);
   const closeSourcesPanel = useAppStore((s) => s.closeSourcesPanel);
   const currentSessionId = useAppStore((s) => s.currentSessionId);
-  const [activePdfSource, setActivePdfSource] = useState<Source | null>(null);
+  const [activePreviewSource, setActivePreviewSource] = useState<Source | null>(null);
   const [requestAccessSource, setRequestAccessSource] = useState<Source | null>(null);
   const { pathname } = useLocation();
 
@@ -33,8 +34,8 @@ export function SourcesSidebar() {
   function handleSourceClick(source: Source) {
     if (source.restricted) {
       setRequestAccessSource(source);
-    } else {
-      setActivePdfSource(source);
+    } else if (isPreviewableSource(source.file)) {
+      setActivePreviewSource(source);
     }
   }
 
@@ -62,11 +63,18 @@ export function SourcesSidebar() {
             <SidebarMenu>
               {sources.map((source) => (
                 <SidebarMenuItem key={`${source.file}-${source.pages?.join(",")}`}>
-                  <SidebarMenuButton onClick={() => handleSourceClick(source)}>
+                  <SidebarMenuButton
+                    onClick={() => handleSourceClick(source)}
+                    disabled={!source.restricted && !isPreviewableSource(source.file)}
+                  >
                     {source.restricted ? (
                       <LockSimpleIcon weight="bold" />
-                    ) : (
+                    ) : isPdfSource(source.file) ? (
                       <FilePdfIcon weight="bold" />
+                    ) : isMarkdownSource(source.file) ? (
+                      <FileTextIcon weight="bold" />
+                    ) : (
+                      <FileIcon weight="bold" />
                     )}
                     <div className="flex flex-col min-w-0">
                       <span className="truncate">{source.file}</span>
@@ -84,7 +92,10 @@ export function SourcesSidebar() {
         </Sidebar>
       </SidebarProvider>
 
-      <PdfViewerModal source={activePdfSource} onClose={() => setActivePdfSource(null)} />
+      <SourceViewerModal
+        source={activePreviewSource}
+        onClose={() => setActivePreviewSource(null)}
+      />
       <RequestAccessModal
         open={requestAccessSource !== null}
         onOpenChange={(open) => {
