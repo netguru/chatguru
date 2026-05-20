@@ -1,6 +1,5 @@
 import { useEffect } from "react";
-import type { MessageRole } from "../types/chat";
-import type { BackendSource } from "../types/chat";
+import type { BackendSource, MessageRole, StoredAttachment } from "../types/chat";
 import { selectCurrentSession, useAppStore } from "../store/appStore";
 import { mapBackendSources } from "../utils/sourceMapping";
 import { getOrCreateVisitorId } from "../utils/visitorId";
@@ -16,6 +15,7 @@ interface HistoryMessageDto {
   content: string;
   trace_id?: string;
   sources?: BackendSource[];
+  stored_attachments?: StoredAttachment[];
 }
 
 interface ValidHistoryMessageDto {
@@ -23,6 +23,7 @@ interface ValidHistoryMessageDto {
   content: string;
   trace_id?: string;
   sources?: BackendSource[];
+  stored_attachments?: StoredAttachment[];
 }
 
 function isMessageRole(role: string): role is MessageRole {
@@ -96,6 +97,9 @@ export function usePersistedHistory() {
             content: entry.content,
             ...(entry.trace_id ? { traceId: entry.trace_id } : {}),
             ...(entry.sources ? { sources: mapBackendSources(entry.sources) ?? undefined } : {}),
+            ...(entry.stored_attachments?.length
+              ? { storedAttachments: entry.stored_attachments }
+              : {}),
           }));
 
         hydrateSessionHistory(sessionId, history);

@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef } from "react";
 import { selectCurrentHistory, selectCurrentSession, useAppStore } from "../store/appStore";
 import type {
   HistoryMessage,
-  ImageAttachment,
   WsEndEvent,
   WsErrorEvent,
   WsEvent,
@@ -38,6 +37,7 @@ export function useChat() {
     markLastMessageError,
     addToHistory,
     updateSessionTitle,
+    setLastUserMessageAttachments,
   } = useAppStore();
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -64,9 +64,12 @@ export function useChat() {
           }),
         });
         if (response.status === 404 && attempt < 4) {
-          window.setTimeout(() => {
-            void requestConversationTitle(sessionId, firstMessage, attempt + 1);
-          }, 150 * (attempt + 1));
+          window.setTimeout(
+            () => {
+              void requestConversationTitle(sessionId, firstMessage, attempt + 1);
+            },
+            150 * (attempt + 1)
+          );
           return;
         }
         if (!response.ok) return;
@@ -76,8 +79,7 @@ export function useChat() {
           title: string;
         };
         updateSessionTitle(data.session_id, data.title);
-      } catch {
-      }
+      } catch {}
     },
     [updateSessionTitle]
   );
@@ -122,7 +124,14 @@ export function useChat() {
       } else if (data.type === "end") {
         const endEvent = data as WsEndEvent;
         setStreaming(false);
-        finalizeLastMessage(endEvent.content, mapBackendSources(endEvent.sources), endEvent.trace_id ?? null);
+        finalizeLastMessage(
+          endEvent.content,
+          mapBackendSources(endEvent.sources),
+          endEvent.trace_id ?? null
+        );
+        if (endEvent.user_attachments?.length) {
+          setLastUserMessageAttachments(endEvent.user_attachments);
+        }
         addToHistory({ role: "assistant", content: endEvent.content });
       } else if (data.type === "error") {
         const errorEvent = data as WsErrorEvent;
@@ -137,6 +146,7 @@ export function useChat() {
     finalizeLastMessage,
     markLastMessageError,
     addToHistory,
+    setLastUserMessageAttachments,
   ]);
 
   useEffect(() => {
@@ -151,7 +161,7 @@ export function useChat() {
   }, [connect]);
 
   const sendMessage = useCallback(
-    (text: string, images?: ImageAttachment[]) => {
+    (text: string, attachmentIds?: string[], imagePreviewUrls?: string[]) => {
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN || isStreamingRef.current)
         return;
 
@@ -159,14 +169,14 @@ export function useChat() {
       // current turn explicitly for the outbound payload.
       const historySnapshot = selectCurrentHistory(useAppStore.getState());
 
-      const imageUrls = images?.map((img) => `data:${img.mime_type};base64,${img.data}`);
       addUserMessage({
         id: crypto.randomUUID(),
         role: "user",
         content: text,
-        ...(imageUrls?.length ? { imageUrls } : {}),
+        // Object URLs stay valid until replaced by server URLs in the end frame.
+        ...(imagePreviewUrls?.length ? { imageUrls: imagePreviewUrls } : {}),
       });
-      addToHistory({ role: "user", content: text, ...(images?.length ? { attachments: images } : {}) });
+      addToHistory({ role: "user", content: text });
 
       // Read currentSessionId AFTER addUserMessage — the first-ever message triggers
       // lazy session creation inside the store (synchronous Zustand set), so reading
@@ -178,7 +188,7 @@ export function useChat() {
       const currentUserMessage: HistoryMessage = {
         role: "user",
         content: text,
-        ...(images?.length ? { attachments: images } : {}),
+        ...(attachmentIds?.length ? { attachment_ids: attachmentIds } : {}),
       };
       const outboundMessages = [...historySnapshot, currentUserMessage];
       // Only treat this as the first message in a new session when hydration has
@@ -210,13 +220,7 @@ export function useChat() {
         void requestConversationTitle(currentSessionId, text);
       }
     },
-    [
-      addUserMessage,
-      addToHistory,
-      setStreaming,
-      addAssistantPlaceholder,
-      requestConversationTitle,
-    ]
+    [addUserMessage, addToHistory, setStreaming, addAssistantPlaceholder, requestConversationTitle]
   );
 
   return { sendMessage };

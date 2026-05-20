@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { ChatMessage, HistoryMessage, Source, VectorDbType } from "../types/chat";
+import type { ChatMessage, HistoryMessage, Source, StoredAttachment, VectorDbType } from "../types/chat";
 
 // ─── Session ─────────────────────────────────────────────────────────────────
 
@@ -70,6 +70,13 @@ interface AppState {
   sourcesPanelSources: Source[];
   openSourcesPanel: (sources: Source[]) => void;
   closeSourcesPanel: () => void;
+
+  /**
+   * Attach server-persisted attachment metadata to the most recent user message
+   * (the one preceding the currently-streaming assistant message).
+   * Called when the backend end frame includes `user_attachments`.
+   */
+  setLastUserMessageAttachments: (attachments: StoredAttachment[]) => void;
 
   // ── Session actions ───────────────────────────────────────────────────────
   /** Switch to draft mode — session is created lazily on first message */
@@ -185,6 +192,24 @@ export const useAppStore = create<AppState>((set) => ({
       ),
     })),
 
+  setLastUserMessageAttachments: (attachments) =>
+    set((state) => ({
+      sessions: state.sessions.map((s) => {
+        if (s.id !== state.currentSessionId) return s;
+        const msgs = [...s.messages];
+        // The last message is the assistant placeholder; the user message is second-to-last.
+        const userIdx = msgs.length - 2;
+        if (userIdx < 0 || msgs[userIdx]?.role !== "user") return s;
+        const prev = msgs[userIdx] as ChatMessage;
+        // Revoke any blob/object URLs that were created for in-memory preview.
+        prev.imageUrls?.forEach((url) => {
+          if (url.startsWith("blob:")) URL.revokeObjectURL(url);
+        });
+        msgs[userIdx] = { ...prev, storedAttachments: attachments, imageUrls: undefined };
+        return { ...s, messages: msgs };
+      }),
+    })),
+
   // Sessions
   startNewSession: () => set({ currentSessionId: null }),
 
@@ -227,6 +252,7 @@ export const useAppStore = create<AppState>((set) => ({
           content: entry.content,
           ...(entry.traceId ? { traceId: entry.traceId } : {}),
           ...(entry.sources ? { sources: entry.sources } : {}),
+          ...(entry.storedAttachments?.length ? { storedAttachments: entry.storedAttachments } : {}),
         }));
         return {
           ...s,

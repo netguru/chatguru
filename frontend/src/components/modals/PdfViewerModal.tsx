@@ -53,9 +53,13 @@ function PdfErrorState() {
 interface Props {
   source: Source | null;
   onClose: () => void;
+  /** When set, used as the PDF URL directly instead of constructing /documents/{source.file}. */
+  fileUrl?: string;
+  /** Explicit open state override. When omitted, derived from source !== null. */
+  open?: boolean;
 }
 
-export function PdfViewerModal({ source, onClose }: Props) {
+export function PdfViewerModal({ source, onClose, fileUrl, open: openProp }: Props) {
   const isMobile = useIsMobile();
   const [numPages, setNumPages] = useState<number | null>(null);
   const [pageNumber, setPageNumber] = useState(1);
@@ -85,11 +89,11 @@ export function PdfViewerModal({ source, onClose }: Props) {
     return () => resizeObserver.disconnect();
   }, [viewerEl]);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally reset view state only when the opened file changes, not on every source object re-reference
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally reset view state only when the actual file URL changes, not on every source object re-reference
   useEffect(() => {
     setScale(ZOOM_DEFAULT);
     setLoadState("loading");
-  }, [source?.file]);
+  }, [fileUrl ?? source?.file]);
 
   useEffect(() => {
     if (!showThumbnails || numPages === null) return;
@@ -115,7 +119,7 @@ export function PdfViewerModal({ source, onClose }: Props) {
 
   return (
     <Modal
-      open={source !== null}
+      open={openProp ?? source !== null}
       onOpenChange={(open) => {
         if (!open) onClose();
       }}
@@ -207,7 +211,7 @@ export function PdfViewerModal({ source, onClose }: Props) {
           {loadState === "loading" && <PdfLoadingState />}
           {loadState === "error" && <PdfErrorState />}
           <Document
-            file={source?.file ? `/documents/${source.file}` : undefined}
+            file={fileUrl ?? (source?.file ? `/documents/${source.file}` : undefined)}
             onLoadSuccess={onDocumentLoadSuccess}
             onLoadError={onDocumentLoadError}
             loading={null}

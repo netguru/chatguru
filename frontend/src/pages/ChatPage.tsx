@@ -85,8 +85,8 @@ export function ChatPage() {
         )}
 
         <ChatInput
-          onSend={(text, images) => {
-            sendMessage(text, images);
+          onSend={(text, attachmentIds, imagePreviewUrls) => {
+            sendMessage(text, attachmentIds, imagePreviewUrls);
             setInputValue("");
           }}
           value={inputValue}

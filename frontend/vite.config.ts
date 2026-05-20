@@ -40,7 +40,15 @@ export default defineConfig({
         target: backendTarget,
         changeOrigin: true,
       },
+      "/upload-attachment": {
+        target: backendTarget,
+        changeOrigin: true,
+      },
       "/documents": {
+        target: backendTarget,
+        changeOrigin: true,
+      },
+      "/attachments": {
         target: backendTarget,
         changeOrigin: true,
       },
