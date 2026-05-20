@@ -7,7 +7,7 @@ wired in via `persistence.factory.build_chat_history_repository`.
 
 from typing import Protocol
 
-from persistence.models import StoredChatMessage, StoredConversation
+from persistence.models import StoredAttachment, StoredChatMessage, StoredConversation
 
 
 class ChatHistoryRepository(Protocol):
@@ -76,8 +76,8 @@ class ChatHistoryRepository(Protocol):
         content: str,
         trace_id: str | None = None,
         sources: str | None = None,
-    ) -> None:
-        """Persist one message. Roles are typically ``user`` or ``assistant``."""
+    ) -> str:
+        """Persist one message and return its generated message ID."""
         ...
 
     async def list_messages(
@@ -96,6 +96,42 @@ class ChatHistoryRepository(Protocol):
         visitor_id: str,
     ) -> bool:
         """Return True if a persisted assistant message with this trace_id belongs to visitor_id."""
+        ...
+
+    # ------------------------------------------------------------------
+    # Attachments
+    # ------------------------------------------------------------------
+
+    async def save_attachment(self, attachment: "StoredAttachment") -> None:
+        """Persist an attachment record. ``message_id`` may be None initially."""
+        ...
+
+    async def link_attachments_to_message(
+        self,
+        *,
+        attachment_ids: list[str],
+        message_id: str,
+        visitor_id: str,
+    ) -> None:
+        """Set message_id on pre-stored attachments that still have no message."""
+        ...
+
+    async def get_attachments_for_message(
+        self, message_id: str
+    ) -> list["StoredAttachment"]:
+        """Return all attachments linked to a given message, oldest first."""
+        ...
+
+    async def get_attachments_for_messages(
+        self, message_ids: list[str]
+    ) -> list["StoredAttachment"]:
+        """Return attachments for multiple messages in one query, oldest first."""
+        ...
+
+    async def get_attachment(
+        self, *, attachment_id: str, visitor_id: str
+    ) -> "StoredAttachment | None":
+        """Return attachment if it belongs to visitor_id, else None."""
         ...
 
     async def close(self) -> None:

@@ -5,8 +5,10 @@ Keep in sync with Alembic revisions under ``alembic/versions/`` (columns and ind
 """
 
 from sqlalchemy import (
+    BigInteger,
     Column,
     DateTime,
+    ForeignKey,
     Index,
     MetaData,
     String,
@@ -54,4 +56,37 @@ Index(
     chat_messages.c.visitor_id,
     chat_messages.c.session_id,
     chat_messages.c.created_at,
+)
+
+chat_attachments = Table(
+    "chat_attachments",
+    metadata,
+    Column("id", String(36), primary_key=True),
+    # Nullable: populated by the upload endpoints before the message exists,
+    # then linked to the message when the WebSocket turn is persisted.
+    # ON DELETE SET NULL ensures attachments are not hard-deleted when a
+    # message row is removed (preserves the stored file and its metadata).
+    Column(
+        "message_id",
+        String(36),
+        ForeignKey("chat_messages.id", ondelete="SET NULL"),
+        nullable=True,
+    ),
+    Column("visitor_id", String(512), nullable=False),
+    Column("storage_key", Text, nullable=False),
+    Column("name", String(512), nullable=False),
+    Column("mime_type", String(256), nullable=False),
+    Column("size", BigInteger, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
+
+Index(
+    "idx_chat_attachments_message",
+    chat_attachments.c.message_id,
+)
+
+Index(
+    "idx_chat_attachments_visitor",
+    chat_attachments.c.visitor_id,
+    chat_attachments.c.created_at,
 )
