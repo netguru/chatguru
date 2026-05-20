@@ -5,16 +5,14 @@ import base64
 import contextlib
 import json
 import mimetypes
-import re
 import urllib.parse
 import uuid
 from collections.abc import AsyncIterator
-from typing import Annotated, Any, Literal, Self
+from typing import TYPE_CHECKING, Any, Literal, Self
 
 from fastapi import (
     APIRouter,
     HTTPException,
-    Query,
     Request,
     WebSocket,
     WebSocketDisconnect,
@@ -24,7 +22,6 @@ from gridfs import GridFSBucket, GridOut
 from gridfs.errors import NoFile
 from pydantic import BaseModel, Field, ValidationError, model_validator
 from pymongo import MongoClient
-from starlette.requests import HTTPConnection
 
 from agent.service import Agent
 from api.errors import (
@@ -33,16 +30,20 @@ from api.errors import (
     ValidationFailedError,
     WebSocketErrorType,
 )
+from api.utils import get_client_ip
+from attachment_storage import get_attachment_storage, is_attachment_storage_enabled
 from config import (
     get_app_settings,
     get_document_rag_settings,
     get_logger,
-    get_rate_limit_settings,
 )
 from document_rag import get_document_rag_repository
 from persistence import get_chat_history_repository, is_persistence_enabled
 from rate_limiting import consume_rate_limit
-from title_generation import generate_title, truncate_title
+
+if TYPE_CHECKING:
+    from persistence.repository import ChatHistoryRepository
+from title_generation import strip_document_tags, truncate_title
 from tracing import get_client, is_langfuse_initialized
 from vector_db import VectorDatabase, create_vector_database
 
@@ -53,50 +54,8 @@ _MAX_CONTENT_LENGTH = 200_000  # large enough for document attachments
 _MAX_TRANSCRIPT_MESSAGES = 200
 _MAX_LAST_USER_MESSAGE_LENGTH = 200_000  # same ceiling as _MAX_CONTENT_LENGTH
 
-_DOCUMENT_TAG_RE = re.compile(r"<document\b[^>]*>.*?</document>", re.DOTALL)
 
-
-def _strip_document_tags(text: str) -> str:
-    """Remove <document> blocks from a message before title generation."""
-    return _DOCUMENT_TAG_RE.sub("", text).strip()
-
-
-_ALLOWED_MIME_TYPES = frozenset(
-    {
-        "application/pdf",
-        "image/png",
-        "image/jpeg",
-        "image/gif",
-        "image/webp",
-    }
-)
-_MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
 _MAX_ATTACHMENTS_PER_MESSAGE = 5
-
-
-class Attachment(BaseModel):
-    """A file attached to a user message."""
-
-    name: str = Field(
-        ..., min_length=1, max_length=255, description="Original filename"
-    )
-    mime_type: str = Field(..., description="MIME type of the file")
-    data: str = Field(..., description="Base64-encoded file content")
-
-    @model_validator(mode="after")
-    def validate_attachment(self) -> Self:
-        if self.mime_type not in _ALLOWED_MIME_TYPES:
-            msg = f"Unsupported file type: {self.mime_type}. Allowed: {', '.join(sorted(_ALLOWED_MIME_TYPES))}"
-            raise ValueError(msg)
-        try:
-            raw = base64.b64decode(self.data)
-        except ValueError as exc:
-            msg = "Invalid base64 encoding"
-            raise ValueError(msg) from exc
-        if len(raw) > _MAX_FILE_SIZE_BYTES:
-            msg = f"File exceeds {_MAX_FILE_SIZE_BYTES // (1024 * 1024)}MB limit"
-            raise ValueError(msg)
-        return self
 
 
 class HistoryMessage(BaseModel):
@@ -106,10 +65,13 @@ class HistoryMessage(BaseModel):
     content: str = Field(
         ..., max_length=_MAX_CONTENT_LENGTH, description="Message content"
     )
-    attachments: list[Attachment] | None = Field(
+    attachment_ids: list[str] | None = Field(
         default=None,
         max_length=_MAX_ATTACHMENTS_PER_MESSAGE,
-        description="File attachments (only allowed on the last user message)",
+        description=(
+            "IDs of pre-stored attachments (images via POST /upload-attachment, "
+            "documents via POST /process-document). Only allowed on the last user message."
+        ),
     )
 
 
@@ -138,10 +100,10 @@ class ChatMessage(BaseModel):
             msg = "'messages' must be a non-empty array"
             raise ValueError(msg)
 
-        # Only the last message may carry attachments.
+        # Only the last message may carry attachment_ids.
         for m in self.messages[:-1]:
-            if m.attachments:
-                msg = "Only the last (current) message may contain attachments"
+            if m.attachment_ids:
+                msg = "Only the last (current) message may contain attachment_ids"
                 raise ValueError(msg)
 
         last = self.messages[-1]
@@ -149,7 +111,7 @@ class ChatMessage(BaseModel):
             msg = 'Last message in messages must have role "user" (current turn)'
             raise ValueError(msg)
 
-        has_attachments = bool(last.attachments)
+        has_attachments = bool(last.attachment_ids)
         # When attachments are present, allow empty text content.
         if has_attachments:
             if len(last.content) > _MAX_LAST_USER_MESSAGE_LENGTH:
@@ -159,19 +121,6 @@ class ChatMessage(BaseModel):
             msg = f"Last user message content must be between 1 and {_MAX_LAST_USER_MESSAGE_LENGTH} characters"
             raise ValueError(msg)
         return self
-
-
-class GenerateConversationTitleRequest(BaseModel):
-    """HTTP payload for generating a conversation title on demand."""
-
-    visitor_id: str = Field(..., min_length=1, max_length=512, description="Visitor ID")
-    session_id: str = Field(..., min_length=1, max_length=512, description="Session ID")
-    first_message: str = Field(
-        ...,
-        min_length=1,
-        max_length=_MAX_LAST_USER_MESSAGE_LENGTH,
-        description="First user message used to generate the title",
-    )
 
 
 class FeedbackRequest(BaseModel):
@@ -196,7 +145,6 @@ class FeedbackRequest(BaseModel):
 
 
 router = APIRouter(tags=["chat"])
-persistence_router = APIRouter(tags=["history"])
 
 # Strong references to background tasks so they aren't garbage-collected before completion.
 _background_tasks: set[asyncio.Task] = set()
@@ -260,36 +208,6 @@ def _validate_message_format(message_data: object) -> None:
     if not isinstance(message_data, dict):
         msg = "Message must be a JSON object"
         raise InvalidMessageFormatError(msg)
-
-
-def _get_client_ip(conn: HTTPConnection) -> str | None:
-    """Extract the real client IP address from an HTTP or WebSocket connection.
-
-    Returns ``None`` when the IP cannot be determined (e.g. certain ASGI
-    transports set ``conn.client`` to ``None``). Callers must skip rate
-    limiting for a ``None`` result rather than falling back to a shared key —
-    a single shared key would let any one client exhaust the quota for every
-    other client whose IP is unknown.
-
-    When ``RATE_LIMIT_TRUST_PROXY`` is True, the ``X-Forwarded-For`` and
-    ``X-Real-IP`` headers are checked first.  Only enable proxy trust when
-    the application is behind a known, trusted reverse proxy — never in
-    direct-to-internet deployments, as headers can be spoofed by clients.
-    """
-    if get_rate_limit_settings().trust_proxy:
-        forwarded_for = conn.headers.get("x-forwarded-for")
-        if forwarded_for:
-            return forwarded_for.split(",")[0].strip()
-        real_ip = conn.headers.get("x-real-ip")
-        if real_ip:
-            return real_ip.strip()
-    client = conn.client
-    if client is None:
-        logger.info(
-            "Cannot determine client IP — rate limiting skipped for this connection"
-        )
-        return None
-    return client.host
 
 
 _vector_database_cache: VectorDatabase | None = None
@@ -398,105 +316,6 @@ async def get_document_source(source_path: str) -> StreamingResponse:
     )
 
 
-@persistence_router.get("/conversations")
-async def get_conversations(
-    visitor_id: Annotated[
-        str, Query(min_length=1, max_length=512, description="Visitor ID")
-    ],
-) -> list[dict[str, str]]:
-    """Return all conversations for a visitor, newest first.
-
-    Note: visitor_id is client-supplied and not authenticated. This endpoint
-    is intended for internal / single-tenant deployments. In multi-tenant
-    scenarios, add an authentication layer before exposing this route.
-    """
-    repo = get_chat_history_repository()
-    if repo is None:
-        msg = "persistence router registered but repository is not initialised"
-        raise RuntimeError(msg)
-    convos = await repo.list_conversations(visitor_id=visitor_id)
-    return [
-        {
-            "session_id": c.session_id,
-            "title": c.title,
-            "created_at": c.created_at.isoformat(),
-        }
-        for c in convos
-    ]
-
-
-@persistence_router.get("/history")
-async def get_history(
-    visitor_id: Annotated[
-        str, Query(min_length=1, max_length=512, description="Visitor ID")
-    ],
-    session_id: Annotated[str, Query(description="Session ID")] = "default",
-) -> list[dict[str, Any]]:
-    """Return persisted messages for a visitor+session pair, oldest first.
-
-    Note: visitor_id is client-supplied and not authenticated. This endpoint
-    is intended for internal / single-tenant deployments. In multi-tenant
-    scenarios, add an authentication layer before exposing this route.
-    """
-    repo = get_chat_history_repository()
-    if repo is None:
-        msg = "persistence router registered but repository is not initialised"
-        raise RuntimeError(msg)
-    messages = await repo.list_messages(visitor_id=visitor_id, session_id=session_id)
-    result = []
-    for m in messages:
-        entry: dict[str, Any] = {"role": m.role, "content": m.content}
-        if m.trace_id is not None:
-            entry["trace_id"] = m.trace_id
-        if m.sources is not None:
-            with contextlib.suppress(Exception):
-                entry["sources"] = json.loads(m.sources)
-        result.append(entry)
-    return result
-
-
-@persistence_router.post("/conversations/title")
-async def generate_conversation_title(
-    payload: GenerateConversationTitleRequest,
-) -> dict[str, str]:
-    """Generate and persist a title for an existing conversation."""
-    repo = get_chat_history_repository()
-    if repo is None:
-        msg = "persistence router registered but repository is not initialised"
-        raise RuntimeError(msg)
-
-    exists = await repo.conversation_exists(
-        visitor_id=payload.visitor_id,
-        session_id=payload.session_id,
-    )
-    if not exists:
-        raise HTTPException(
-            status_code=404,
-            detail="Conversation not found for visitor_id + session_id",
-        )
-
-    first_message_text = _strip_document_tags(payload.first_message)
-    title = truncate_title(first_message_text)
-    try:
-        title = await generate_title(
-            first_message_text,
-            session_id=payload.session_id,
-            visitor_id=payload.visitor_id,
-        )
-    except Exception:
-        logger.exception(
-            "Title generation failed (session_id=%s), using fallback",
-            payload.session_id,
-        )
-
-    await repo.update_conversation_title(
-        visitor_id=payload.visitor_id,
-        session_id=payload.session_id,
-        title=title,
-    )
-    return {"session_id": payload.session_id, "title": title}
-
-
 @router.post("/feedback")
 async def submit_feedback(payload: FeedbackRequest, request: Request) -> dict[str, str]:
     """Submit a user thumbs-up / thumbs-down score for an assistant message.
@@ -508,7 +327,7 @@ async def submit_feedback(payload: FeedbackRequest, request: Request) -> dict[st
     Returns ``{"status": "skipped"}`` when Langfuse is not configured so that
     non-instrumented deployments don't surface errors to users.
     """
-    client_ip = _get_client_ip(request)
+    client_ip = get_client_ip(request)
     if client_ip is not None and not await consume_rate_limit(client_ip):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
@@ -554,76 +373,202 @@ async def submit_feedback(payload: FeedbackRequest, request: Request) -> dict[st
     return {"status": "ok"}
 
 
-async def _handle_chat_turn(  # noqa: C901, PLR0912
+_MAX_IMAGE_BYTES_FOR_LLM = 4 * 1024 * 1024  # 4 MB per image sent to the LLM
+
+
+async def _load_image_attachments(
+    *,
+    attachment_ids: list[str],
+    visitor_id: str,
+    repo: "ChatHistoryRepository",
+) -> list[dict[str, str]]:
+    """Fetch image attachments from storage and return base64 payloads for the LLM.
+
+    Non-image attachments (e.g. PDFs) are skipped — only image/* types are
+    included so the agent service can build multimodal content blocks.
+    Images exceeding _MAX_IMAGE_BYTES_FOR_LLM are skipped to avoid token overflow.
+    """
+    if not is_attachment_storage_enabled():
+        return []
+    storage = get_attachment_storage()
+    result: list[dict[str, str]] = []
+    for att_id in attachment_ids:
+        att = await repo.get_attachment(attachment_id=att_id, visitor_id=visitor_id)
+        if att is None or not att.mime_type.startswith("image/"):
+            continue
+        if att.size > _MAX_IMAGE_BYTES_FOR_LLM:
+            logger.warning(
+                "Skipping image attachment %s (%d bytes) — exceeds %d byte LLM limit",
+                att_id,
+                att.size,
+                _MAX_IMAGE_BYTES_FOR_LLM,
+            )
+            continue
+        try:
+            stream = await storage.retrieve(att.storage_key)
+            raw = b"".join([chunk async for chunk in stream])
+            result.append(
+                {
+                    "name": att.name,
+                    "mime_type": att.mime_type,
+                    "data": base64.b64encode(raw).decode(),
+                }
+            )
+        except Exception:
+            logger.exception("Failed to load image attachment %s for LLM", att_id)
+    return result
+
+
+async def _store_user_attachments(
+    *,
+    repo: "ChatHistoryRepository",
+    user_message_id: str,
+    visitor_id: str,
+    last_message: "HistoryMessage",
+) -> list[dict[str, str]]:
+    """Link pre-stored attachments (images + documents) to the user message.
+
+    All attachments must already be persisted via ``/upload-attachment`` or
+    ``/process-document`` before the WebSocket message is sent.  This function
+    only links them to the newly created message row and returns their metadata
+    for the end frame.
+    """
+    if not is_attachment_storage_enabled() or not last_message.attachment_ids:
+        return []
+
+    stored: list[dict[str, str]] = []
+    try:
+        await repo.link_attachments_to_message(
+            attachment_ids=last_message.attachment_ids,
+            message_id=user_message_id,
+            visitor_id=visitor_id,
+        )
+        linked = await repo.get_attachments_for_message(user_message_id)
+        ids_set = set(last_message.attachment_ids)
+        stored.extend(
+            {"id": att.id, "name": att.name, "mime_type": att.mime_type}
+            for att in linked
+            if att.id in ids_set
+        )
+    except Exception:
+        logger.exception(
+            "Failed to link attachments %s to message %s",
+            last_message.attachment_ids,
+            user_message_id,
+        )
+    return stored
+
+
+async def _build_transcript(
+    chat_message: ChatMessage,
+    *,
+    visitor_id: str,
+    repo: "ChatHistoryRepository | None",
+) -> list[dict[str, Any]]:
+    """Build the LLM transcript, hydrating image attachments from storage.
+
+    Image bytes are loaded server-side so the client never sends raw base64
+    over the WebSocket.
+    """
+    last_message = chat_message.messages[-1]
+    transcript: list[dict[str, Any]] = [
+        {"role": m.role, "content": m.content} for m in chat_message.messages[:-1]
+    ]
+    current_entry: dict[str, Any] = {"role": "user", "content": last_message.content}
+    if last_message.attachment_ids and repo is not None:
+        image_parts = await _load_image_attachments(
+            attachment_ids=last_message.attachment_ids,
+            visitor_id=visitor_id,
+            repo=repo,
+        )
+        if image_parts:
+            current_entry["attachments"] = image_parts
+    transcript.append(current_entry)
+    return transcript
+
+
+async def _persist_user_turn(
     websocket: WebSocket,
-    agent: Agent,
+    *,
+    repo: "ChatHistoryRepository",
     chat_message: ChatMessage,
     session_id: str,
     visitor_id: str,
-) -> None:
-    """Stream one assistant reply, persisting turns when persistence is enabled."""
-    repo = get_chat_history_repository()  # None when PERSISTENCE_DATABASE_URL is unset
-    current_user_content = chat_message.messages[-1].content
-    transcript: list[dict[str, Any]] = []
-    for i, m in enumerate(chat_message.messages):
-        entry: dict[str, Any] = {"role": m.role, "content": m.content}
-        if i == len(chat_message.messages) - 1 and m.attachments:
-            entry["attachments"] = [
-                {"name": a.name, "mime_type": a.mime_type, "data": a.data}
-                for a in m.attachments
-            ]
-        transcript.append(entry)
+) -> list[dict[str, str]] | None:
+    """Create the conversation row if needed, persist the user message, and link
+    its attachments.
 
-    if repo is not None:
-        # Check server-side whether a conversation record already exists for this
-        # session.  This is authoritative regardless of how many messages the client
-        # sends in the transcript, and prevents redundant title-generation calls when
-        # clients reconnect without full history.  A lightweight SELECT 1 is used
-        # instead of fetching all stored messages.
-        is_first_message = not await repo.conversation_exists(
-            visitor_id=visitor_id, session_id=session_id
-        )
-        if is_first_message:
-            fallback_title = truncate_title(_strip_document_tags(current_user_content))
-            try:
-                await repo.create_conversation(
-                    visitor_id=visitor_id,
-                    session_id=session_id,
-                    # Store a fast fallback title immediately so the sidebar shows
-                    # something right away. The background task below will replace
-                    # it with an LLM-generated title once the call completes.
-                    title=fallback_title,
-                )
-                logger.info(
-                    "Created conversation with fallback title (session_id=%s, title=%r)",
-                    session_id,
-                    fallback_title,
-                )
-            except Exception:
-                logger.exception(
-                    "Failed to create conversation record (session_id=%s)", session_id
-                )
-
+    Returns the list of stored attachment metadata, or ``None`` if persistence
+    failed (in which case an error frame and terminating ``end`` frame have
+    already been sent and the caller must abort the turn).
+    """
+    last_message = chat_message.messages[-1]
+    # Server-side check is authoritative regardless of how many messages the
+    # client sends in the transcript; prevents redundant title-generation calls
+    # on reconnect. Uses a lightweight SELECT 1 instead of fetching messages.
+    is_first_message = not await repo.conversation_exists(
+        visitor_id=visitor_id, session_id=session_id
+    )
+    if is_first_message:
+        fallback_title = truncate_title(strip_document_tags(last_message.content))
         try:
-            await repo.append_message(
+            await repo.create_conversation(
                 visitor_id=visitor_id,
                 session_id=session_id,
-                role="user",
-                content=current_user_content,
+                # Store a fast fallback title immediately so the sidebar shows
+                # something right away. The /conversations/title endpoint will
+                # replace it with an LLM-generated title once that call completes.
+                title=fallback_title,
+            )
+            logger.info(
+                "Created conversation with fallback title (session_id=%s, title=%r)",
+                session_id,
+                fallback_title,
             )
         except Exception:
-            logger.exception("Failed to persist user message")
-            await _send_error(
-                websocket,
-                session_id=session_id,
-                error_type=WebSocketErrorType.PERSISTENCE_WRITE_FAILED,
-                content="Could not save your message. Please try again.",
+            logger.exception(
+                "Failed to create conversation record (session_id=%s)", session_id
             )
-            await websocket.send_json(
-                {"type": "end", "content": "", "session_id": session_id}
-            )
-            return
 
+    try:
+        user_message_id = await repo.append_message(
+            visitor_id=visitor_id,
+            session_id=session_id,
+            role="user",
+            content=last_message.content,
+        )
+    except Exception:
+        logger.exception("Failed to persist user message")
+        await _send_error(
+            websocket,
+            session_id=session_id,
+            error_type=WebSocketErrorType.PERSISTENCE_WRITE_FAILED,
+            content="Could not save your message. Please try again.",
+        )
+        await websocket.send_json(
+            {"type": "end", "content": "", "session_id": session_id}
+        )
+        return None
+
+    return await _store_user_attachments(
+        repo=repo,
+        user_message_id=user_message_id,
+        visitor_id=visitor_id,
+        last_message=last_message,
+    )
+
+
+async def _stream_assistant_response(
+    websocket: WebSocket,
+    agent: Agent,
+    transcript: list[dict[str, Any]],
+    *,
+    session_id: str,
+    visitor_id: str,
+) -> str:
+    """Stream the assistant reply token-by-token to *websocket* and return the
+    accumulated full response.
+    """
     full_response = ""
     async for chunk in agent.astream(
         transcript,
@@ -638,17 +583,26 @@ async def _handle_chat_turn(  # noqa: C901, PLR0912
                 "session_id": session_id,
             }
         )
+    return full_response
 
-    resolved_answer = full_response
-    sources = agent.get_last_used_sources()
 
+async def _send_end_frame(
+    websocket: WebSocket,
+    *,
+    session_id: str,
+    resolved_answer: str,
+    sources: list[Any],
+    stored_user_attachments: list[dict[str, str]],
+    trace_id: str | None,
+) -> None:
+    """Send the terminating ``end`` frame for a chat turn."""
     end_frame: dict[str, Any] = {
         "type": "end",
         "content": resolved_answer,
         "session_id": session_id,
         "sources": sources,
+        "user_attachments": stored_user_attachments,
     }
-    trace_id = agent.last_trace_id
     safe_trace_id = (
         trace_id.replace("\n", "\\n").replace("\r", "\\r")
         if trace_id is not None
@@ -661,9 +615,53 @@ async def _handle_chat_turn(  # noqa: C901, PLR0912
     )
     if trace_id is not None:
         end_frame["trace_id"] = trace_id
-
     await websocket.send_json(end_frame)
     logger.info("Streaming completed for session: %s", session_id)
+
+
+async def _handle_chat_turn(
+    websocket: WebSocket,
+    agent: Agent,
+    chat_message: ChatMessage,
+    session_id: str,
+    visitor_id: str,
+) -> None:
+    """Stream one assistant reply, persisting turns when persistence is enabled."""
+    repo = get_chat_history_repository()  # None when PERSISTENCE_DATABASE_URL is unset
+
+    transcript = await _build_transcript(chat_message, visitor_id=visitor_id, repo=repo)
+
+    stored_user_attachments: list[dict[str, str]] = []
+    if repo is not None:
+        stored_user_attachments_or_none = await _persist_user_turn(
+            websocket,
+            repo=repo,
+            chat_message=chat_message,
+            session_id=session_id,
+            visitor_id=visitor_id,
+        )
+        if stored_user_attachments_or_none is None:
+            return
+        stored_user_attachments = stored_user_attachments_or_none
+
+    resolved_answer = await _stream_assistant_response(
+        websocket,
+        agent,
+        transcript,
+        session_id=session_id,
+        visitor_id=visitor_id,
+    )
+    sources = agent.get_last_used_sources()
+    trace_id = agent.last_trace_id
+
+    await _send_end_frame(
+        websocket,
+        session_id=session_id,
+        resolved_answer=resolved_answer,
+        sources=sources,
+        stored_user_attachments=stored_user_attachments,
+        trace_id=trace_id,
+    )
 
     if repo is not None:
         try:
@@ -786,7 +784,7 @@ async def websocket_chat(websocket: WebSocket) -> None:
         agent = Agent(vector_database=vector_db, document_repository=document_repo)
         connection_visitor_id: str | None = None
         # Extract once per connection — the IP cannot change mid-WebSocket.
-        client_ip = _get_client_ip(websocket)
+        client_ip = get_client_ip(websocket)
 
         while True:
             data = await websocket.receive_text()
