@@ -472,8 +472,8 @@ class RateLimitSettings(BaseSettings):
         default=10,
         ge=1,
         description=(
-            "Max file uploads (POST /process-document, GET /attachments) allowed per IP "
-            "per window (RATE_LIMIT_MAX_UPLOADS). Uses the same window as max_messages."
+            "Max file uploads (POST /process-document) allowed per IP per window "
+            "(RATE_LIMIT_MAX_UPLOADS). Uses the same window as max_messages."
         ),
     )
     window_seconds: int = Field(
