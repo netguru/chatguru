@@ -36,7 +36,7 @@ dependencies = [
     "torchvision>=0.0",
     "fastapi>=0.104.0",
     "python-multipart>=0.0.9",
-    "docling>=2.0.0",
+    "docling>=2.91.0",
     "uvicorn[standard]>=0.24.0",
     "langchain>=0.1.0",
     "langchain-openai>=0.0.5",
@@ -50,7 +50,7 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0.0",
     "aiosqlite>=0.20.0",
     "alembic>=1.13.0",
-    "docling>=2.88.0",
+    "docling>=2.91.0",
     "redis[hiredis]>=5.0.0",
 ]
 
