@@ -398,7 +398,7 @@ class DocumentRagSettings(BaseSettings):
     )
     backend: str = Field(
         default="mongodb",
-        description="Document RAG backend. Currently supported: mongodb.",
+        description="Document RAG backend. Supported: mongodb (Atlas), cosmos (Cosmos DB for MongoDB vCore).",
     )
     mongodb_uri: str = Field(
         default="mongodb://localhost:27017",
@@ -435,6 +435,32 @@ class DocumentRagSettings(BaseSettings):
     mongodb_files_bucket: str = Field(
         default="document_sources",
         description="MongoDB GridFS bucket name for storing full source documents.",
+    )
+    # Cosmos DB for MongoDB vCore vector index tuning (backend=cosmos only).
+    # Cosmos vCore uses createIndexes + cosmosSearchOptions rather than the
+    # Atlas search-index API; these control how that vector index is built.
+    cosmos_vector_index_kind: str = Field(
+        default="vector-ivf",
+        description="Cosmos vCore vector index kind: vector-ivf or vector-hnsw.",
+    )
+    cosmos_vector_num_lists: int = Field(
+        default=1,
+        ge=1,
+        description="IVF list count (cosmos_vector_index_kind=vector-ivf).",
+    )
+    cosmos_vector_m: int = Field(
+        default=16,
+        ge=2,
+        description="HNSW connections per layer (cosmos_vector_index_kind=vector-hnsw).",
+    )
+    cosmos_vector_ef_construction: int = Field(
+        default=64,
+        ge=4,
+        description="HNSW efConstruction (cosmos_vector_index_kind=vector-hnsw).",
+    )
+    cosmos_vector_similarity: str = Field(
+        default="COS",
+        description="Cosmos vCore vector similarity metric: COS, L2, or IP.",
     )
 
 

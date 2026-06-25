@@ -368,6 +368,11 @@ def main() -> int:
         mongodb_connection_timeout_ms=settings.mongodb_connection_timeout_ms,
         embedding_provider=settings.embedding_provider,
         embedding_custom_class=settings.embedding_custom_class,
+        cosmos_vector_index_kind=settings.cosmos_vector_index_kind,
+        cosmos_vector_num_lists=settings.cosmos_vector_num_lists,
+        cosmos_vector_m=settings.cosmos_vector_m,
+        cosmos_vector_ef_construction=settings.cosmos_vector_ef_construction,
+        cosmos_vector_similarity=settings.cosmos_vector_similarity,
     )
 
     extensions = {
