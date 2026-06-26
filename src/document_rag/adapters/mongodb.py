@@ -15,8 +15,7 @@ from document_rag.models import DocumentRetrievalHit, DocumentSourceReference
 logger = get_logger("document_rag.mongodb")
 
 # Recall headroom: fetch this many candidates per requested hit so vector search
-# has room to rank. Shared by the Atlas (numCandidates) adapter and the Cosmos
-# adapter so the two backends stay in lockstep.
+# has room to rank (Atlas: numCandidates).
 OVERFETCH_MULTIPLIER = 20
 
 
