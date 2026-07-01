@@ -203,6 +203,12 @@ services:
       - ATTACHMENT_STORAGE_TYPE=${ATTACHMENT_STORAGE_TYPE:-filesystem}
       - ATTACHMENT_STORAGE_BASE_PATH=${ATTACHMENT_STORAGE_BASE_PATH:-/data/attachments}
 
+      # MCP (Model Context Protocol) remote tool servers. Opt-in and off by
+      # default. To enable, set MCP_ENABLED=true and point MCP_CONFIG_PATH at a
+      # config file mounted into the container (see docs/mcp.md).
+      - MCP_ENABLED=${MCP_ENABLED:-false}
+      - MCP_CONFIG_PATH=${MCP_CONFIG_PATH:-}
+
     depends_on:
       mongo-vector-db:
         condition: service_healthy
@@ -288,6 +294,10 @@ services:
       - ATTACHMENT_STORAGE_ENABLED=${ATTACHMENT_STORAGE_ENABLED:-true}
       - ATTACHMENT_STORAGE_TYPE=${ATTACHMENT_STORAGE_TYPE:-filesystem}
       - ATTACHMENT_STORAGE_BASE_PATH=${ATTACHMENT_STORAGE_BASE_PATH:-/data/attachments}
+
+      # MCP (Model Context Protocol) remote tool servers. See chatguru-agent.
+      - MCP_ENABLED=${MCP_ENABLED:-false}
+      - MCP_CONFIG_PATH=${MCP_CONFIG_PATH:-}
 
     depends_on:
       vector-db:

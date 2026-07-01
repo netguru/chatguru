@@ -38,6 +38,7 @@ from config import (
     get_logger,
 )
 from document_rag import get_document_rag_repository
+from mcp_integration import get_mcp_connections
 from persistence import get_chat_history_repository, is_persistence_enabled
 from rate_limiting import consume_rate_limit
 
@@ -785,7 +786,11 @@ async def websocket_chat(websocket: WebSocket) -> None:
         # `search_products` as a no-op stub, but the system prompt no longer
         # mentions it, so the model has no reason to call it.
         document_repo = get_document_rag_repository()
-        agent = Agent(vector_database=None, document_repository=document_repo)
+        agent = Agent(
+            vector_database=None,
+            document_repository=document_repo,
+            mcp_connections=get_mcp_connections(),
+        )
         connection_visitor_id: str | None = None
         # Extract once per connection — the IP cannot change mid-WebSocket.
         client_ip = get_client_ip(websocket)

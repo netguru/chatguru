@@ -52,6 +52,7 @@ dependencies = [
     "alembic>=1.13.0",
     "docling>=2.88.0",
     "redis[hiredis]>=5.0.0",
+    "langchain-mcp-adapters>=0.3.0",
 ]
 
 [project.urls]

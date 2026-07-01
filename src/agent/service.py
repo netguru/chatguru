@@ -13,14 +13,15 @@ from langchain_core.messages import (
     SystemMessage,
     ToolMessage,
 )
-from langchain_core.runnables import RunnableConfig
-from langchain_core.tools import BaseTool, ToolException, tool
+from langchain_core.runnables import Runnable, RunnableConfig
+from langchain_core.tools import BaseTool, tool
 from langchain_openai import AzureChatOpenAI, ChatOpenAI
 from langfuse.langchain import CallbackHandler
 
 from agent.prompt import SYSTEM_PROMPT
 from config import get_llm_settings, get_logger
 from document_rag.repository import DocumentRagRepository
+from mcp_integration import open_mcp_tools
 from tracing import (
     flush_langfuse_async,
     get_client,
@@ -141,7 +142,12 @@ async def _execute_tool(
     try:
         result = await tool_func.ainvoke(tool_args, config=config)
         return str(result), True
-    except (ToolException, ValueError, TypeError, KeyError) as e:
+    except Exception as e:
+        # Return the failure as a string so the agentic loop can feed it back to
+        # the model and continue, rather than aborting the whole turn. This is
+        # essential for network-backed MCP tools, whose transport/connection
+        # errors (timeouts, dropped sessions) are expected and recoverable and
+        # fall outside the narrow error set the built-in tools stay within.
         logger.exception("Tool execution failed: %s", tool_name)
         return f"Error executing tool: {e}", False
 
@@ -158,6 +164,7 @@ class Agent:
         self,
         vector_database: VectorDatabase | None = None,
         document_repository: DocumentRagRepository | None = None,
+        mcp_connections: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         """
         Initialize the agent with Azure OpenAI configuration.
@@ -165,13 +172,18 @@ class Agent:
         Args:
             vector_database: VectorDatabase for RAG search (calls sqlite-vec service)
             document_repository: DocumentRagRepository for document knowledge search
+            mcp_connections: Remote MCP server connections. Tools are discovered
+                per turn (in ``astream``) via a live session so stateful servers
+                (e.g. browser automation) retain state across tool calls.
         """
         # Initialize Langfuse tracing (idempotent; also called at app startup)
         init_langfuse()
 
-        llm = _build_chat_llm()
+        self._base_llm = _build_chat_llm()
+        self._mcp_connections = mcp_connections or {}
 
-        # Create tools based on available backends
+        # Built-in tools depend only on the injected backends and are stable for
+        # the agent's lifetime. MCP tools are added per turn (see astream).
         self.tools: list[BaseTool] = []
 
         if vector_database is not None:
@@ -184,7 +196,8 @@ class Agent:
             self.tools.append(Agent._create_document_rag_tool(document_repository))
             logger.info("Agent initialized with document RAG tool")
 
-        self.llm = llm.bind_tools(self.tools)
+        # LLM bound to the built-in tools only; used for turns without MCP tools.
+        self.llm = self._base_llm.bind_tools(self.tools)
         self.tool_registry: dict[str, BaseTool] = {
             tool.name: tool for tool in self.tools
         }
@@ -293,6 +306,33 @@ class Agent:
         return search_documents
 
     @staticmethod
+    def _filter_mcp_tools(
+        mcp_tools: list[BaseTool],
+        existing_tools: list[BaseTool],
+    ) -> list[BaseTool]:
+        """Drop MCP tools whose names collide with built-in tools.
+
+        Built-in tools (``search_products``, ``search_documents``) always win so
+        a remote MCP server cannot shadow core functionality. Collisions between
+        two MCP tools keep the first occurrence.
+        """
+        taken: set[str] = {existing.name for existing in existing_tools}
+        accepted: list[BaseTool] = []
+        for mcp_tool in mcp_tools:
+            if mcp_tool.name in taken:
+                logger.warning(
+                    "Skipping MCP tool %r: name collides with an existing tool",
+                    mcp_tool.name,
+                )
+                continue
+            taken.add(mcp_tool.name)
+            accepted.append(mcp_tool)
+        # Runs once per turn (see astream), not at startup — keep at debug so it
+        # doesn't spam the logs on every user message.
+        logger.debug("Bound %d MCP tool(s) for this turn", len(accepted))
+        return accepted
+
+    @staticmethod
     def _extract_product_query(message: str) -> str:
         """Normalize user text into vector-search terms (strip prices, filler, punctuation)."""
         query = message.lower()
@@ -347,10 +387,11 @@ class Agent:
             return None
         return self._last_langfuse_handler.last_trace_id
 
+    @staticmethod
     async def _process_tool_calls(
-        self,
         full_response: AIMessageChunk | AIMessage,
         messages: list[BaseMessage],
+        tool_registry: dict[str, BaseTool],
         config: RunnableConfig | None = None,
     ) -> None:
         """Execute tool calls and append results to messages."""
@@ -363,7 +404,7 @@ class Agent:
             tool_call_id = tool_call["id"]
 
             result, _ = await _execute_tool(
-                tool_name, tool_args, self.tool_registry, config=config
+                tool_name, tool_args, tool_registry, config=config
             )
             messages.append(ToolMessage(content=result, tool_call_id=tool_call_id))
 
@@ -435,22 +476,93 @@ class Agent:
         self._last_turn_sources = turn_sources
         _current_sources.set(turn_sources)
 
-        async with self._tracing_context(
-            session_id=session_id, visitor_id=visitor_id
-        ) as config:
-            async for chunk in self._run_agentic_loop(lc_messages, config):
+        # Open MCP sessions for the whole turn so stateful servers keep state
+        # across tool calls; sessions close when this block exits.
+        async with (
+            open_mcp_tools(self._mcp_connections) as mcp_tools,
+            self._tracing_context(
+                session_id=session_id, visitor_id=visitor_id
+            ) as config,
+        ):
+            accepted = Agent._filter_mcp_tools(mcp_tools, self.tools)
+            turn_llm, turn_registry = self._bind_turn_tools(accepted)
+            # Tell the model about the MCP tools it actually has this turn. The
+            # base system prompt (managed in Langfuse) only knows the built-in
+            # tools, so without this the model may claim it lacks a capability
+            # (e.g. web browsing) even though the tool is bound.
+            turn_messages = Agent._augment_system_prompt(lc_messages, accepted)
+            async for chunk in self._run_agentic_loop(
+                turn_messages, config, turn_llm, turn_registry
+            ):
                 yield chunk
+
+    def _bind_turn_tools(
+        self, accepted_mcp_tools: list[BaseTool]
+    ) -> tuple[Runnable[Any, BaseMessage], dict[str, BaseTool]]:
+        """Combine built-in and (already filtered) MCP tools for a turn.
+
+        Returns the bound LLM + tool registry. Falls back to the pre-bound
+        built-in LLM when no MCP tools are present so turns without MCP incur no
+        extra binding work.
+        """
+        if not accepted_mcp_tools:
+            return self.llm, self.tool_registry
+        turn_tools = [*self.tools, *accepted_mcp_tools]
+        return (
+            self._base_llm.bind_tools(turn_tools),
+            {tool.name: tool for tool in turn_tools},
+        )
+
+    @staticmethod
+    def _augment_system_prompt(
+        messages: list[BaseMessage],
+        mcp_tools: list[BaseTool],
+    ) -> list[BaseMessage]:
+        """Append a description of the turn's MCP tools to the system prompt.
+
+        Returns ``messages`` unchanged when there are no MCP tools or no system
+        message. Otherwise returns a new list with the leading system message
+        extended by a capability block so the model knows these tools exist and
+        is permitted to use them.
+        """
+        if not mcp_tools or not messages:
+            return messages
+        head = messages[0]
+        if not isinstance(head, SystemMessage):
+            return messages
+
+        lines = [
+            (
+                f"- {t.name}: {(t.description or '').strip().splitlines()[0]}"
+                if (t.description or "").strip()
+                else f"- {t.name}"
+            )
+            for t in mcp_tools
+        ]
+        block = (
+            "\n\n---\n"
+            "ADDITIONAL TOOLS AVAILABLE THIS TURN:\n"
+            "Beyond the tools described above, you also have direct access to the "
+            "following tools provided by connected MCP servers. Use them whenever "
+            "the request calls for them (e.g. live web access, browsing, or "
+            "automation). Do NOT claim you lack a capability that these tools "
+            "provide — call the appropriate tool instead.\n" + "\n".join(lines)
+        )
+        base = head.content if isinstance(head.content, str) else str(head.content)
+        return [SystemMessage(content=base + block), *messages[1:]]
 
     async def _run_agentic_loop(
         self,
         messages: list[BaseMessage],
         config: RunnableConfig,
+        llm: Runnable[Any, BaseMessage],
+        tool_registry: dict[str, BaseTool],
     ) -> AsyncIterator[str]:
         """Run the agentic loop until no more tool calls or max iterations."""
         for iteration in range(MAX_TOOL_ITERATIONS):
             full_response: AIMessageChunk | None = None
 
-            async for chunk in self.llm.astream(messages, config=config):
+            async for chunk in llm.astream(messages, config=config):
                 chunk_msg = chunk if isinstance(chunk, AIMessageChunk) else None
                 if chunk_msg:
                     full_response = (
@@ -467,7 +579,9 @@ class Agent:
                 logger.info("Agentic loop completed after %d iterations", iteration + 1)
                 return
 
-            await self._process_tool_calls(full_response, messages, config=config)
+            await self._process_tool_calls(
+                full_response, messages, tool_registry, config=config
+            )
         logger.warning("Reached maximum tool iterations (%d)", MAX_TOOL_ITERATIONS)
         yield "\n\n⚠️ Reached maximum tool call limit. Please rephrase your question."
 

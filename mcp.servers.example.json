@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "github": {
+      "url": "https://api.githubcopilot.com/mcp/",
+      "transport": "streamable_http",
+      "headers": {
+        "Authorization": "Bearer ${MCP_GITHUB_TOKEN}"
+      }
+    },
+    "example-sse": {
+      "url": "https://mcp.example.com/sse",
+      "transport": "sse"
+    }
+  }
+}

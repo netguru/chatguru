@@ -22,6 +22,7 @@ from config import (
 )
 from document_processing.service import prewarm_converter
 from document_rag import init_document_rag, shutdown_document_rag
+from mcp_integration import init_mcp, shutdown_mcp
 from persistence import init_persistence, is_persistence_enabled, shutdown_persistence
 from rate_limiting import init_rate_limiting, shutdown_rate_limiting
 from title_generation import init_title_generation, shutdown_title_generation
@@ -55,6 +56,7 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     await init_persistence()
     await init_attachment_storage()
     await init_document_rag()
+    init_mcp()
     await init_title_generation()
     await init_rate_limiting()
 
@@ -69,6 +71,7 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     await shutdown_persistence()
     await shutdown_attachment_storage()
     await shutdown_document_rag()
+    shutdown_mcp()
     await shutdown_title_generation()
     await shutdown_rate_limiting()
     logger.info("Shutting down API server...")

@@ -587,3 +587,36 @@ class AttachmentStorageSettings(BaseSettings):
 def get_attachment_storage_settings() -> AttachmentStorageSettings:
     """Get attachment storage settings."""
     return AttachmentStorageSettings()
+
+
+class McpSettings(BaseSettings):
+    """Model Context Protocol (MCP) server integration settings."""
+
+    model_config = SettingsConfigDict(
+        env_file=get_env_file_path(),
+        env_prefix="MCP_",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+    enabled: bool = Field(
+        default=False,
+        description="Enable loading tools from remote MCP servers (MCP_ENABLED).",
+    )
+    config_path: str = Field(
+        default="",
+        description=(
+            "Path to a JSON file declaring remote MCP servers (MCP_CONFIG_PATH). "
+            'Claude-Desktop style: {"mcpServers": {"<name>": {"url": "https://...", '
+            '"transport": "streamable_http", "headers": {"Authorization": "Bearer ${TOKEN}"}}}}. '
+            "Only the streamable_http and sse transports are supported; ${VAR} placeholders "
+            "in string values are expanded from the environment at load time."
+        ),
+    )
+
+
+@lru_cache
+def get_mcp_settings() -> McpSettings:
+    """Get MCP integration settings."""
+    return McpSettings()
