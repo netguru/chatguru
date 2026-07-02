@@ -6,9 +6,9 @@ from typing import Any
 
 from langchain_core.documents import Document
 from langchain_core.vectorstores import InMemoryVectorStore
-from langchain_openai import OpenAIEmbeddings
 
-from config import get_llm_settings, get_logger
+from config import get_logger
+from embeddings import build_embeddings
 from rag.documents import ProductData, create_product_document
 
 logger = get_logger("rag.simple_retriever")
@@ -31,15 +31,7 @@ class SimpleProductRetriever:
             k: Number of results to return
         """
         self.k = k
-        llm_settings = get_llm_settings()
-        embeddings_base_url = llm_settings.embeddings_endpoint or llm_settings.endpoint
-        embeddings_api_key = llm_settings.embeddings_api_key or llm_settings.api_key
-        embeddings = OpenAIEmbeddings(
-            model=llm_settings.embedding_deployment_name,
-            api_key=embeddings_api_key,
-            base_url=embeddings_base_url.rstrip("/"),
-            default_headers={"api-key": embeddings_api_key},
-        )
+        embeddings = build_embeddings()
 
         # Create in-memory vector store from documents
         self._vectorstore = InMemoryVectorStore.from_documents(documents, embeddings)

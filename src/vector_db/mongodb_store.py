@@ -4,11 +4,11 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from langchain_openai import OpenAIEmbeddings
 from pymongo import MongoClient, errors
 from pymongo.operations import SearchIndexModel
 
 from config import get_llm_settings, get_logger, get_vector_db_settings
+from embeddings import build_embeddings
 
 if TYPE_CHECKING:
     from pymongo.collection import Collection
@@ -17,7 +17,6 @@ logger = get_logger("vector_db.mongodb_store")
 
 # Vector search index configuration
 VECTOR_INDEX_NAME = "vector_index"
-EMBEDDING_DIMENSIONS = 1536  # Azure OpenAI text-embedding-3-small
 
 
 class MongoVectorStore:
@@ -25,7 +24,7 @@ class MongoVectorStore:
     Vector store with semantic search using MongoDB Vector Search.
 
     1. Stores product data and embeddings in MongoDB
-    2. Generates embeddings via Azure OpenAI
+    2. Generates embeddings via the configured embeddings endpoint
     3. Uses native $vectorSearch for efficient similarity search
     """
 
@@ -89,21 +88,8 @@ class MongoVectorStore:
             self._database_name
         ][self._collection_name]
 
-        # Initialize embeddings model
-        # Resolution order: OPENAI_EMBEDDINGS_ENDPOINT → OPENAI_ENDPOINT → LLM_OPENAI_BASE_URL
-        # The last fallback covers setups where only the APIM base URL is configured.
-        embeddings_base_url = (
-            llm_settings.embeddings_endpoint
-            or llm_settings.endpoint
-            or llm_settings.openai_base_url
-        )
-        embeddings_api_key = llm_settings.embeddings_api_key or llm_settings.api_key
-        self._embeddings = OpenAIEmbeddings(
-            model=llm_settings.embedding_deployment_name,
-            api_key=embeddings_api_key,
-            base_url=embeddings_base_url.rstrip("/"),
-            default_headers={"api-key": embeddings_api_key},
-        )
+        self._embedding_dimensions = llm_settings.embedding_dimensions
+        self._embeddings = build_embeddings()
 
         logger.info(
             "MongoVectorStore initialized: %s/%s",
@@ -133,7 +119,7 @@ class MongoVectorStore:
                     {
                         "type": "vector",
                         "path": "embedding",
-                        "numDimensions": EMBEDDING_DIMENSIONS,
+                        "numDimensions": self._embedding_dimensions,
                         "similarity": "cosine",
                     },
                     # Add filter fields for pre-filtering

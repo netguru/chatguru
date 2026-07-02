@@ -3,9 +3,8 @@
 import importlib
 from typing import Any, Protocol, cast
 
-from langchain_openai import OpenAIEmbeddings
-
-from config import DocumentRagSettings, get_llm_settings
+from config import DocumentRagSettings
+from embeddings import build_embeddings
 
 
 class DocumentEmbeddingProvider(Protocol):
@@ -14,18 +13,6 @@ class DocumentEmbeddingProvider(Protocol):
     def embed_query(self, text: str, **kwargs: Any) -> list[float]:
         """Return embedding vector for a query string."""
         ...
-
-
-def _build_openai_embeddings() -> OpenAIEmbeddings:
-    llm_settings = get_llm_settings()
-    embeddings_base_url = llm_settings.embeddings_endpoint or llm_settings.endpoint
-    embeddings_api_key = llm_settings.embeddings_api_key or llm_settings.api_key
-    return OpenAIEmbeddings(
-        model=llm_settings.embedding_deployment_name,
-        api_key=embeddings_api_key,
-        base_url=embeddings_base_url.rstrip("/"),
-        default_headers={"api-key": embeddings_api_key},
-    )
 
 
 def _resolve_custom_embedding_provider(class_path: str) -> DocumentEmbeddingProvider:
@@ -53,7 +40,7 @@ def build_document_embedding_provider(
     """Build configured embedding provider for document retrieval."""
     provider = settings.embedding_provider.lower().strip()
     if provider == "openai":
-        return cast(DocumentEmbeddingProvider, _build_openai_embeddings())
+        return cast(DocumentEmbeddingProvider, build_embeddings())
     if provider == "custom":
         if not settings.embedding_custom_class.strip():
             msg = (
