@@ -4,7 +4,7 @@ import importlib
 import inspect
 
 from config import get_llm_settings, get_title_generation_settings
-from title_generation.adapters import FallbackTitleGenerator, OpenAITitleGenerator
+from title_generation.adapters import FallbackTitleGenerator, LLMTitleGenerator
 from title_generation.repository import TitleGenerator
 
 
@@ -43,7 +43,9 @@ async def build_title_generator() -> TitleGenerator:
     settings = get_title_generation_settings()
 
     builders = {
-        "openai": lambda: OpenAITitleGenerator(get_llm_settings()),
+        "llm": lambda: LLMTitleGenerator(get_llm_settings()),
+        # Backwards-compatible alias for the former provider name.
+        "openai": lambda: LLMTitleGenerator(get_llm_settings()),
         "fallback": FallbackTitleGenerator,
     }
 
@@ -61,7 +63,7 @@ async def build_title_generator() -> TitleGenerator:
     else:
         msg = (
             "Unsupported TITLE_GENERATION_PROVIDER. "
-            "Use one of: openai, fallback, custom"
+            "Use one of: llm, fallback, custom"
         )
         raise ValueError(msg)
 

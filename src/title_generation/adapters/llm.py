@@ -1,12 +1,15 @@
-"""OpenAI-compatible adapter for conversation title generation."""
+"""LLM-backed adapter for conversation title generation.
+
+Runs through LiteLLM, so it works with any LiteLLM-supported provider using the
+same configuration as the main chat agent.
+"""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_openai import AzureChatOpenAI, ChatOpenAI
-from pydantic import SecretStr
+from langchain_litellm import ChatLiteLLM
 
 if TYPE_CHECKING:
     from langchain_core.runnables import RunnableConfig
@@ -16,67 +19,49 @@ from title_generation.prompt import TITLE_GENERATION_SYSTEM_PROMPT
 from title_generation.utils import truncate_title
 from tracing import get_langfuse_handler
 
-logger = get_logger("title_generation.adapters.openai")
+logger = get_logger("title_generation.adapters.llm")
 
-# Token budget for the title call. Reasoning tokens (when enabled on gpt-5/o-series)
-# are counted against this budget alongside the visible completion, so we leave
-# generous headroom even though the visible title itself is tiny.
+# Generous headroom: reasoning tokens (when enabled) count against this budget
+# alongside the visible title.
 MAX_TITLE_COMPLETION_TOKENS = 1024
 _MAX_LOG_MESSAGE_LENGTH = 500
 
 
-class OpenAITitleGenerator:
-    """Generate conversation titles with an OpenAI-compatible chat endpoint."""
+class LLMTitleGenerator:
+    """Generate conversation titles via the configured LLM."""
 
     def __init__(self, settings: LLMSettings) -> None:
         self._settings = settings
-        self._llm: ChatOpenAI | AzureChatOpenAI | None = None
+        self._llm: ChatLiteLLM | None = None
 
-    def _build_extra_kwargs(self) -> dict[str, Any]:
-        """Build optional kwargs (reasoning_effort) only when configured.
-
-        Title generation is a simple naming task, so when the underlying model is
-        a reasoning model we cap effort at the user-configured level (or the
-        provider default if unset). Passing ``reasoning_effort`` against a
-        non-reasoning deployment would 400, hence the conditional.
-        """
-        extra: dict[str, Any] = {}
+    def _build_connection_kwargs(self) -> dict[str, Any]:
+        """Assemble LiteLLM connection kwargs, mirroring the chat client."""
+        kwargs: dict[str, Any] = {}
+        api_base = self._settings.api_base.strip()
+        if api_base:
+            kwargs["api_base"] = api_base.rstrip("/")
+        if self._settings.api_key:
+            kwargs["api_key"] = self._settings.api_key
+            kwargs["extra_headers"] = {"api-key": self._settings.api_key}
+        if self._settings.api_version:
+            kwargs["api_version"] = self._settings.api_version
+        # Only forward reasoning_effort when set; it errors on models without it.
         if self._settings.reasoning_effort:
-            extra["reasoning_effort"] = self._settings.reasoning_effort
-        return extra
+            kwargs["reasoning_effort"] = self._settings.reasoning_effort
+        return kwargs
 
-    def _get_llm(self) -> ChatOpenAI | AzureChatOpenAI:
+    def _get_llm(self) -> ChatLiteLLM:
         """Return the shared LLM client for title generation."""
         if self._llm is None:
-            extra_kwargs = self._build_extra_kwargs()
-            # Reasoning models (gpt-5 family) reject anything other than the
-            # default temperature=1, so we mirror the chat client's setting
-            # rather than hard-coding 0.
-            temperature = self._settings.temperature
-            compat_base = self._settings.openai_base_url.strip()
-            if compat_base:
-                self._llm = ChatOpenAI(
-                    model=self._settings.deployment_name,
-                    api_key=SecretStr(self._settings.api_key),
-                    base_url=compat_base.rstrip("/"),
-                    default_headers={"api-key": self._settings.api_key},
-                    streaming=False,
-                    temperature=temperature,
-                    max_completion_tokens=MAX_TITLE_COMPLETION_TOKENS,
-                    **extra_kwargs,
-                )
-            else:
-                self._llm = AzureChatOpenAI(
-                    azure_deployment=self._settings.deployment_name,
-                    api_key=SecretStr(self._settings.api_key),
-                    azure_endpoint=self._settings.endpoint.rstrip("/"),
-                    api_version=self._settings.api_version,
-                    default_headers={"api-key": self._settings.api_key},
-                    streaming=False,
-                    temperature=temperature,
-                    max_completion_tokens=MAX_TITLE_COMPLETION_TOKENS,
-                    **extra_kwargs,
-                )
+            # Mirror the chat client's temperature; reasoning models reject
+            # non-default values.
+            self._llm = ChatLiteLLM(
+                model=self._settings.model,
+                streaming=False,
+                temperature=self._settings.temperature,
+                max_tokens=MAX_TITLE_COMPLETION_TOKENS,
+                **self._build_connection_kwargs(),
+            )
         return self._llm
 
     async def connect(self) -> None:

@@ -16,13 +16,12 @@ from langchain_core.messages import (
 )
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, ToolException, tool
-from langchain_openai import AzureChatOpenAI, ChatOpenAI
+from langchain_litellm import ChatLiteLLM
 from langfuse.langchain import CallbackHandler
 
 from agent.prompt import SYSTEM_PROMPT
 from config import (
     get_litellm_models_config,
-    get_llm_provider,
     get_llm_settings,
     get_logger,
 )
@@ -38,57 +37,44 @@ from tracing import (
 from vector_db import VectorDatabase
 
 
-def _build_chat_llm(model: str | None = None) -> BaseChatModel:
-    """Build an LLM client based on the configured provider."""
-    settings = get_llm_settings()
-    provider = get_llm_provider()
+def _build_llm_kwargs(settings: Any) -> dict[str, Any]:
+    """Assemble the shared LiteLLM connection kwargs from LLM settings.
 
-    if provider == "litellm":
-        from langchain_litellm import ChatLiteLLM  # noqa: PLC0415
-
-        litellm_kwargs: dict[str, Any] = {}
-        # When a base URL + key are configured (e.g. an Azure APIM / OpenAI-compatible
-        # gateway that authenticates via the `api-key` header), forward them so
-        # `openai/<model>` ids route through it. With no base URL set, LiteLLM falls
-        # back to standard provider env vars (OPENAI_API_KEY, ANTHROPIC_API_KEY, …).
-        gateway_base = (settings.openai_base_url or settings.endpoint).strip()
-        if gateway_base and settings.api_key:
-            litellm_kwargs["api_base"] = gateway_base.rstrip("/")
-            litellm_kwargs["api_key"] = settings.api_key
-            litellm_kwargs["extra_headers"] = {"api-key": settings.api_key}
-
-        return ChatLiteLLM(
-            model=model or settings.deployment_name,
-            streaming=True,
-            temperature=settings.temperature,
-            **litellm_kwargs,
-        )
-
-    extra_kwargs: dict[str, Any] = {}
+    When unset, LiteLLM falls back to each provider's default endpoint and
+    standard credential env vars (OPENAI_API_KEY, ANTHROPIC_API_KEY, …).
+    """
+    kwargs: dict[str, Any] = {}
+    api_base = settings.api_base.strip()
+    if api_base:
+        kwargs["api_base"] = api_base.rstrip("/")
+    if settings.api_key:
+        kwargs["api_key"] = settings.api_key
+        # Gateways such as Azure APIM authenticate via the `api-key` header.
+        kwargs["extra_headers"] = {"api-key": settings.api_key}
+    if settings.api_version:
+        kwargs["api_version"] = settings.api_version
     if settings.reasoning_effort:
-        extra_kwargs["reasoning_effort"] = settings.reasoning_effort
+        kwargs["reasoning_effort"] = settings.reasoning_effort
+    return kwargs
 
-    compat_base = settings.openai_base_url.strip()
-    if compat_base:
-        return ChatOpenAI(
-            model=settings.deployment_name,
-            api_key=settings.api_key,
-            base_url=compat_base.rstrip("/"),
-            default_headers={"api-key": settings.api_key},
-            streaming=True,
-            temperature=settings.temperature,
-            **extra_kwargs,
-        )
-    return AzureChatOpenAI(
-        azure_deployment=settings.deployment_name,
-        api_key=settings.api_key,
-        azure_endpoint=settings.endpoint.rstrip("/"),
-        api_version=settings.api_version,
-        default_headers={"api-key": settings.api_key},
+
+def _build_chat_llm(model: str | None = None) -> BaseChatModel:
+    """Build a LiteLLM chat client for the configured model."""
+    settings = get_llm_settings()
+    return ChatLiteLLM(
+        model=model or settings.model,
         streaming=True,
         temperature=settings.temperature,
-        **extra_kwargs,
+        **_build_llm_kwargs(settings),
     )
+
+
+def _resolve_default_model() -> str | None:
+    """Pick the default model: first entry in the models config, else LLM_MODEL."""
+    config = get_litellm_models_config()
+    if config and config.providers and config.providers[0].models:
+        return str(config.providers[0].models[0].id)
+    return get_llm_settings().model or None
 
 
 logger = get_logger("agent.service")
@@ -179,8 +165,9 @@ class Agent:
     """
     Agent service for handling LLM interactions with streaming support.
 
-    Uses Azure OpenAI with LangChain for chat completions and tool calling.
-    Supports agentic tool-calling loop with user notifications.
+    Uses LiteLLM (via LangChain) for chat completions and tool calling, so any
+    LiteLLM-supported provider works. Supports an agentic tool-calling loop with
+    user notifications.
     """
 
     def __init__(
@@ -189,7 +176,7 @@ class Agent:
         document_repository: DocumentRagRepository | None = None,
     ) -> None:
         """
-        Initialize the agent with Azure OpenAI configuration.
+        Initialize the agent with the configured LLM.
 
         Args:
             vector_database: VectorDatabase for RAG search (calls sqlite-vec service)
@@ -198,16 +185,8 @@ class Agent:
         # Initialize Langfuse tracing (idempotent; also called at app startup)
         init_langfuse()
 
-        self._provider = get_llm_provider()
-        self._default_litellm_model: str | None = None
-        if self._provider == "litellm":
-            config = get_litellm_models_config()
-            if config and config.providers and config.providers[0].models:
-                self._default_litellm_model = config.providers[0].models[0].id
-            else:
-                self._default_litellm_model = get_llm_settings().deployment_name
-
-        llm = _build_chat_llm(model=self._default_litellm_model)
+        self._default_model = _resolve_default_model()
+        llm = _build_chat_llm(model=self._default_model)
 
         # Create tools based on available backends
         self.tools: list[BaseTool] = []
@@ -476,16 +455,13 @@ class Agent:
         self._last_turn_sources = turn_sources
         _current_sources.set(turn_sources)
 
-        # For LiteLLM, rebuild the LLM with the requested model when it differs
-        # from the default so tool bindings are applied to the right model.
-        if (
-            self._provider == "litellm"
-            and model
-            and model != self._default_litellm_model
-        ):
-            request_llm = _build_chat_llm(model=model).bind_tools(self.tools)
-        else:
-            request_llm = self.llm
+        # Rebuild the LLM with the requested model when it differs from the
+        # default so tool bindings are applied to the right model.
+        request_llm = (
+            _build_chat_llm(model=model).bind_tools(self.tools)
+            if model and model != self._default_model
+            else self.llm
+        )
 
         async with self._tracing_context(
             session_id=session_id, visitor_id=visitor_id

@@ -14,8 +14,8 @@ from config import (
     LiteLLMModelsConfig,
     LiteLLMModel,
     LiteLLMProvider,
+    LLMSettings,
     get_litellm_models_config,
-    get_llm_provider,
     get_llm_settings,
 )
 
@@ -50,38 +50,28 @@ def _clear_caches() -> None:
     get_litellm_models_config.cache_clear()
 
 
-def test_provider_resolves_explicit_litellm(monkeypatch: pytest.MonkeyPatch) -> None:
-    """LLM_PROVIDER=litellm is honoured verbatim."""
-    monkeypatch.setenv("LLM_PROVIDER", "litellm")
-    _clear_caches()
-    try:
-        assert get_llm_provider() == "litellm"
-    finally:
-        _clear_caches()
+def test_legacy_env_aliases_still_resolve(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Legacy OPENAI_*/*DEPLOYMENT_NAME names still map to the neutral fields.
+
+    The neutral names must be absent (not just empty) for a legacy alias to win —
+    a set-but-empty env var is treated as present and takes precedence.
+    """
+    for neutral in ("LLM_API_BASE", "LLM_OPENAI_BASE_URL", "LLM_MODEL"):
+        monkeypatch.delenv(neutral, raising=False)
+    monkeypatch.setenv("OPENAI_ENDPOINT", "https://legacy.example.com/v1")
+    monkeypatch.setenv("LLM_DEPLOYMENT_NAME", "legacy-model")
+    # _env_file=None isolates the assertion from the project's .env file.
+    settings = LLMSettings(_env_file=None)
+    assert settings.api_base == "https://legacy.example.com/v1"
+    assert settings.model == "legacy-model"
 
 
-def test_provider_auto_detects_openai(monkeypatch: pytest.MonkeyPatch) -> None:
-    """With no explicit provider and a base URL set, resolves to openai."""
-    # Set empty (not delenv) so a project .env value can't leak in.
-    monkeypatch.setenv("LLM_PROVIDER", "")
-    monkeypatch.setenv("LLM_OPENAI_BASE_URL", "https://example.com/v1")
-    _clear_caches()
-    try:
-        assert get_llm_provider() == "openai"
-    finally:
-        _clear_caches()
-
-
-def test_provider_auto_detects_azure(monkeypatch: pytest.MonkeyPatch) -> None:
-    """With no explicit provider and no base URL, defaults to azure."""
-    # Set empty (rather than delenv) so a project .env value can't leak in.
-    monkeypatch.setenv("LLM_PROVIDER", "")
-    monkeypatch.setenv("LLM_OPENAI_BASE_URL", "")
-    _clear_caches()
-    try:
-        assert get_llm_provider() == "azure"
-    finally:
-        _clear_caches()
+def test_neutral_env_names_take_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The neutral names win over the legacy aliases when both are set."""
+    monkeypatch.setenv("LLM_API_BASE", "https://new.example.com/v1")
+    monkeypatch.setenv("OPENAI_ENDPOINT", "https://legacy.example.com/v1")
+    settings = LLMSettings(_env_file=None)
+    assert settings.api_base == "https://new.example.com/v1"
 
 
 def test_models_config_loads(
@@ -138,13 +128,12 @@ def test_models_config_malformed_raises(
         _clear_caches()
 
 
-def test_build_chat_llm_returns_litellm(monkeypatch: pytest.MonkeyPatch) -> None:
-    """When provider is litellm, _build_chat_llm returns a ChatLiteLLM."""
+def test_build_chat_llm_returns_litellm() -> None:
+    """_build_chat_llm always returns a ChatLiteLLM for the requested model."""
     from langchain_litellm import ChatLiteLLM
 
     from agent.service import _build_chat_llm
 
-    monkeypatch.setenv("LLM_PROVIDER", "litellm")
     _clear_caches()
     try:
         llm = _build_chat_llm(model="gpt-4o")
@@ -162,10 +151,10 @@ def test_models_config_validates_shape() -> None:
         )
 
 
-def test_models_endpoint_returns_config_for_litellm(
+def test_models_endpoint_returns_config_when_present(
     test_env_vars: dict[str, str],
 ) -> None:
-    """GET /models returns the configured providers when LiteLLM is active."""
+    """GET /models returns the configured providers when a models config exists."""
     config = LiteLLMModelsConfig(
         providers=[
             LiteLLMProvider(
@@ -175,7 +164,6 @@ def test_models_endpoint_returns_config_for_litellm(
         ]
     )
     with (
-        patch("api.routes.chat.get_llm_provider", return_value="litellm"),
         patch("api.routes.chat.get_litellm_models_config", return_value=config),
         TestClient(create_app()) as client,
     ):
@@ -186,12 +174,12 @@ def test_models_endpoint_returns_config_for_litellm(
         assert data["providers"][0]["models"][0]["id"] == "gpt-4o"
 
 
-def test_models_endpoint_empty_for_non_litellm(
+def test_models_endpoint_empty_when_no_config(
     test_env_vars: dict[str, str],
 ) -> None:
-    """GET /models returns an empty list when the provider is not litellm."""
+    """GET /models returns an empty list when no models config is set."""
     with (
-        patch("api.routes.chat.get_llm_provider", return_value="azure"),
+        patch("api.routes.chat.get_litellm_models_config", return_value=None),
         TestClient(create_app()) as client,
     ):
         resp = client.get("/models")

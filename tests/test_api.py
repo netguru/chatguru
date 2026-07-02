@@ -360,7 +360,7 @@ def test_websocket_chat_with_conversation_history(async_app: TestClient) -> None
 
 def test_websocket_chat_messages_empty_array(async_app: TestClient) -> None:
     """Test WebSocket with empty messages array (should fail validation)."""
-    with patch("src.agent.service.ChatOpenAI"):
+    with patch("src.agent.service._build_chat_llm"):
         with async_app.websocket_connect("/ws") as websocket:
             websocket.send_json({"session_id": "ws-empty-messages", "messages": []})
 
@@ -371,7 +371,7 @@ def test_websocket_chat_messages_empty_array(async_app: TestClient) -> None:
 
 def test_websocket_chat_without_messages_field(async_app: TestClient) -> None:
     """Test WebSocket chat without messages field (should fail validation)."""
-    with patch("src.agent.service.ChatOpenAI"):
+    with patch("src.agent.service._build_chat_llm"):
         with async_app.websocket_connect("/ws") as websocket:
             websocket.send_json({"session_id": "ws-no-messages-field"})
 

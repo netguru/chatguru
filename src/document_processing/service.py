@@ -21,11 +21,10 @@ def _build_vision_url() -> str:
 
     Priority:
     1. Explicit DOCLING_PICTURE_DESCRIPTION_URL override.
-    2. LLM_OPENAI_BASE_URL  → <base>/chat/completions  (already /v1-style)
-    3. OPENAI_ENDPOINT + LLM_API_VERSION set → Azure direct:
-           <endpoint>/openai/deployments/<deployment>/chat/completions?api-version=…
-    4. OPENAI_ENDPOINT only → OpenAI-compatible proxy (endpoint is already the /v1 base):
-           <endpoint>/chat/completions
+    2. LLM_API_BASE + LLM_API_VERSION set → Azure-style deployment path:
+           <base>/openai/deployments/<model>/chat/completions?api-version=…
+    3. LLM_API_BASE only → OpenAI-compatible base URL:
+           <base>/chat/completions
     """
     docling = get_docling_settings()
     if docling.picture_description_url:
@@ -33,18 +32,16 @@ def _build_vision_url() -> str:
 
     llm = get_llm_settings()
 
-    if llm.openai_base_url:
-        return f"{llm.openai_base_url.rstrip('/')}/chat/completions"
-
-    if llm.endpoint:
-        base = llm.endpoint.rstrip("/")
-        # Azure OpenAI direct always has an api-version; deployment goes in the path.
-        if llm.api_version and llm.deployment_name:
+    if llm.api_base:
+        base = llm.api_base.rstrip("/")
+        # An api-version implies an Azure-style endpoint: the model/deployment
+        # goes in the path and the version in the query string.
+        if llm.api_version and llm.model:
             return (
-                f"{base}/openai/deployments/{llm.deployment_name}"
+                f"{base}/openai/deployments/{llm.model}"
                 f"/chat/completions?api-version={llm.api_version}"
             )
-        # OpenAI-compatible proxy — endpoint is already a /v1-style base URL.
+        # Otherwise the base URL is already an OpenAI-compatible /v1 endpoint.
         return f"{base}/chat/completions"
 
     msg = (
@@ -92,13 +89,13 @@ def _get_converter() -> Any:
                     "api-key": api_key,
                     "Authorization": f"Bearer {api_key}",
                 },
-                params={"model": llm.deployment_name},
+                params={"model": llm.model},
                 prompt="Describe this image concisely, focusing on any data, charts, diagrams, or key visual elements.",
             )
             logger.info(
                 "Docling picture description enabled (url=%s, model=%s)",
                 vision_url,
-                llm.deployment_name,
+                llm.model,
             )
 
         _converter = DocumentConverter(

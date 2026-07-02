@@ -36,7 +36,6 @@ from config import (
     get_app_settings,
     get_document_rag_settings,
     get_litellm_models_config,
-    get_llm_provider,
     get_logger,
 )
 from document_rag import get_document_rag_repository
@@ -78,12 +77,11 @@ class HistoryMessage(BaseModel):
 
 
 def _validate_model_id(model: str | None) -> None:
-    """Reject a per-request model ID that isn't in the LiteLLM config.
+    """Reject a per-request model ID that isn't in the models config.
 
-    No-op when no model is requested, the provider is not litellm, or no
-    models config is loaded.
+    No-op when no model is requested or no models config is loaded.
     """
-    if model is None or get_llm_provider() != "litellm":
+    if model is None:
         return
     config = get_litellm_models_config()
     if config is None:
@@ -116,9 +114,9 @@ class ChatMessage(BaseModel):
         None,
         max_length=256,
         description=(
-            "LiteLLM model ID to use for this request (e.g. 'gpt-4o', "
-            "'anthropic/claude-3-5-sonnet-20241022'). Only honoured when "
-            "LLM_PROVIDER=litellm; ignored otherwise."
+            "Model ID to use for this request (e.g. 'openai/gpt-4o', "
+            "'anthropic/claude-3-5-sonnet-20241022'). Must be one of the models "
+            "listed in the models config; ignored when no models config is set."
         ),
     )
 
@@ -183,13 +181,11 @@ _background_tasks: set[asyncio.Task] = set()
 
 @router.get("/models")
 async def get_available_models() -> dict[str, Any]:
-    """Return the list of available LiteLLM models.
+    """Return the list of selectable models.
 
-    Returns an empty providers list when LLM_PROVIDER is not 'litellm',
+    Returns an empty providers list when no models config file is configured,
     so the frontend can use this to decide whether to show the model picker.
     """
-    if get_llm_provider() != "litellm":
-        return {"providers": []}
     config = get_litellm_models_config()
     if config is None:
         return {"providers": []}
