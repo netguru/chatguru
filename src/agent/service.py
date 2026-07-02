@@ -5,6 +5,7 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
@@ -19,7 +20,12 @@ from langchain_openai import AzureChatOpenAI, ChatOpenAI
 from langfuse.langchain import CallbackHandler
 
 from agent.prompt import SYSTEM_PROMPT
-from config import get_llm_settings, get_logger
+from config import (
+    get_litellm_models_config,
+    get_llm_provider,
+    get_llm_settings,
+    get_logger,
+)
 from document_rag.repository import DocumentRagRepository
 from tracing import (
     flush_langfuse_async,
@@ -32,9 +38,32 @@ from tracing import (
 from vector_db import VectorDatabase
 
 
-def _build_chat_llm() -> ChatOpenAI | AzureChatOpenAI:
-    """Build a ChatOpenAI client pointed at OPENAI_ENDPOINT."""
+def _build_chat_llm(model: str | None = None) -> BaseChatModel:
+    """Build an LLM client based on the configured provider."""
     settings = get_llm_settings()
+    provider = get_llm_provider()
+
+    if provider == "litellm":
+        from langchain_litellm import ChatLiteLLM  # noqa: PLC0415
+
+        litellm_kwargs: dict[str, Any] = {}
+        # When a base URL + key are configured (e.g. an Azure APIM / OpenAI-compatible
+        # gateway that authenticates via the `api-key` header), forward them so
+        # `openai/<model>` ids route through it. With no base URL set, LiteLLM falls
+        # back to standard provider env vars (OPENAI_API_KEY, ANTHROPIC_API_KEY, …).
+        gateway_base = (settings.openai_base_url or settings.endpoint).strip()
+        if gateway_base and settings.api_key:
+            litellm_kwargs["api_base"] = gateway_base.rstrip("/")
+            litellm_kwargs["api_key"] = settings.api_key
+            litellm_kwargs["extra_headers"] = {"api-key": settings.api_key}
+
+        return ChatLiteLLM(
+            model=model or settings.deployment_name,
+            streaming=True,
+            temperature=settings.temperature,
+            **litellm_kwargs,
+        )
+
     extra_kwargs: dict[str, Any] = {}
     if settings.reasoning_effort:
         extra_kwargs["reasoning_effort"] = settings.reasoning_effort
@@ -169,7 +198,16 @@ class Agent:
         # Initialize Langfuse tracing (idempotent; also called at app startup)
         init_langfuse()
 
-        llm = _build_chat_llm()
+        self._provider = get_llm_provider()
+        self._default_litellm_model: str | None = None
+        if self._provider == "litellm":
+            config = get_litellm_models_config()
+            if config and config.providers and config.providers[0].models:
+                self._default_litellm_model = config.providers[0].models[0].id
+            else:
+                self._default_litellm_model = get_llm_settings().deployment_name
+
+        llm = _build_chat_llm(model=self._default_litellm_model)
 
         # Create tools based on available backends
         self.tools: list[BaseTool] = []
@@ -409,6 +447,7 @@ class Agent:
         *,
         session_id: str | None = None,
         visitor_id: str | None = None,
+        model: str | None = None,
     ) -> AsyncIterator[str]:
         """
         Stream agent responses asynchronously with conversation context.
@@ -424,6 +463,8 @@ class Agent:
                 (typically ends with the current user message).
             session_id: Optional session ID for Langfuse tracing
             visitor_id: Optional visitor ID for Langfuse tracing
+            model: Optional LiteLLM model ID to use for this request. Only
+                applied when LLM_PROVIDER=litellm; ignored otherwise.
 
         Yields:
             Response chunks as strings (including tool call notifications)
@@ -435,22 +476,37 @@ class Agent:
         self._last_turn_sources = turn_sources
         _current_sources.set(turn_sources)
 
+        # For LiteLLM, rebuild the LLM with the requested model when it differs
+        # from the default so tool bindings are applied to the right model.
+        if (
+            self._provider == "litellm"
+            and model
+            and model != self._default_litellm_model
+        ):
+            request_llm = _build_chat_llm(model=model).bind_tools(self.tools)
+        else:
+            request_llm = self.llm
+
         async with self._tracing_context(
             session_id=session_id, visitor_id=visitor_id
         ) as config:
-            async for chunk in self._run_agentic_loop(lc_messages, config):
+            async for chunk in self._run_agentic_loop(
+                lc_messages, config, llm=request_llm
+            ):
                 yield chunk
 
     async def _run_agentic_loop(
         self,
         messages: list[BaseMessage],
         config: RunnableConfig,
+        llm: Any = None,
     ) -> AsyncIterator[str]:
         """Run the agentic loop until no more tool calls or max iterations."""
+        active_llm = llm if llm is not None else self.llm
         for iteration in range(MAX_TOOL_ITERATIONS):
             full_response: AIMessageChunk | None = None
 
-            async for chunk in self.llm.astream(messages, config=config):
+            async for chunk in active_llm.astream(messages, config=config):
                 chunk_msg = chunk if isinstance(chunk, AIMessageChunk) else None
                 if chunk_msg:
                     full_response = (

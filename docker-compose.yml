@@ -145,6 +145,12 @@ services:
       - LLM_OPENAI_BASE_URL=${LLM_OPENAI_BASE_URL:-}
       - LLM_EMBEDDING_DEPLOYMENT_NAME=${LLM_EMBEDDING_DEPLOYMENT_NAME}
 
+      # LiteLLM provider (per-request model selection). The models file is
+      # mounted read-only below; the container path is fixed regardless of the
+      # host LLM_LITELLM_MODELS_CONFIG value.
+      - LLM_PROVIDER=${LLM_PROVIDER:-}
+      - LLM_LITELLM_MODELS_CONFIG=/app/litellm_models.json
+
       # Langfuse Configuration (Observability & Tracing)
       - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
       - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
@@ -213,6 +219,8 @@ services:
 
     volumes:
       - rag-ingest-state:/app/rag_ingest_state
+      # LiteLLM models config (read-only). Only used when LLM_PROVIDER=litellm.
+      - ./litellm_models.json:/app/litellm_models.json:ro
       - chatguru-data:/data
       - rag-data:/app/rag_data
 
@@ -246,6 +254,12 @@ services:
       - LLM_API_VERSION=${LLM_API_VERSION}
       - LLM_OPENAI_BASE_URL=${LLM_OPENAI_BASE_URL:-}
       - LLM_EMBEDDING_DEPLOYMENT_NAME=${LLM_EMBEDDING_DEPLOYMENT_NAME}
+
+      # LiteLLM provider (per-request model selection). The models file is
+      # mounted read-only below; the container path is fixed regardless of the
+      # host LLM_LITELLM_MODELS_CONFIG value.
+      - LLM_PROVIDER=${LLM_PROVIDER:-}
+      - LLM_LITELLM_MODELS_CONFIG=/app/litellm_models.json
 
       # Langfuse Configuration (Observability & Tracing)
       - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}

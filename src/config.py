@@ -1,13 +1,28 @@
 """Configuration management for chatguru Agent."""
 
+import json
 import logging
 from functools import lru_cache
 from logging import Logger
 from logging.config import dictConfig
 from pathlib import Path
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class LiteLLMModel(BaseModel):
+    label: str
+    id: str
+
+
+class LiteLLMProvider(BaseModel):
+    name: str
+    models: list[LiteLLMModel]
+
+
+class LiteLLMModelsConfig(BaseModel):
+    providers: list[LiteLLMProvider]
 
 
 def get_env_file_path() -> str:
@@ -214,6 +229,18 @@ class LLMSettings(BaseSettings):
         default=1536,
         description="Embedding vector dimensions (LLM_EMBEDDING_DIMENSIONS).",
     )
+    provider: str = Field(
+        default="",
+        description=(
+            "Explicit LLM provider: 'azure', 'openai', or 'litellm'. "
+            "When empty, auto-detected: 'openai' if LLM_OPENAI_BASE_URL is set, else 'azure'."
+        ),
+    )
+    litellm_models_config_path: str = Field(
+        default="",
+        validation_alias=AliasChoices("LLM_LITELLM_MODELS_CONFIG"),
+        description="Path to the LiteLLM models JSON file (LLM_LITELLM_MODELS_CONFIG).",
+    )
 
 
 @lru_cache
@@ -260,6 +287,38 @@ class LangfuseSettings(BaseSettings):
 def get_llm_settings() -> LLMSettings:
     """Get LLM settings."""
     return LLMSettings()
+
+
+def get_llm_provider() -> str:
+    """Resolve the effective LLM provider name."""
+    settings = get_llm_settings()
+    if settings.provider:
+        return settings.provider.lower()
+    if settings.openai_base_url.strip():
+        return "openai"
+    return "azure"
+
+
+@lru_cache
+def get_litellm_models_config() -> LiteLLMModelsConfig | None:
+    """Load and cache the LiteLLM models config from the JSON file.
+
+    Returns None when LLM_LITELLM_MODELS_CONFIG is not set.
+    Raises FileNotFoundError / ValueError on invalid config.
+    """
+    settings = get_llm_settings()
+    if not settings.litellm_models_config_path:
+        return None
+    path = Path(settings.litellm_models_config_path)
+    if not path.exists():
+        msg = (
+            f"LiteLLM models config file not found: {path}. "
+            "Set LLM_LITELLM_MODELS_CONFIG to a valid path."
+        )
+        raise FileNotFoundError(msg)
+    with path.open(encoding="utf-8") as f:
+        data = json.load(f)
+    return LiteLLMModelsConfig(**data)
 
 
 @lru_cache

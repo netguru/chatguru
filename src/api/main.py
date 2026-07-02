@@ -17,6 +17,8 @@ from config import (
     get_app_settings,
     get_docling_settings,
     get_fastapi_settings,
+    get_litellm_models_config,
+    get_llm_provider,
     get_llm_settings,
     get_logger,
 )
@@ -43,13 +45,26 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Debug mode: %s", app_settings.debug)
 
     llm = get_llm_settings()
+    provider = get_llm_provider()
     logger.info(
-        "LLM config — endpoint: %s | deployment: %s | api_version: %s | api_key_configured: %s",
+        "LLM config — provider: %s | endpoint: %s | deployment: %s | api_version: %s | api_key_configured: %s",
+        provider,
         llm.endpoint,
         llm.deployment_name,
         llm.api_version,
         bool(llm.api_key),
     )
+    if provider == "litellm":
+        # Fail fast on a missing or malformed models config file.
+        models_config = get_litellm_models_config()
+        model_count = (
+            sum(len(p.models) for p in models_config.providers) if models_config else 0
+        )
+        logger.info(
+            "LiteLLM provider active — %d model(s) configured across %d provider group(s)",
+            model_count,
+            len(models_config.providers) if models_config else 0,
+        )
 
     init_langfuse()
     await init_persistence()

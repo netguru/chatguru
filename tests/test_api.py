@@ -21,6 +21,7 @@ def _mock_astream(chunks: list[str]) -> Callable[..., AsyncIterator[str]]:
         *,
         session_id: str | None = None,
         visitor_id: str | None = None,
+        model: str | None = None,
     ) -> AsyncIterator[str]:
         for chunk in chunks:
             yield chunk
@@ -317,6 +318,7 @@ def test_websocket_chat_with_conversation_history(async_app: TestClient) -> None
             *,
             session_id: str | None = None,
             visitor_id: str | None = None,
+            model: str | None = None,
         ) -> AsyncIterator[str]:
             nonlocal received_messages
             received_messages = messages
@@ -439,6 +441,7 @@ def test_websocket_error_response_includes_session_id(async_app: TestClient) -> 
             *,
             session_id: str | None = None,
             visitor_id: str | None = None,
+            model: str | None = None,
         ) -> AsyncIterator[str]:
             raise Exception("Simulated streaming error")
             yield  # Make it a generator  # noqa: B027
@@ -494,6 +497,7 @@ def test_websocket_history_with_multiple_turns(async_app: TestClient) -> None:
             *,
             session_id: str | None = None,
             visitor_id: str | None = None,
+            model: str | None = None,
         ) -> AsyncIterator[str]:
             nonlocal received_messages
             received_messages = messages
