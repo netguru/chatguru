@@ -55,9 +55,17 @@ async def open_mcp_tools(
                 async with asyncio.timeout(_SESSION_OPEN_TIMEOUT_SECONDS):
                     session = await stack.enter_async_context(client.session(name))
                     server_tools = await load_mcp_tools(session)
-            except Exception:
-                logger.exception(
-                    "Failed to open MCP session for server %r; skipping.", name
+            except Exception as exc:  # noqa: BLE001 - isolate any per-server failure
+                # Runs every turn, so a persistently down/slow server must not
+                # spam full stack traces. A concise warning with the error type
+                # is enough; ``asyncio.CancelledError`` is a ``BaseException`` and
+                # is intentionally not caught here so cancellation still
+                # propagates.
+                logger.warning(
+                    "Failed to open MCP session for server %r (%s: %s); skipping.",
+                    name,
+                    type(exc).__name__,
+                    exc,
                 )
                 continue
             logger.info(
