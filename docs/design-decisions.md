@@ -75,19 +75,18 @@ Chat tables and vector tables can share a **single** `.db` file (see `PERSISTENC
 
 <a id="llm-endpoint-modes"></a>
 
-## LLM endpoint: universal (`ChatOpenAI`) vs native Azure (`AzureChatOpenAI`)
+## LLM provider selection: LiteLLM model ids
 
-**Context:** The agent builds one of two LangChain chat clients in `agent/service.py` (`_build_chat_llm`). The choice is **not** where the chatguru API is hosted (e.g. Azure App Service vs. elsewhere). It depends on **which HTTP API** your LLM URL exposes.
+**Context:** The agent builds a single LangChain chat client in `agent/service.py` (`_build_chat_llm`) — a `ChatLiteLLM`. LiteLLM is provider-agnostic: the backend is chosen by the **model id**, so switching providers is a config change, not a code change. (This supersedes the earlier "universal `ChatOpenAI` vs native `AzureChatOpenAI`" decision.)
 
 ### Decision
 
-| Mode | When to use | Environment variables | Client |
-|------|-------------|------------------------|--------|
-| **Universal / OpenAI-compatible** | The URL speaks the **OpenAI Chat Completions** contract: a single base URL, model id in the request body, paths like `.../chat/completions`. Typical: **Azure API Management** in front of Azure OpenAI, **true OpenAI** (`https://api.openai.com/v1`), LiteLLM, or any custom gateway that exposes `/openai/v1` (or similar). | Set **`LLM_OPENAI_BASE_URL`** to that base (e.g. `https://your-apim.azure-api.net/.../openai/v1`). **`OPENAI_ENDPOINT`** is not used for chat in this mode. `LLM_DEPLOYMENT_NAME` is the **model id** (e.g. `gpt-5-mini`). | `ChatOpenAI` with `base_url` |
-| **Native Azure OpenAI** | The app calls **Azure OpenAI Service directly** using the resource host and deployment-based routing (`azure_endpoint` + `azure_deployment` + `api-version`), not a single v1-compatible base URL you fully control yourself. | Leave **`LLM_OPENAI_BASE_URL`** empty. Set **`OPENAI_ENDPOINT`** to the Azure resource base (see `config.py` / `env.example`). Set **`LLM_API_VERSION`**. `LLM_DEPLOYMENT_NAME` is the **deployment name** in Azure. | `AzureChatOpenAI` |
+- **`LLM_MODEL`** holds a LiteLLM model id in `<provider>/<model>` form: `openai/gpt-4o`, `azure/<deployment>`, `anthropic/claude-3-5-sonnet`, `gemini/gemini-2.5-flash`, `ollama/llama3.1:8b`, … See <https://docs.litellm.ai/docs/providers>.
+- **`LLM_API_BASE`** (optional) points chat + embeddings at an OpenAI-compatible endpoint or a gateway (e.g. an Azure APIM proxy). When set, `LLM_API_KEY` is forwarded as both a bearer token and the `api-key` header (the latter for gateways such as APIM). When empty, LiteLLM uses each provider's default endpoint and standard credential env vars (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, …).
+- **`LLM_API_VERSION`** (optional) is required by some gateways, notably Azure.
 
 ### Notes
 
-- **Hosting the app on Azure** does not force either mode. An app on Azure can use **`LLM_OPENAI_BASE_URL`** if traffic goes through a v1-compatible gateway (common and valid).
-- Embeddings may still use **`OPENAI_EMBEDDINGS_ENDPOINT`** (or fall back to `OPENAI_ENDPOINT` when the universal chat path is not used); see `LLMSettings` in `config.py` for precedence.
-- Deprecated env names (`LLM_ENDPOINT` for the chat base URL) are not used; prefer **`OPENAI_ENDPOINT`** per project conventions.
+- **Hosting the app on Azure** does not force any particular provider; the model id decides.
+- Embeddings run against any OpenAI-compatible endpoint. They use **`LLM_EMBEDDINGS_API_BASE`** / **`LLM_EMBEDDINGS_API_KEY`** when set, falling back to **`LLM_API_BASE`** / **`LLM_API_KEY`**; see `LLMSettings` in `config.py`.
+- Legacy env names (`OPENAI_ENDPOINT`, `LLM_OPENAI_BASE_URL`, `LLM_DEPLOYMENT_NAME`, `OPENAI_EMBEDDINGS_*`, `LLM_EMBEDDING_DEPLOYMENT_NAME`) are still accepted as aliases. `LLM_PROVIDER` has been removed.

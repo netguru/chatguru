@@ -13,7 +13,7 @@ graph LR
     subgraph "Current Implementation"
         UI[React/Vite Frontend<br/>frontend/] -->|WebSocket /ws| API[FastAPI API]
         API --> AGENT[Agent Service]
-        AGENT --> LLM[Azure OpenAI]
+        AGENT --> LLM[LLM via LiteLLM<br/>any provider]
         AGENT -->|RAG Tool| PRODUCTDB[Product DB<br/>sqlite-vec]
         AGENT -->|search_documents| DOCRAG[Document RAG Repo<br/>MongoDB]
         AGENT --> LANGFUSE[Langfuse<br/>Tracing]
@@ -30,7 +30,7 @@ graph LR
 
 The system is designed to evolve from a simple chat interface to a full agentic commerce platform:
 
-**Phase 1**: Basic chat with Azure OpenAI ✅
+**Phase 1**: Basic chat with an LLM (provider-agnostic via LiteLLM) ✅
 **Phase 2 (Current)**: RAG with sqlite-vec vector database ✅
 **Phase 3**: Integrate MCP tools for commerce platforms (PimCore, Strapi, Medusa.js, Stripe)
 **Phase 4**: Full agentic commerce with payment processing and order management
@@ -59,21 +59,21 @@ The system is designed to evolve from a simple chat interface to a full agentic 
 **Purpose**: Core AI agent logic and conversation management
 
 **Current Implementation**:
-- **Agent Service**: Direct LangChain implementation with Azure OpenAI
+- **Agent Service**: Direct LangChain implementation using LiteLLM (`ChatLiteLLM`)
 - **System Prompts**: Configurable prompts for different use cases
 - **Message Processing**: Human and system message handling
 - **Response Generation**: Direct LLM invocation for responses
 
 **Architecture**:
 - **Simplified Design**: Removed LangGraph complexity for MVP
-- **Direct Integration**: Azure OpenAI via langchain-openai
+- **Provider-agnostic**: LiteLLM routes by model id (`openai/…`, `azure/…`, `anthropic/…`, `ollama/…`)
 - **Future Extensibility**: Ready for LangGraph reintroduction when needed
 - **Testing**: Uses GenericFakeChatModel for reliable testing
 
 **Workflow**:
 1. **Receive Message**: Accept user input via API
 2. **Format Messages**: Create system and human message pair
-3. **Generate Response**: Direct LLM call to Azure OpenAI
+3. **Generate Response**: Direct LLM call via LiteLLM
 4. **Return Response**: Send formatted response to client
 
 ### 3. Product Database (sqlite-vec)
@@ -83,7 +83,7 @@ The system is designed to evolve from a simple chat interface to a full agentic 
 **Architecture**:
 - **Separate Container**: Runs as `vector-db` service on port 8001 (Docker Compose sqlite profile)
 - **sqlite-vec**: SQLite extension for vector similarity search
-- **Azure OpenAI Embeddings**: 1536-dimensional vectors (text-embedding-ada-002)
+- **Embeddings**: OpenAI-compatible endpoint; dimensions configurable (default 1536, e.g. text-embedding-ada-002)
 
 **Components**:
 - `VectorStore` / `vector_db/store.py`: Core SQLite + sqlite-vec logic and **inline DDL** for `products` and embedding tables
@@ -115,11 +115,11 @@ See [document-rag.md](document-rag.md) for implementation details.
 
 ### 5. External Services
 
-#### Azure OpenAI (Direct Integration)
+#### LLM (via LiteLLM)
 - **Purpose**: Large Language Model inference
 - **Configuration**: Environment-based settings via Pydantic
-- **Implementation**: Direct integration via langchain-openai
-- **Features**: Azure-specific optimizations, deployment management
+- **Implementation**: `ChatLiteLLM` (LangChain + LiteLLM)
+- **Features**: Provider-agnostic — the model id (`openai/…`, `azure/…`, `anthropic/…`, `ollama/…`) selects the backend
 
 #### Langfuse
 - **Purpose**: Observability and tracing
@@ -136,7 +136,7 @@ See [document-rag.md](document-rag.md) for implementation details.
 ### 1. Chat Request Flow
 
 ```
-React/Vite Frontend (frontend/) → WebSocket /ws → Agent Service → Azure OpenAI → Streamed Tokens
+React/Vite Frontend (frontend/) → WebSocket /ws → Agent Service → LLM (via LiteLLM) → Streamed Tokens
        ↓                              ↓              ↓                ↓
   Sends {message, messages[],     Validation     Direct LLM      Langfuse
         session_id} payloads      & Routing      Call            Tracing
@@ -148,11 +148,12 @@ React/Vite Frontend (frontend/) → WebSocket /ws → Agent Service → Azure Op
 ```python
 class Agent:
     def __init__(self) -> None:
-        self.agent = AzureChatOpenAI(
-            azure_deployment=settings.deployment_name,
+        self.agent = ChatLiteLLM(
+            model=settings.model,          # e.g. "openai/gpt-4o", "azure/<deployment>"
+            api_base=settings.api_base,    # optional; empty = provider default
             api_key=settings.api_key,
-            azure_endpoint=settings.endpoint,
-            api_version=settings.api_version,
+            api_version=settings.api_version,  # optional; required by some gateways
+            streaming=True,
         )
 
     def run(self, message: str) -> str:
@@ -214,8 +215,8 @@ class ChatResponse(BaseModel):
 ### 3. Configuration Management
 
 **Environment Variables**:
-- Required: Azure OpenAI, Langfuse credentials
-- Optional: Brand settings, feature flags
+- Required: LLM credentials (`LLM_MODEL`, `LLM_API_KEY`), Langfuse credentials
+- Optional: `LLM_API_BASE` / gateway settings, brand settings, feature flags
 - Development: Debug mode, logging levels
 
 **Future Database Configuration**:
@@ -306,7 +307,7 @@ class ChatResponse(BaseModel):
 
 ### Phase 1: MVP ✅
 - ✅ Basic chat functionality
-- ✅ Azure OpenAI direct integration
+- ✅ Provider-agnostic LLM integration (LiteLLM)
 - ✅ Langfuse tracing
 - ✅ Docker deployment
 - ✅ Comprehensive testing with mocks
@@ -314,7 +315,7 @@ class ChatResponse(BaseModel):
 
 ### Phase 2: RAG Enhancement ✅
 - ✅ sqlite-vec vector database
-- ✅ Product embeddings with Azure OpenAI
+- ✅ Product embeddings via OpenAI-compatible endpoint
 - ✅ Semantic search via RAG tool
 - ✅ Separate database container
 

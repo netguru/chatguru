@@ -4,11 +4,11 @@ import type { LlmModel, LlmModelProvider, LlmModelsResponse } from "../types/cha
 const STORAGE_KEY = "chatguru_selected_model";
 
 /**
- * Fetches the list of available LiteLLM models from GET /models once on mount.
+ * Fetches the list of selectable models from GET /models once on mount.
  *
- * When the LiteLLM provider is not active the backend returns an empty
- * providers list, so `providers` stays empty and consumers render nothing —
- * zero visual change for Azure/OpenAI deployments.
+ * When no models config is provided the backend returns an empty providers
+ * list, so `providers` stays empty and consumers render nothing — the model
+ * picker only appears once models are configured.
  *
  * The selected model ID is persisted in localStorage so the user's choice
  * survives refreshes. It defaults to the first model in the list.

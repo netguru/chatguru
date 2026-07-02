@@ -38,14 +38,12 @@ Before you begin, ensure you have the following installed on your system:
 
 ### Required Accounts
 
-1. **Azure OpenAI Account**
-   - Sign up: [Azure OpenAI Service](https://azure.microsoft.com/en-us/products/cognitive-services/openai-service)
+1. **An LLM Provider Account**
+   - Any LiteLLM-supported provider works: OpenAI, Azure OpenAI, Anthropic, Google, or a local model (Ollama). See [LiteLLM providers](https://docs.litellm.ai/docs/providers).
    - You'll need:
-     - An Azure subscription
-     - Access to Azure OpenAI service
-     - API endpoint URL
-     - API key
-     - Deployment name (e.g., `gpt-4o-mini`)
+     - An API key for that provider
+     - A model id in `<provider>/<model>` form (e.g. `openai/gpt-4o-mini`, `azure/<deployment>`, `anthropic/claude-3-5-sonnet`)
+     - For a gateway (e.g. Azure APIM): the base URL, and an API version if required
 
 2. **Langfuse Account** (for observability)
    - Sign up: [langfuse.com](https://langfuse.com/)
@@ -115,16 +113,17 @@ This command will:
 3. **Fill in required variables:**
 
    ```bash
-   # OpenAI-compatible LLM configuration (REQUIRED)
-   OPENAI_ENDPOINT=https://your-resource.openai.azure.com/openai/v1
+   # LLM configuration (REQUIRED)
+   LLM_MODEL=openai/gpt-4o-mini
    LLM_API_KEY=your-api-key-here
-   LLM_DEPLOYMENT_NAME=gpt-4o-mini
 
-   # Optional for native Azure OpenAI routing
-   # LLM_API_VERSION=2024-02-15-preview
+   # Optional: base URL / gateway (OpenAI-compatible endpoint or Azure APIM).
+   # Leave unset to use the provider's default endpoint.
+   # LLM_API_BASE=https://your-apim.azure-api.net/plc/openai/v1
+   # LLM_API_VERSION=2024-02-15-preview   # required by some gateways, e.g. Azure
 
    # Optional title generation provider
-   # TITLE_GENERATION_PROVIDER=openai
+   # TITLE_GENERATION_PROVIDER=llm
    # TITLE_GENERATION_CUSTOM_CLASS=my_project.titlegen:MyTitleGenerator
 
    # Langfuse Configuration (REQUIRED)
@@ -134,8 +133,8 @@ This command will:
    ```
 
    **Important Notes:**
-   - `OPENAI_ENDPOINT` must point to the full OpenAI-compatible base URL ending in `/v1`
-   - `LLM_DEPLOYMENT_NAME` must match your Azure deployment exactly
+   - `LLM_MODEL` must be a valid LiteLLM id in `<provider>/<model>` form
+   - For a gateway, set `LLM_API_BASE` to the full base URL (and `LLM_API_VERSION` if required)
    - Keep your `.env` file secure - never commit it to git
 
 ### Step 4: Verify Configuration
@@ -249,17 +248,16 @@ make install
 uv sync
 ```
 
-### Issue 4: Azure OpenAI authentication errors
+### Issue 4: LLM authentication errors
 
 **Symptoms:**
 - `401 Unauthorized` errors
 - `Invalid API key` messages
 
 **Solution:**
-- Verify `OPENAI_ENDPOINT` points to an OpenAI-compatible `/v1` base URL
-- Check `LLM_API_KEY` is correct (no extra spaces)
-- Ensure `LLM_DEPLOYMENT_NAME` matches Azure deployment
-- If using native Azure OpenAI routing, verify `LLM_API_VERSION` is supported (e.g., `2024-02-15-preview`)
+- Verify `LLM_MODEL` is a valid LiteLLM id (`<provider>/<model>`)
+- Check `LLM_API_KEY` is correct for that provider (no extra spaces)
+- If using a gateway, verify `LLM_API_BASE` is a full base URL and `LLM_API_VERSION` is set when required (e.g., `2024-02-15-preview` for Azure)
 
 ### Issue 5: Langfuse connection errors
 
@@ -357,7 +355,7 @@ Now that you're set up, here are some things to try:
 - [FastAPI Documentation](https://fastapi.tiangolo.com/)
 - [LangChain Documentation](https://python.langchain.com/)
 - [uv Documentation](https://github.com/astral-sh/uv)
-- [Azure OpenAI Documentation](https://learn.microsoft.com/en-us/azure/ai-services/openai/)
+- [LiteLLM Documentation](https://docs.litellm.ai/docs/providers)
 
 ## 💬 Getting Help
 
