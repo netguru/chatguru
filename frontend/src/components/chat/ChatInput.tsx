@@ -8,6 +8,7 @@ import {
 } from "@phosphor-icons/react";
 import * as React from "react";
 import { useAppStore } from "../../store/appStore";
+import type { LlmModelProvider } from "../../types/chat";
 import { processDocument, uploadAttachment } from "../../utils/documentProcessing";
 import { cn } from "../../utils/utils";
 import { getOrCreateVisitorId } from "../../utils/visitorId";
@@ -19,6 +20,7 @@ import {
   ChatInputTextarea,
 } from "../ui/chat-input";
 import { IconButton, iconButtonVariants } from "../ui/icon-button";
+import { ModelSelector } from "./ModelSelector";
 
 const DOCUMENT_UPLOAD_ENABLED = import.meta.env.VITE_DOCUMENT_UPLOAD_ENABLED !== "false";
 
@@ -48,9 +50,21 @@ interface Props {
   value?: string;
   onValueChange?: (value: string) => void;
   className?: string;
+  /** LiteLLM model groups. Empty when the LiteLLM provider is not active. */
+  modelProviders?: LlmModelProvider[];
+  selectedModelId?: string | null;
+  onSelectModel?: (id: string) => void;
 }
 
-export function ChatInput({ onSend, value: valueProp, onValueChange, className }: Props) {
+export function ChatInput({
+  onSend,
+  value: valueProp,
+  onValueChange,
+  className,
+  modelProviders = [],
+  selectedModelId = null,
+  onSelectModel,
+}: Props) {
   const [localValue, setLocalValue] = React.useState("");
   const isControlled = valueProp !== undefined;
   const value = isControlled ? valueProp : localValue;
@@ -245,7 +259,11 @@ export function ChatInput({ onSend, value: valueProp, onValueChange, className }
                     <button
                       type="button"
                       disabled={!canPreview}
-                      onClick={() => canPreview && previewUrl && setActivePdf({ url: previewUrl, filename: doc.filename })}
+                      onClick={() =>
+                        canPreview &&
+                        previewUrl &&
+                        setActivePdf({ url: previewUrl, filename: doc.filename })
+                      }
                       title={canPreview ? `Preview ${doc.filename}` : doc.filename}
                       className={cn(
                         "inline-flex items-center gap-1.5 min-w-0",
@@ -289,7 +307,15 @@ export function ChatInput({ onSend, value: valueProp, onValueChange, className }
               ))}
             </ChatInputAction>
           )}
-          <ChatInputAction className="ml-auto shrink-0">
+          <ChatInputAction className="ml-auto flex shrink-0 items-center gap-1">
+            {modelProviders.length > 0 && onSelectModel && (
+              <ModelSelector
+                providers={modelProviders}
+                selectedModelId={selectedModelId}
+                onSelect={onSelectModel}
+                disabled={isInputDisabled}
+              />
+            )}
             <IconButton
               variant="primary"
               size="s"

@@ -161,7 +161,7 @@ export function useChat() {
   }, [connect]);
 
   const sendMessage = useCallback(
-    (text: string, attachmentIds?: string[], imagePreviewUrls?: string[]) => {
+    (text: string, attachmentIds?: string[], imagePreviewUrls?: string[], model?: string) => {
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN || isStreamingRef.current)
         return;
 
@@ -213,6 +213,7 @@ export function useChat() {
         session_id: currentSessionId ?? undefined,
         visitor_id: visitorId,
         messages: outboundMessages,
+        ...(model ? { model } : {}),
       };
       wsRef.current.send(JSON.stringify(payload));
 

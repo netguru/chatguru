@@ -28,6 +28,10 @@ export default defineConfig({
         target: backendTarget,
         changeOrigin: true,
       },
+      "/models": {
+        target: backendTarget,
+        changeOrigin: true,
+      },
       "/feedback": {
         target: backendTarget,
         changeOrigin: true,

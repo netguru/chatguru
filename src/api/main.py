@@ -46,24 +46,38 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
 
     llm = get_llm_settings()
     provider = get_llm_provider()
-    logger.info(
-        "LLM config — provider: %s | endpoint: %s | deployment: %s | api_version: %s | api_key_configured: %s",
-        provider,
-        llm.endpoint,
-        llm.deployment_name,
-        llm.api_version,
-        bool(llm.api_key),
-    )
     if provider == "litellm":
         # Fail fast on a missing or malformed models config file.
         models_config = get_litellm_models_config()
         model_count = (
             sum(len(p.models) for p in models_config.providers) if models_config else 0
         )
+        # For LiteLLM the per-request model is chosen by the client; a gateway
+        # base URL is optional (only set when routing openai/* through a proxy).
         logger.info(
-            "LiteLLM provider active — %d model(s) configured across %d provider group(s)",
+            "LLM config — provider: litellm | gateway_base: %s | models_configured: %d "
+            "across %d group(s) | default_model: %s | api_key_configured: %s",
+            (llm.openai_base_url or llm.endpoint) or "(provider env vars)",
             model_count,
             len(models_config.providers) if models_config else 0,
+            llm.deployment_name or "(first configured model)",
+            bool(llm.api_key),
+        )
+    elif provider == "openai":
+        logger.info(
+            "LLM config — provider: openai | base_url: %s | model: %s | api_key_configured: %s",
+            llm.openai_base_url or llm.endpoint,
+            llm.deployment_name,
+            bool(llm.api_key),
+        )
+    else:  # azure
+        logger.info(
+            "LLM config — provider: azure | endpoint: %s | deployment: %s | "
+            "api_version: %s | api_key_configured: %s",
+            llm.endpoint,
+            llm.deployment_name,
+            llm.api_version,
+            bool(llm.api_key),
         )
 
     init_langfuse()
