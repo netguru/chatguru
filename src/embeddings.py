@@ -15,10 +15,11 @@ def build_embeddings() -> Embeddings:
     settings = get_llm_settings()
     base_url = (settings.embeddings_api_base or settings.api_base).rstrip("/")
     api_key = settings.embeddings_api_key or settings.api_key
+    default_headers = {"api-key": api_key} if api_key else {}
     return OpenAIEmbeddings(
         model=settings.embedding_model,
-        api_key=api_key,
+        api_key=api_key or None,
         base_url=base_url or None,
         # Gateways such as Azure APIM authenticate via the `api-key` header.
-        default_headers={"api-key": api_key},
+        default_headers=default_headers,
     )
