@@ -442,8 +442,8 @@ class Agent:
                 (typically ends with the current user message).
             session_id: Optional session ID for Langfuse tracing
             visitor_id: Optional visitor ID for Langfuse tracing
-            model: Optional LiteLLM model ID to use for this request. Only
-                applied when LLM_PROVIDER=litellm; ignored otherwise.
+            model: Optional LiteLLM model ID to use for this request. When set,
+                overrides the agent's default model for this turn.
 
         Yields:
             Response chunks as strings (including tool call notifications)
