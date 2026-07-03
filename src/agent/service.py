@@ -69,7 +69,7 @@ def _build_chat_llm(model: str | None = None) -> BaseChatModel:
     )
 
 
-def _resolve_default_model() -> str | None:
+def resolve_default_model() -> str | None:
     """Pick the default model: first entry in the models config, else LLM_MODEL."""
     config = get_litellm_models_config()
     if config and config.providers and config.providers[0].models:
@@ -185,7 +185,7 @@ class Agent:
         # Initialize Langfuse tracing (idempotent; also called at app startup)
         init_langfuse()
 
-        self._default_model = _resolve_default_model()
+        self._default_model = resolve_default_model()
         llm = _build_chat_llm(model=self._default_model)
 
         # Create tools based on available backends

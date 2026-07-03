@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 
+from agent.service import resolve_default_model
 from api.routes.chat import await_background_tasks
 from api.routes.chat import router as chat_router
 from api.routes.documents import router as documents_router
@@ -52,7 +53,7 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info(
         "LLM config — model: %s | api_base: %s | api_version: %s | "
         "models_configured: %d | api_key_configured: %s",
-        llm.model or "(first configured model)",
+        resolve_default_model() or "(none configured)",
         llm.api_base or "(provider default endpoint)",
         llm.api_version or "(n/a)",
         model_count,
