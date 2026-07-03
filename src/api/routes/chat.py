@@ -146,9 +146,10 @@ class ChatMessage(BaseModel):
         elif len(last.content) < 1 or len(last.content) > _MAX_LAST_USER_MESSAGE_LENGTH:
             msg = f"Last user message content must be between 1 and {_MAX_LAST_USER_MESSAGE_LENGTH} characters"
             raise ValueError(msg)
-
+        # When no models config is present, ignore any per-request model override.
+        if get_litellm_models_config() is None:
+            self.model = None
         _validate_model_id(self.model)
-
         return self
 
 
