@@ -1,19 +1,23 @@
 """Cosmos DB for MongoDB vCore ingestion adapter for document RAG chunks.
 
-Reuses the Mongo ingestion adapter for connectivity, chunk upserts and GridFS
-source-file storage (all wire-compatible on Cosmos vCore). Only the vector
-index creation differs: Cosmos vCore builds the index synchronously via the
-``createIndexes`` command with ``cosmosSearchOptions`` rather than the Atlas
-search-index management API used by the Mongo adapter.
+Connectivity, chunk upserts and GridFS source-file storage are wire-compatible
+on Cosmos vCore, so they are delegated to an injected Mongo ingestion adapter
+(composition, not inheritance). Only vector-index creation differs: Cosmos vCore
+builds the index synchronously via the ``createIndexes`` command with
+``cosmosSearchOptions`` rather than the Atlas search-index management API.
 """
 
 import logging
+from typing import Any
 
-from pymongo import errors
+from pymongo import MongoClient, errors
 
+from config import DocumentRagSettings
 from document_rag.ingestion.adapters.mongodb import (
     MongoDocumentRagIngestionRepository,
+    create_mongo_client,
 )
+from document_rag.models import DocumentChunk, DocumentSourceFile
 
 logger = logging.getLogger(__name__)
 
@@ -21,20 +25,39 @@ logger = logging.getLogger(__name__)
 _NAMESPACE_NOT_FOUND = 26
 
 
-class CosmosDocumentRagIngestionRepository(MongoDocumentRagIngestionRepository):
+class CosmosDocumentRagIngestionRepository:
     """Cosmos vCore-backed ingestion adapter for document chunks."""
 
-    def ensure_ready(
+    def __init__(
         self,
+        settings: DocumentRagSettings,
         *,
-        embedding_dimensions: int,
-        timeout_seconds: int = 120,  # noqa: ARG002 — kept for parity with the Atlas adapter; Cosmos creation is synchronous
+        shared_ops: MongoDocumentRagIngestionRepository | None = None,
     ) -> None:
+        self._settings = settings
+        # Connectivity and CRUD are identical on Cosmos vCore, so delegate them
+        # to the Mongo adapter rather than inheriting from a sibling backend.
+        self._shared: MongoDocumentRagIngestionRepository = (
+            shared_ops or MongoDocumentRagIngestionRepository(settings)
+        )
+
+    def prepare_target(self) -> None:
+        self._shared.prepare_target()
+
+    def reset_all(self) -> None:
+        self._shared.reset_all()
+
+    def upsert_chunks(self, chunks: list[DocumentChunk]) -> int:
+        return int(self._shared.upsert_chunks(chunks))
+
+    def upsert_source_files(self, files: list[DocumentSourceFile]) -> int:
+        return int(self._shared.upsert_source_files(files))
+
+    def ensure_ready(self, *, embedding_dimensions: int) -> None:
         """Create the cosmosSearch vector index if absent. Idempotent.
 
-        ``timeout_seconds`` is accepted for interface parity with the Atlas
-        adapter but unused: Cosmos vCore index creation returns once the index
-        is registered, so there is no READY state to poll.
+        Cosmos vCore index creation returns once the index is registered, so
+        (unlike the Atlas adapter) there is no READY state to poll.
         """
         index_name = self._settings.mongodb_index_name
 
@@ -91,3 +114,7 @@ class CosmosDocumentRagIngestionRepository(MongoDocumentRagIngestionRepository):
             # vector-ivf (default) and any other IVF-style kind.
             options["numLists"] = self._settings.cosmos_vector_num_lists
         return options
+
+    def _mongo_client(self) -> MongoClient[dict[str, Any]]:
+        client: MongoClient[dict[str, Any]] = create_mongo_client(self._settings)
+        return client

@@ -6,7 +6,7 @@ from logging import Logger
 from logging.config import dictConfig
 from pathlib import Path
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -462,6 +462,30 @@ class DocumentRagSettings(BaseSettings):
         default="COS",
         description="Cosmos vCore vector similarity metric: COS, L2, or IP.",
     )
+
+    @field_validator("cosmos_vector_index_kind")
+    @classmethod
+    def _validate_cosmos_vector_index_kind(cls, value: str) -> str:
+        allowed = {"vector-ivf", "vector-hnsw"}
+        if value not in allowed:
+            msg = (
+                f"cosmos_vector_index_kind must be one of {sorted(allowed)}, "
+                f"got '{value}'"
+            )
+            raise ValueError(msg)
+        return value
+
+    @field_validator("cosmos_vector_similarity")
+    @classmethod
+    def _validate_cosmos_vector_similarity(cls, value: str) -> str:
+        allowed = {"COS", "L2", "IP"}
+        if value not in allowed:
+            msg = (
+                f"cosmos_vector_similarity must be one of {sorted(allowed)}, "
+                f"got '{value}'"
+            )
+            raise ValueError(msg)
+        return value
 
 
 @lru_cache

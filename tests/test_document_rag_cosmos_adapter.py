@@ -11,16 +11,23 @@ from document_rag.adapters.cosmos import CosmosDocumentRagRepository
 def _make_repo(
     *,
     indexes: dict | None = None,
+    collections: list[str] | None = None,
     aggregate_rows: list[dict] | None = None,
     settings: DocumentRagSettings | None = None,
 ) -> tuple[CosmosDocumentRagRepository, MagicMock]:
+    resolved_settings = settings or DocumentRagSettings(enabled=True, backend="cosmos")
     fake_collection = MagicMock()
     fake_collection.index_information.return_value = indexes or {}
+    fake_collection.database.list_collection_names.return_value = (
+        collections
+        if collections is not None
+        else [resolved_settings.mongodb_collection]
+    )
     fake_collection.aggregate.return_value = aggregate_rows or []
     embeddings = MagicMock()
     embeddings.embed_query.return_value = [0.1, 0.2, 0.3]
     repo = CosmosDocumentRagRepository(
-        settings=settings or DocumentRagSettings(enabled=True, backend="cosmos"),
+        settings=resolved_settings,
         client=MagicMock(),
         collection=fake_collection,
         embeddings=embeddings,
@@ -40,6 +47,16 @@ async def test_cosmos_connect_fails_when_vector_index_missing() -> None:
     repo, _ = _make_repo(indexes={"_id_": {}})
 
     with pytest.raises(RuntimeError, match="vector index .* is missing on Cosmos"):
+        await repo.connect()
+
+
+@pytest.mark.asyncio
+async def test_cosmos_connect_fails_when_collection_missing() -> None:
+    # Collection absent entirely (ingestion never ran): the error must name the
+    # missing collection, not be masked as a missing index or a connectivity fault.
+    repo, _ = _make_repo(collections=[])
+
+    with pytest.raises(RuntimeError, match="collection .* does not exist on Cosmos"):
         await repo.connect()
 
 

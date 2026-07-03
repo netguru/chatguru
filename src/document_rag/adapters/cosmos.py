@@ -42,13 +42,24 @@ class CosmosDocumentRagRepository(MongoDocumentRagRepository):
             raise RuntimeError(msg) from exc
 
     def _verify_vector_index_present(self) -> None:
-        """Fail fast when the cosmosSearch vector index is missing.
+        """Fail fast when the collection or its cosmosSearch vector index is missing.
 
         Cosmos vCore exposes vector indexes through ordinary ``listIndexes``
         (there is no async READY state like Atlas), so a name lookup is enough.
+        A missing collection is checked separately: ``index_information()`` on a
+        non-existent namespace quietly returns ``{}``, which would otherwise be
+        reported as a missing index rather than the real cause (ingestion never ran).
         """
         if self._collection is None:
             msg = "Document RAG collection is not initialized"
+            raise RuntimeError(msg)
+
+        collection_name = self._settings.mongodb_collection
+        if collection_name not in self._collection.database.list_collection_names():
+            msg = (
+                f"Document RAG collection '{collection_name}' does not exist on "
+                "Cosmos. Run document ingestion before starting the app."
+            )
             raise RuntimeError(msg)
 
         index_name = self._settings.mongodb_index_name
