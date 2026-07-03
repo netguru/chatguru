@@ -23,15 +23,15 @@ services:
     ports:
       - "8001:8001"
     environment:
-      # Embeddings settings. LLM_EMBEDDINGS_API_BASE/KEY are optional and fall
-      # back to LLM_API_BASE/LLM_API_KEY when empty. (Legacy OPENAI_*/
-      # *DEPLOYMENT_NAME names are still accepted by the app as aliases.)
-      - LLM_API_BASE=${LLM_API_BASE:-}
-      - LLM_EMBEDDINGS_API_BASE=${LLM_EMBEDDINGS_API_BASE:-}
-      - LLM_EMBEDDINGS_API_KEY=${LLM_EMBEDDINGS_API_KEY:-}
+      # Embeddings settings. New neutral names are preferred; legacy host vars
+      # are mapped through for backward compatibility. LLM_EMBEDDINGS_* are
+      # optional and fall back to LLM_API_BASE/LLM_API_KEY when empty.
+      - LLM_API_BASE=${LLM_API_BASE:-${LLM_OPENAI_BASE_URL:-${OPENAI_ENDPOINT:-}}}
+      - LLM_EMBEDDINGS_API_BASE=${LLM_EMBEDDINGS_API_BASE:-${OPENAI_EMBEDDINGS_ENDPOINT:-}}
+      - LLM_EMBEDDINGS_API_KEY=${LLM_EMBEDDINGS_API_KEY:-${OPENAI_EMBEDDINGS_API_KEY:-}}
       - LLM_API_KEY=${LLM_API_KEY}
       - LLM_API_VERSION=${LLM_API_VERSION:-}
-      - LLM_EMBEDDING_MODEL=${LLM_EMBEDDING_MODEL:-}
+      - LLM_EMBEDDING_MODEL=${LLM_EMBEDDING_MODEL:-${LLM_EMBEDDING_DEPLOYMENT_NAME:-}}
       # Same file as main app chat persistence (shared volume below)
       - VECTOR_SQLITE_DB_PATH=/data/chatguru.db
     volumes:
@@ -98,15 +98,15 @@ services:
     ports:
       - "8002:8002"
     environment:
-      # Embeddings settings. LLM_EMBEDDINGS_API_BASE/KEY are optional and fall
-      # back to LLM_API_BASE/LLM_API_KEY when empty. (Legacy OPENAI_*/
-      # *DEPLOYMENT_NAME names are still accepted by the app as aliases.)
-      - LLM_API_BASE=${LLM_API_BASE:-}
-      - LLM_EMBEDDINGS_API_BASE=${LLM_EMBEDDINGS_API_BASE:-}
-      - LLM_EMBEDDINGS_API_KEY=${LLM_EMBEDDINGS_API_KEY:-}
+      # Embeddings settings. New neutral names are preferred; legacy host vars
+      # are mapped through for backward compatibility. LLM_EMBEDDINGS_* are
+      # optional and fall back to LLM_API_BASE/LLM_API_KEY when empty.
+      - LLM_API_BASE=${LLM_API_BASE:-${LLM_OPENAI_BASE_URL:-${OPENAI_ENDPOINT:-}}}
+      - LLM_EMBEDDINGS_API_BASE=${LLM_EMBEDDINGS_API_BASE:-${OPENAI_EMBEDDINGS_ENDPOINT:-}}
+      - LLM_EMBEDDINGS_API_KEY=${LLM_EMBEDDINGS_API_KEY:-${OPENAI_EMBEDDINGS_API_KEY:-}}
       - LLM_API_KEY=${LLM_API_KEY}
       - LLM_API_VERSION=${LLM_API_VERSION:-}
-      - LLM_EMBEDDING_MODEL=${LLM_EMBEDDING_MODEL:-}
+      - LLM_EMBEDDING_MODEL=${LLM_EMBEDDING_MODEL:-${LLM_EMBEDDING_DEPLOYMENT_NAME:-}}
       # Local MongoDB settings
       - VECTOR_DB_MONGODB_URI=mongodb://mongodb:27017/?directConnection=true
       - VECTOR_DB_MONGODB_DATABASE=${VECTOR_DB_MONGODB_DATABASE:-products}
@@ -139,13 +139,13 @@ services:
       # LLM_API_KEY are forwarded to the provider/gateway; leave LLM_API_BASE
       # empty to use the provider's default endpoint. Legacy OPENAI_*/
       # *DEPLOYMENT_NAME names remain accepted by the app as aliases.
-      - LLM_API_BASE=${LLM_API_BASE:-}
+      - LLM_API_BASE=${LLM_API_BASE:-${LLM_OPENAI_BASE_URL:-${OPENAI_ENDPOINT:-}}}
       - LLM_API_KEY=${LLM_API_KEY}
       - LLM_API_VERSION=${LLM_API_VERSION:-}
-      - LLM_MODEL=${LLM_MODEL:-}
-      - LLM_EMBEDDINGS_API_BASE=${LLM_EMBEDDINGS_API_BASE:-}
-      - LLM_EMBEDDINGS_API_KEY=${LLM_EMBEDDINGS_API_KEY:-}
-      - LLM_EMBEDDING_MODEL=${LLM_EMBEDDING_MODEL:-}
+      - LLM_MODEL=${LLM_MODEL:-${LLM_DEPLOYMENT_NAME:-}}
+      - LLM_EMBEDDINGS_API_BASE=${LLM_EMBEDDINGS_API_BASE:-${OPENAI_EMBEDDINGS_ENDPOINT:-}}
+      - LLM_EMBEDDINGS_API_KEY=${LLM_EMBEDDINGS_API_KEY:-${OPENAI_EMBEDDINGS_API_KEY:-}}
+      - LLM_EMBEDDING_MODEL=${LLM_EMBEDDING_MODEL:-${LLM_EMBEDDING_DEPLOYMENT_NAME:-}}
 
       # Selectable models for the per-request model picker. The models file is
       # mounted read-only below; the container path is fixed regardless of the
@@ -252,13 +252,13 @@ services:
       # LLM_API_KEY are forwarded to the provider/gateway; leave LLM_API_BASE
       # empty to use the provider's default endpoint. Legacy OPENAI_*/
       # *DEPLOYMENT_NAME names remain accepted by the app as aliases.
-      - LLM_API_BASE=${LLM_API_BASE:-}
+      - LLM_API_BASE=${LLM_API_BASE:-${LLM_OPENAI_BASE_URL:-${OPENAI_ENDPOINT:-}}}
       - LLM_API_KEY=${LLM_API_KEY}
       - LLM_API_VERSION=${LLM_API_VERSION:-}
-      - LLM_MODEL=${LLM_MODEL:-}
-      - LLM_EMBEDDINGS_API_BASE=${LLM_EMBEDDINGS_API_BASE:-}
-      - LLM_EMBEDDINGS_API_KEY=${LLM_EMBEDDINGS_API_KEY:-}
-      - LLM_EMBEDDING_MODEL=${LLM_EMBEDDING_MODEL:-}
+      - LLM_MODEL=${LLM_MODEL:-${LLM_DEPLOYMENT_NAME:-}}
+      - LLM_EMBEDDINGS_API_BASE=${LLM_EMBEDDINGS_API_BASE:-${OPENAI_EMBEDDINGS_ENDPOINT:-}}
+      - LLM_EMBEDDINGS_API_KEY=${LLM_EMBEDDINGS_API_KEY:-${OPENAI_EMBEDDINGS_API_KEY:-}}
+      - LLM_EMBEDDING_MODEL=${LLM_EMBEDDING_MODEL:-${LLM_EMBEDDING_DEPLOYMENT_NAME:-}}
 
       # Selectable models for the per-request model picker. The models file is
       # mounted read-only below; the container path is fixed regardless of the
