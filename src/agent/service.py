@@ -21,9 +21,9 @@ from langfuse.langchain import CallbackHandler
 
 from agent.prompt import SYSTEM_PROMPT
 from config import (
-    get_litellm_models_config,
     get_llm_settings,
     get_logger,
+    resolve_default_model,
 )
 from document_rag.repository import DocumentRagRepository
 from tracing import (
@@ -40,14 +40,18 @@ from vector_db import VectorDatabase
 def _build_llm_kwargs(settings: Any) -> dict[str, Any]:
     """Assemble the shared LiteLLM connection kwargs from LLM settings.
 
-    When unset, LiteLLM falls back to each provider's default endpoint and
-    standard credential env vars (OPENAI_API_KEY, ANTHROPIC_API_KEY, …).
+    The shared ``LLM_API_KEY`` is forwarded only for an explicit single-model
+    deployment (``LLM_MODEL`` set). With no ``LLM_MODEL`` the app runs in
+    multi-provider picker mode, where forwarding one key to whichever provider a
+    picked model routes to would leak it; instead LiteLLM resolves each
+    provider's own credential from its standard env var (OPENAI_API_KEY,
+    ANTHROPIC_API_KEY, …).
     """
     kwargs: dict[str, Any] = {}
     api_base = settings.api_base.strip()
     if api_base:
         kwargs["api_base"] = api_base.rstrip("/")
-    if settings.api_key:
+    if settings.api_key and settings.model:
         kwargs["api_key"] = settings.api_key
         # Gateways such as Azure APIM authenticate via the `api-key` header.
         kwargs["extra_headers"] = {"api-key": settings.api_key}
@@ -67,14 +71,6 @@ def _build_chat_llm(model: str | None = None) -> BaseChatModel:
         temperature=settings.temperature,
         **_build_llm_kwargs(settings),
     )
-
-
-def resolve_default_model() -> str | None:
-    """Pick the default model: first entry in the models config, else LLM_MODEL."""
-    config = get_litellm_models_config()
-    if config and config.providers and config.providers[0].models:
-        return str(config.providers[0].models[0].id)
-    return get_llm_settings().model or None
 
 
 logger = get_logger("agent.service")

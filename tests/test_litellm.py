@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -185,3 +186,117 @@ def test_models_endpoint_empty_when_no_config(
         resp = client.get("/models")
         assert resp.status_code == 200
         assert resp.json() == {"providers": []}
+
+
+def _multi_provider_config() -> LiteLLMModelsConfig:
+    return LiteLLMModelsConfig(
+        providers=[
+            LiteLLMProvider(
+                name="OpenAI", models=[LiteLLMModel(label="GPT-4o", id="gpt-4o")]
+            ),
+            LiteLLMProvider(
+                name="Anthropic",
+                models=[LiteLLMModel(label="Sonnet", id="anthropic/claude-3-5-sonnet")],
+            ),
+        ]
+    )
+
+
+def test_model_provider_prefix_detection() -> None:
+    """Provider is the id prefix; a bare id routes to OpenAI."""
+    from api.main import _model_provider
+
+    assert _model_provider("anthropic/claude-3-5-sonnet") == "anthropic"
+    assert _model_provider("openai/gpt-4o") == "openai"
+    assert _model_provider("gpt-4o") == "openai"
+
+
+def _llm(api_key: str, api_base: str, model: str = "openai/gpt-4o") -> SimpleNamespace:
+    """A stand-in for LLMSettings exposing just the fields the helpers read.
+
+    Avoids LLMSettings' env resolution — litellm calls load_dotenv() on import,
+    leaking the project's .env (api_base aliases) into os.environ.
+    """
+    return SimpleNamespace(
+        api_key=api_key,
+        api_base=api_base,
+        model=model,
+        api_version="",
+        reasoning_effort="",
+    )
+
+
+def test_shared_key_warning_fires_for_direct_multi_provider() -> None:
+    """A single key + explicit LLM_MODEL + no gateway + several providers warns."""
+    from api.main import _warn_on_shared_key_across_providers
+
+    with patch("api.main.logger") as mock_logger:
+        _warn_on_shared_key_across_providers(
+            _llm("sk-shared", ""), _multi_provider_config()
+        )
+    assert mock_logger.warning.called
+    assert "anthropic, openai" in mock_logger.warning.call_args.args
+
+
+def test_shared_key_warning_silent_with_gateway() -> None:
+    """A configured gateway (api_base) is the intended single-key path — no warning."""
+    from api.main import _warn_on_shared_key_across_providers
+
+    with patch("api.main.logger") as mock_logger:
+        _warn_on_shared_key_across_providers(
+            _llm("sk-shared", "https://gw.example.com/v1"), _multi_provider_config()
+        )
+    assert not mock_logger.warning.called
+
+
+def test_shared_key_warning_silent_without_key() -> None:
+    """The LiteLLM per-provider-env-var setup (no LLM_API_KEY) never warns."""
+    from api.main import _warn_on_shared_key_across_providers
+
+    with patch("api.main.logger") as mock_logger:
+        _warn_on_shared_key_across_providers(_llm("", ""), _multi_provider_config())
+    assert not mock_logger.warning.called
+
+
+def test_shared_key_warning_silent_without_explicit_model() -> None:
+    """No LLM_MODEL → the key isn't forwarded at all, so nothing can leak."""
+    from api.main import _warn_on_shared_key_across_providers
+
+    with patch("api.main.logger") as mock_logger:
+        _warn_on_shared_key_across_providers(
+            _llm("sk-shared", "", model=""), _multi_provider_config()
+        )
+    assert not mock_logger.warning.called
+
+
+def test_shared_key_warning_silent_for_single_provider() -> None:
+    """One provider under one key is fine — no warning."""
+    from api.main import _warn_on_shared_key_across_providers
+
+    single = LiteLLMModelsConfig(
+        providers=[
+            LiteLLMProvider(
+                name="OpenAI",
+                models=[
+                    LiteLLMModel(label="GPT-4o", id="gpt-4o"),
+                    LiteLLMModel(label="GPT-4o mini", id="openai/gpt-4o-mini"),
+                ],
+            )
+        ]
+    )
+    with patch("api.main.logger") as mock_logger:
+        _warn_on_shared_key_across_providers(_llm("sk-shared", ""), single)
+    assert not mock_logger.warning.called
+
+
+def test_build_llm_kwargs_forwards_key_only_with_explicit_model() -> None:
+    """The shared key is forwarded only when LLM_MODEL is set explicitly."""
+    from agent.service import _build_llm_kwargs
+
+    with_model = _build_llm_kwargs(_llm("sk-shared", "", model="openai/gpt-4o"))
+    assert with_model["api_key"] == "sk-shared"
+    assert with_model["extra_headers"] == {"api-key": "sk-shared"}
+
+    without_model = _build_llm_kwargs(_llm("sk-shared", "", model=""))
+    assert "api_key" not in without_model
+    assert "extra_headers" not in without_model

@@ -322,6 +322,22 @@ def get_litellm_models_config() -> LiteLLMModelsConfig | None:
     return LiteLLMModelsConfig(**data)
 
 
+def resolve_default_model() -> str | None:
+    """Pick the default model used when a request doesn't override it.
+
+    An explicit ``LLM_MODEL`` always wins so operators keep a single source of
+    truth for the deployment's model. The first entry in the models config is
+    only a fallback for when ``LLM_MODEL`` is unset.
+    """
+    model = get_llm_settings().model
+    if model:
+        return model
+    config = get_litellm_models_config()
+    if config and config.providers and config.providers[0].models:
+        return str(config.providers[0].models[0].id)
+    return None
+
+
 @lru_cache
 def get_langfuse_settings() -> LangfuseSettings:
     """Get Langfuse settings."""

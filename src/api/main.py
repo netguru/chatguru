@@ -34,6 +34,40 @@ app_settings = get_app_settings()
 fastapi_settings = get_fastapi_settings()
 
 
+def _model_provider(model_id: str) -> str:
+    """Return the LiteLLM provider a model id routes to (bare ids → openai)."""
+    return model_id.split("/", 1)[0] if "/" in model_id else "openai"
+
+
+def _warn_on_shared_key_across_providers(llm: object, models_config: object) -> None:
+    """Warn when one LLM_API_KEY would be sent to several direct providers.
+
+    The shared key is only forwarded for an explicit single-model deployment
+    (LLM_MODEL set). With no gateway (LLM_API_BASE empty), LiteLLM then routes
+    each picked model straight to its provider, so that one key reaches every
+    provider in the picker — leaking it to providers it doesn't belong to. The
+    safe multi-provider setup is to leave LLM_MODEL and LLM_API_KEY empty and
+    give each provider its own standard env var (OPENAI_API_KEY,
+    ANTHROPIC_API_KEY, …).
+    """
+    if not (llm.api_key and llm.model and not llm.api_base and models_config):  # type: ignore[attr-defined]
+        return
+    providers = {
+        _model_provider(m.id)
+        for p in models_config.providers  # type: ignore[attr-defined]
+        for m in p.models
+    }
+    if len(providers) > 1:
+        logger.warning(
+            "LLM_API_KEY is set with no LLM_API_BASE, but the models config spans "
+            "multiple providers (%s). That single key would be sent to each provider "
+            "directly. Leave LLM_API_KEY/LLM_API_BASE empty and set per-provider env "
+            "vars (OPENAI_API_KEY, ANTHROPIC_API_KEY, …), or point LLM_API_BASE at a "
+            "gateway that holds each provider's credentials.",
+            ", ".join(sorted(providers)),
+        )
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     """
@@ -59,6 +93,7 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
         model_count,
         bool(llm.api_key),
     )
+    _warn_on_shared_key_across_providers(llm, models_config)
 
     init_langfuse()
     await init_persistence()

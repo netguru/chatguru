@@ -316,6 +316,9 @@ services:
     volumes:
       - vector-db-data:/data
       - rag-ingest-state:/app/rag_ingest_state
+      # Selectable-models config (read-only). Powers the model picker; when the
+      # file lists no models the picker is simply hidden.
+      - ./litellm_models.json:/app/litellm_models.json:ro
       - rag-data:/app/rag_data
 
     healthcheck:

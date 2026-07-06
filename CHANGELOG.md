@@ -39,6 +39,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   don't set both). The model picker (`GET /models`) now appears whenever a
   `LLM_LITELLM_MODELS_CONFIG` file is present, regardless of provider.
 
+  Credentials: `LLM_API_KEY` is now forwarded only when `LLM_MODEL` is set (an
+  explicit single-model / single-endpoint deployment); it then goes to whichever
+  backend the selected model routes to. In multi-provider picker mode (`LLM_MODEL`
+  empty), the shared key is not forwarded — leave `LLM_MODEL` / `LLM_API_KEY` /
+  `LLM_API_BASE` empty and set each provider's standard LiteLLM env var
+  (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, …); LiteLLM resolves the right key per
+  model automatically. See `litellm_models.example.json` and
+  https://docs.litellm.ai/docs/providers.
+
 - **Title generation adapter renamed** — `OpenAITitleGenerator`
   (`title_generation/adapters/openai.py`) is now `LLMTitleGenerator`
   (`.../adapters/llm.py`) and runs through LiteLLM. The old class name is kept as
