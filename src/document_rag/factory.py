@@ -20,5 +20,14 @@ async def build_document_rag_repository(
         await repo.connect()
         return repo
 
-    msg = "Unsupported DOCUMENT_RAG_BACKEND. Use: mongodb"
+    if backend == "cosmos":
+        from document_rag.adapters.cosmos import (  # noqa: PLC0415
+            CosmosDocumentRagRepository,
+        )
+
+        repo = CosmosDocumentRagRepository(resolved)
+        await repo.connect()
+        return repo
+
+    msg = "Unsupported DOCUMENT_RAG_BACKEND. Use: mongodb or cosmos"
     raise ValueError(msg)
