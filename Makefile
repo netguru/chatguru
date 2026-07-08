@@ -158,7 +158,7 @@ docker-run-backend: ## Run backend only (no frontend UI) in foreground
 	@echo "🐳 Starting backend only (no frontend)..."
 	@echo "🔧 Backend API at http://localhost:8000"
 	@echo "🧪 Minimal test UI at http://localhost:8000/"
-	docker-compose up --build
+	docker compose up --build
 
 docker-stop: ## Stop Docker Compose services (keeps containers)
 	@echo "🛑 Stopping Docker Compose services..."
