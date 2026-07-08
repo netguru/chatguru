@@ -9,7 +9,7 @@
 #   2. make env-setup      # Copy environment template
 #   3. make dev            # Start backend development server
 
-.PHONY: help install setup test coverage rag-eval ragas-llm-eval rag_dashboard vector-db dev run docker-build docker-run docker-run-detached docker-run-backend docker-stop docker-down docker-logs docker-logs-backend docker-clean pre-commit-install pre-commit promptfoo-eval promptfoo-view promptfoo-test env-setup version clean migrate db-downgrade db-revision ingest-docs
+.PHONY: help install setup test coverage rag-eval ragas-llm-eval rag-dashboard vector-db dev run docker-build docker-run docker-run-detached docker-run-backend docker-stop docker-down docker-logs docker-logs-backend docker-clean pre-commit-install pre-commit promptfoo-eval promptfoo-view promptfoo-test env-setup version clean migrate db-downgrade db-revision ingest-docs
 
 # ============================================================================
 # Default Target
