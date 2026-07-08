@@ -163,7 +163,7 @@ Run it locally:
 make frontend-dev   # Vite dev server → http://localhost:5173
 ```
 
-Or via Docker Compose — the `frontend` service starts automatically on port 5173.
+Or via Docker Compose — the `frontend` service is **opt-in** behind the `frontend` profile. Add `--profile frontend` (or run `make docker-run`) to serve it; `docker compose up` alone starts the backend only.
 
 Copy the env template before running:
 
@@ -245,11 +245,16 @@ make env-setup
 #### 2. Build and Run
 
 ```bash
-# Build and start all services
+# Build and start all services (incl. frontend UI)
 make docker-run
 
 # Or run in background
 make docker-run-detached
+
+# Backend only, no frontend UI
+make docker-run-backend
+# equivalently:
+docker compose up --build
 ```
 
 #### 3. Access the Application
