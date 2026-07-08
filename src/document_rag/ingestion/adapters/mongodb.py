@@ -16,6 +16,21 @@ from document_rag.models import DocumentChunk, DocumentSourceFile
 logger = logging.getLogger(__name__)
 
 
+def create_mongo_client(
+    settings: DocumentRagSettings,
+) -> MongoClient[dict[str, Any]]:
+    """Create a MongoDB client from document RAG settings.
+
+    Shared by the Mongo and Cosmos ingestion adapters (Cosmos vCore is
+    wire-compatible with the MongoDB driver).
+    """
+    return MongoClient(
+        settings.mongodb_uri,
+        serverSelectionTimeoutMS=settings.mongodb_connection_timeout_ms,
+        connectTimeoutMS=settings.mongodb_connection_timeout_ms,
+    )
+
+
 class MongoDocumentRagIngestionRepository:
     """MongoDB-backed ingestion adapter for document chunks."""
 
@@ -187,11 +202,7 @@ class MongoDocumentRagIngestionRepository:
                 return stream.read(), metadata
 
     def _mongo_client(self) -> MongoClient[dict[str, Any]]:
-        return MongoClient(
-            self._settings.mongodb_uri,
-            serverSelectionTimeoutMS=self._settings.mongodb_connection_timeout_ms,
-            connectTimeoutMS=self._settings.mongodb_connection_timeout_ms,
-        )
+        return create_mongo_client(self._settings)
 
     def _collection(self, client: MongoClient[dict[str, Any]]) -> Any:
         return client[self._settings.mongodb_database][

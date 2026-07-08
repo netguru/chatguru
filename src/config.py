@@ -7,7 +7,7 @@ from logging import Logger
 from logging.config import dictConfig
 from pathlib import Path
 
-from pydantic import AliasChoices, BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -474,7 +474,7 @@ class DocumentRagSettings(BaseSettings):
     )
     backend: str = Field(
         default="mongodb",
-        description="Document RAG backend. Currently supported: mongodb.",
+        description="Document RAG backend. Supported: mongodb (Atlas), cosmos (Cosmos DB for MongoDB vCore).",
     )
     mongodb_uri: str = Field(
         default="mongodb://localhost:27017",
@@ -512,6 +512,56 @@ class DocumentRagSettings(BaseSettings):
         default="document_sources",
         description="MongoDB GridFS bucket name for storing full source documents.",
     )
+    # Cosmos DB for MongoDB vCore vector index tuning (backend=cosmos only).
+    # Cosmos vCore uses createIndexes + cosmosSearchOptions rather than the
+    # Atlas search-index API; these control how that vector index is built.
+    cosmos_vector_index_kind: str = Field(
+        default="vector-ivf",
+        description="Cosmos vCore vector index kind: vector-ivf or vector-hnsw.",
+    )
+    cosmos_vector_num_lists: int = Field(
+        default=1,
+        ge=1,
+        description="IVF list count (cosmos_vector_index_kind=vector-ivf).",
+    )
+    cosmos_vector_m: int = Field(
+        default=16,
+        ge=2,
+        description="HNSW connections per layer (cosmos_vector_index_kind=vector-hnsw).",
+    )
+    cosmos_vector_ef_construction: int = Field(
+        default=64,
+        ge=4,
+        description="HNSW efConstruction (cosmos_vector_index_kind=vector-hnsw).",
+    )
+    cosmos_vector_similarity: str = Field(
+        default="COS",
+        description="Cosmos vCore vector similarity metric: COS, L2, or IP.",
+    )
+
+    @field_validator("cosmos_vector_index_kind")
+    @classmethod
+    def _validate_cosmos_vector_index_kind(cls, value: str) -> str:
+        allowed = {"vector-ivf", "vector-hnsw"}
+        if value not in allowed:
+            msg = (
+                f"cosmos_vector_index_kind must be one of {sorted(allowed)}, "
+                f"got '{value}'"
+            )
+            raise ValueError(msg)
+        return value
+
+    @field_validator("cosmos_vector_similarity")
+    @classmethod
+    def _validate_cosmos_vector_similarity(cls, value: str) -> str:
+        allowed = {"COS", "L2", "IP"}
+        if value not in allowed:
+            msg = (
+                f"cosmos_vector_similarity must be one of {sorted(allowed)}, "
+                f"got '{value}'"
+            )
+            raise ValueError(msg)
+        return value
 
 
 @lru_cache

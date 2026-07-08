@@ -18,5 +18,12 @@ def build_document_rag_ingestion_repository(
 
         return MongoDocumentRagIngestionRepository(resolved)
 
-    msg = "Unsupported DOCUMENT_RAG_BACKEND for ingestion. Use: mongodb"
+    if backend == "cosmos":
+        from document_rag.ingestion.adapters.cosmos import (  # noqa: PLC0415
+            CosmosDocumentRagIngestionRepository,
+        )
+
+        return CosmosDocumentRagIngestionRepository(resolved)
+
+    msg = "Unsupported DOCUMENT_RAG_BACKEND for ingestion. Use: mongodb or cosmos"
     raise ValueError(msg)
