@@ -13,6 +13,7 @@ context manager exits.
 """
 
 import asyncio
+import time
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Any, cast
@@ -32,6 +33,19 @@ logger = get_logger(__name__)
 # server is logged and skipped, exactly like any other connection failure.
 _SESSION_OPEN_TIMEOUT_SECONDS = 10.0
 
+# After a server fails to open, skip it for this long instead of re-paying the
+# connect timeout on every turn.
+_FAILURE_COOLDOWN_SECONDS = 60.0
+
+# Monotonic timestamp of each server's most recent connection failure.
+_recent_failures: dict[str, float] = {}
+
+
+def _in_cooldown(name: str, now: float) -> bool:
+    """Return True while ``name`` is inside its post-failure cooldown window."""
+    failed_at = _recent_failures.get(name)
+    return failed_at is not None and (now - failed_at) < _FAILURE_COOLDOWN_SECONDS
+
 
 @asynccontextmanager
 async def open_mcp_tools(
@@ -48,19 +62,20 @@ async def open_mcp_tools(
         return
 
     tools: list[BaseTool] = []
+    now = time.monotonic()
     async with AsyncExitStack() as stack:
         for name, connection in connections.items():
+            if _in_cooldown(name, now):
+                logger.debug("Skipping MCP server %r (in failure cooldown)", name)
+                continue
             try:
                 client = MultiServerMCPClient({name: cast("Connection", connection)})
                 async with asyncio.timeout(_SESSION_OPEN_TIMEOUT_SECONDS):
                     session = await stack.enter_async_context(client.session(name))
                     server_tools = await load_mcp_tools(session)
             except Exception as exc:  # noqa: BLE001 - isolate any per-server failure
-                # Runs every turn, so a persistently down/slow server must not
-                # spam full stack traces. A concise warning with the error type
-                # is enough; ``asyncio.CancelledError`` is a ``BaseException`` and
-                # is intentionally not caught here so cancellation still
-                # propagates.
+                # CancelledError is a BaseException, so cancellation still propagates.
+                _recent_failures[name] = now
                 logger.warning(
                     "Failed to open MCP session for server %r (%s: %s); skipping.",
                     name,
@@ -68,6 +83,7 @@ async def open_mcp_tools(
                     exc,
                 )
                 continue
+            _recent_failures.pop(name, None)
             logger.info(
                 "Opened MCP session %r with %d tool(s)", name, len(server_tools)
             )

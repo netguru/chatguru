@@ -12,6 +12,7 @@ from langchain_core.tools import BaseTool, tool
 
 from config import McpSettings
 from mcp_integration import bootstrap as mcp_bootstrap
+from mcp_integration import session as mcp_session
 from mcp_integration import load_mcp_connections, open_mcp_tools
 
 
@@ -134,6 +135,11 @@ def test_load_without_mcp_servers_key_returns_empty(tmp_path: Path) -> None:
 # --- session (open_mcp_tools) ----------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _clear_failure_cooldown() -> None:
+    mcp_session._recent_failures.clear()
+
+
 @tool
 def _fake_tool(query: str) -> str:
     """A fake MCP tool."""
@@ -227,6 +233,27 @@ async def test_open_mcp_tools_skips_slow_server(
         # The slow server times out and is skipped rather than blocking the turn.
         async with open_mcp_tools(conns) as tools:
             assert tools == []
+
+
+@pytest.mark.asyncio
+async def test_open_mcp_tools_skips_server_in_failure_cooldown() -> None:
+    conns = {"bad": {"transport": "streamable_http", "url": "https://bad/mcp/"}}
+    factory = MagicMock(side_effect=_client_factory_by_name({"bad"}))
+
+    async def _fake_load(session: object) -> list[BaseTool]:
+        return [_fake_tool]
+
+    with (
+        patch("mcp_integration.session.MultiServerMCPClient", factory),
+        patch("mcp_integration.session.load_mcp_tools", _fake_load),
+    ):
+        async with open_mcp_tools(conns) as tools:
+            assert tools == []
+        calls_after_first = factory.call_count
+        # Within the cooldown window the down server is not retried.
+        async with open_mcp_tools(conns) as tools:
+            assert tools == []
+        assert factory.call_count == calls_after_first
 
 
 # --- bootstrap -------------------------------------------------------------

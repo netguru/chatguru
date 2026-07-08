@@ -56,7 +56,7 @@ Everything degrades gracefully — the app always starts:
 | Invalid JSON / no `mcpServers` key          | Warning logged, no MCP tools loaded.    |
 | `${VAR}` placeholder unset                  | That server skipped.                    |
 | stdio/`command` or unsupported transport    | That server skipped.                    |
-| A server is unreachable or slow to connect  | Skipped after a 10s timeout; others still load. |
+| A server is unreachable or slow to connect  | Skipped after a 10s timeout, then skipped for a 60s cooldown so it isn't re-probed every turn; others still load. |
 | MCP tool name collides with a built-in tool | The MCP tool is dropped (built-in wins).|
 
 Each server is opened through its own session, so one slow or broken server
