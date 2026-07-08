@@ -145,7 +145,7 @@ docker-run: ## Run with Docker Compose incl. frontend UI (builds and starts in f
 	@echo "🔧 Backend API at http://localhost:8000"
 	@echo "📡 WebSocket endpoint at ws://localhost:8000/ws"
 	@echo "🧪 Minimal test UI at http://localhost:8000/"
-	docker-compose --profile frontend up --build
+	docker compose --profile frontend up --build
 
 docker-run-detached: ## Run with Docker Compose incl. frontend UI in background (detached mode)
 	@echo "🐳 Starting with Docker Compose (with frontend, detached)..."
