@@ -17,7 +17,7 @@
 <br/>
 
 <p align="center">
-  chatguru Agent is a production-ready whitelabel chatbot with RAG capabilities and agentic commerce integration, built with FastAPI, LangChain, and Azure OpenAI.
+  chatguru Agent is a production-ready whitelabel chatbot with RAG capabilities and agentic commerce integration, built with FastAPI and LangChain. It is provider-agnostic via LiteLLM — use OpenAI, Azure, Anthropic, Google, local models, or any LiteLLM-supported backend.
 </p>
 
 <div align="center">
@@ -124,7 +124,7 @@ graph LR
     subgraph "Current Implementation"
         UI[React/Vite Frontend<br/>frontend/] -->|WebSocket| API[FastAPI API]
         API -->|Streaming| AGENT[Agent Service]
-        AGENT -->|AzureChatOpenAI| LLM[Azure OpenAI]
+        AGENT -->|ChatLiteLLM| LLM[LLM<br/>any provider]
         AGENT -->|RAG Tool| PRODUCTDB[Product DB<br/>sqlite-vec]
         AGENT --> LANGFUSE[Langfuse<br/>Tracing]
     end
@@ -140,8 +140,8 @@ For detailed architecture documentation, see [docs/architecture.md](docs/archite
 ## 🛠️ Technology Stack
 
 - **Backend**: FastAPI + Uvicorn (async)
-- **AI/ML**: LangChain + Azure OpenAI (direct integration)
-- **LLM Provider**: Azure OpenAI (via langchain-openai)
+- **AI/ML**: LangChain + LiteLLM
+- **LLM Provider**: Provider-agnostic via LiteLLM (OpenAI, Azure, Anthropic, Google, Ollama, …)
 - **Vector Search**: sqlite-vec (semantic product search)
 - **Rate Limiting**: Redis 7 + hiredis (atomic Lua per-IP quotas)
 - **Observability**: Langfuse
@@ -163,7 +163,7 @@ Run it locally:
 make frontend-dev   # Vite dev server → http://localhost:5173
 ```
 
-Or via Docker Compose — the `frontend` service starts automatically on port 5173.
+Or via Docker Compose — the `frontend` service is **opt-in** behind the `frontend` profile. Add `--profile frontend` (or run `make docker-run`) to serve it; `docker compose up` alone starts the backend only.
 
 Copy the env template before running:
 
@@ -179,7 +179,7 @@ Before you begin, ensure you have the following installed:
 - **Node.js 20+** and npm — required by React 19 ([Download](https://nodejs.org/))
 - **uv** - Fast Python package installer ([Installation guide](https://github.com/astral-sh/uv))
 - **Docker** and Docker Compose (optional, for containerized deployment)
-- **Azure OpenAI account** with API access
+- **An LLM provider account** with API access (OpenAI, Azure, Anthropic, Google, a local model, …)
 - **Langfuse account** (for observability and tracing)
 
 ## 🚀 Quick Start
@@ -245,11 +245,16 @@ make env-setup
 #### 2. Build and Run
 
 ```bash
-# Build and start all services
+# Build and start all services (incl. frontend UI)
 make docker-run
 
 # Or run in background
 make docker-run-detached
+
+# Backend only, no frontend UI
+make docker-run-backend
+# equivalently:
+docker compose up --build
 ```
 
 #### 3. Access the Application
@@ -268,9 +273,8 @@ The application uses environment variables for configuration. Copy `env.example`
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `OPENAI_ENDPOINT` | OpenAI-compatible base URL for chat + embeddings | `https://your-resource.openai.azure.com/openai/v1` |
-| `LLM_API_KEY` | Azure OpenAI API key | `your-api-key-here` |
-| `LLM_DEPLOYMENT_NAME` | Azure OpenAI deployment name | `gpt-4o-mini` |
+| `LLM_MODEL` | Model id in LiteLLM `<provider>/<model>` form | `openai/gpt-4o-mini` |
+| `LLM_API_KEY` | API key for the provider/gateway | `your-api-key-here` |
 | `LANGFUSE_PUBLIC_KEY` | Langfuse public key | `pk-lf-...` |
 | `LANGFUSE_SECRET_KEY` | Langfuse secret key | `sk-lf-...` |
 | `LANGFUSE_HOST` | Langfuse host URL | `https://cloud.langfuse.com` |
@@ -288,9 +292,9 @@ The application uses environment variables for configuration. Copy `env.example`
 | `VECTOR_DB_TYPE` | Database type | `sqlite` |
 | `VECTOR_DB_SQLITE_URL` | SQLite service URL | `http://product-db:8001` |
 | `PERSISTENCE_DATABASE_URL` | Async SQLAlchemy URL for chat history storage | *(unset — disabled)* |
-| `LLM_API_VERSION` | API version for native Azure OpenAI setups | *(empty)* |
-| `LLM_OPENAI_BASE_URL` | OpenAI v1-compatible chat base URL; when set, chat uses `ChatOpenAI` instead of native Azure routing | *(empty)* |
-| `TITLE_GENERATION_PROVIDER` | Title provider: `openai`, `fallback`, `custom` | `openai` |
+| `LLM_API_BASE` | Base URL for chat + embeddings (OpenAI-compatible endpoint or gateway, e.g. Azure APIM); empty = provider default | *(empty)* |
+| `LLM_API_VERSION` | API version, required by some gateways such as Azure | *(empty)* |
+| `TITLE_GENERATION_PROVIDER` | Title provider: `llm`, `fallback`, `custom` | `llm` |
 | `TITLE_GENERATION_CUSTOM_CLASS` | Custom class path (`module.path:ClassName`) when provider is `custom` | *(empty)* |
 | `RATE_LIMIT_ENABLED` | Enable Redis-backed per-IP rate limiting | `false` |
 | `RATE_LIMIT_REDIS_URL` | Redis connection URL | `redis://localhost:6379/0` |
@@ -329,7 +333,7 @@ PERSISTENCE_DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/chatguru
 
 See [docs/persistence.md](docs/persistence.md) for the full architecture and instructions on adding new database adapters.
 
-**LLM URL modes:** `LLM_OPENAI_BASE_URL` (universal OpenAI-compatible API) vs. `OPENAI_ENDPOINT` with empty `LLM_OPENAI_BASE_URL` (native Azure OpenAI client) is documented in [docs/design-decisions.md](docs/design-decisions.md#llm-endpoint-modes).
+**Provider selection:** the backend is chosen by the `LLM_MODEL` id (`openai/gpt-4o`, `azure/<deployment>`, `anthropic/…`, `ollama/…`); `LLM_API_BASE` optionally points at a gateway. See [docs/design-decisions.md](docs/design-decisions.md#llm-endpoint-modes).
 
 See [env.example](env.example) for a complete template with detailed comments.
 
@@ -568,13 +572,12 @@ make install
 - Check WebSocket endpoint: `ws://localhost:8000/ws`
 - Ensure CORS is configured correctly in `.env`
 
-#### 3. Azure OpenAI authentication errors
+#### 3. LLM authentication errors
 
 **Solution**:
-- Verify `OPENAI_ENDPOINT` is a full OpenAI-compatible base URL ending in `/v1`
-- Check `LLM_API_KEY` is correct
-- Ensure `LLM_DEPLOYMENT_NAME` matches your Azure deployment
-- If using native Azure OpenAI routing, verify `LLM_API_VERSION` is supported
+- Verify `LLM_MODEL` is a valid LiteLLM id (`<provider>/<model>`, e.g. `openai/gpt-4o-mini`)
+- Check `LLM_API_KEY` is correct for that provider
+- If using a gateway, verify `LLM_API_BASE` is a full base URL and `LLM_API_VERSION` is set when required (e.g. Azure)
 
 #### 4. Langfuse connection errors
 

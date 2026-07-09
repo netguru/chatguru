@@ -35,9 +35,9 @@ def test_env_vars(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str
     db_file = persist_dir / "chat_history.db"
     database_url = str(URL.create("sqlite+aiosqlite", database=str(db_file.resolve())))
     test_vars = {
-        "OPENAI_ENDPOINT": "https://test.openai.azure.com/v1",
+        "LLM_API_BASE": "https://test.example.com/v1",
         "LLM_API_KEY": "test-api-key",
-        "LLM_DEPLOYMENT_NAME": "gpt-4",
+        "LLM_MODEL": "gpt-4",
         "DEBUG": "true",
         "PERSISTENCE_DATABASE_URL": database_url,
         "DOCUMENT_RAG_ENABLED": "false",

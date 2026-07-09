@@ -38,6 +38,7 @@ COPY --from=builder /app/.venv ./.venv
 # Copy only the files this service needs
 COPY src/vector_db/api.py ./src/vector_db/api.py
 COPY src/vector_db/mongodb_store.py ./src/vector_db/mongodb_store.py
+COPY src/embeddings.py ./src/embeddings.py
 COPY src/config.py ./src/config.py
 COPY src/rag/products.json ./data/products.json
 

@@ -14,6 +14,59 @@ from document_rag.models import DocumentRetrievalHit, DocumentSourceReference
 
 logger = get_logger("document_rag.mongodb")
 
+# Recall headroom: fetch this many candidates per requested hit so vector search
+# has room to rank (Atlas: numCandidates).
+OVERFETCH_MULTIPLIER = 20
+
+
+def projection_stage(similarity: Any) -> dict[str, Any]:
+    """The ``$project`` stage shared by the Atlas and Cosmos pipelines.
+
+    ``similarity`` is the per-backend score expression — e.g.
+    ``{"$meta": "vectorSearchScore"}`` for Atlas, or ``1`` for Cosmos where the
+    score was already materialised into the document by an earlier stage.
+    """
+    return {
+        "$project": {
+            "_id": 0,
+            "snippet": {"$ifNull": ["$snippet", "$content"]},
+            "source_id": {"$ifNull": ["$source_id", "$id"]},
+            "source_type": 1,
+            "source_uri": 1,
+            "title": 1,
+            "chunk_id": 1,
+            "page": 1,
+            "similarity": similarity,
+        }
+    }
+
+
+def row_to_hit(row: dict[str, Any]) -> DocumentRetrievalHit | None:
+    """Map one projected aggregation row to a hit, or ``None`` to skip it."""
+    source_id = str(row.get("source_id", ""))
+    snippet = str(row.get("snippet", "")).strip()
+    if not source_id or not snippet:
+        return None
+
+    return DocumentRetrievalHit(
+        snippet=snippet,
+        score=(float(row["similarity"]) if row.get("similarity") is not None else None),
+        source=DocumentSourceReference(
+            source_id=source_id,
+            source_type=(
+                str(row["source_type"]) if row.get("source_type") is not None else None
+            ),
+            source_uri=(
+                str(row["source_uri"]) if row.get("source_uri") is not None else None
+            ),
+            title=(str(row["title"]) if row.get("title") is not None else None),
+            chunk_id=(
+                str(row["chunk_id"]) if row.get("chunk_id") is not None else None
+            ),
+            page=(int(row["page"]) if row.get("page") is not None else None),
+        ),
+    )
+
 
 class MongoDocumentRagRepository:
     """MongoDB vector-search backed implementation of document retrieval port."""
@@ -62,67 +115,15 @@ class MongoDocumentRagRepository:
                     "index": self._settings.mongodb_index_name,
                     "path": "embedding",
                     "queryVector": query_vector,
-                    "numCandidates": limit * 20,
+                    "numCandidates": limit * OVERFETCH_MULTIPLIER,
                     "limit": limit,
                 }
             },
-            {
-                "$project": {
-                    "_id": 0,
-                    "snippet": {"$ifNull": ["$snippet", "$content"]},
-                    "source_id": {"$ifNull": ["$source_id", "$id"]},
-                    "source_type": 1,
-                    "source_uri": 1,
-                    "title": 1,
-                    "chunk_id": 1,
-                    "page": 1,
-                    "similarity": {"$meta": "vectorSearchScore"},
-                }
-            },
+            projection_stage({"$meta": "vectorSearchScore"}),
         ]
         rows = await asyncio.to_thread(lambda: list(collection.aggregate(pipeline)))
 
-        hits: list[DocumentRetrievalHit] = []
-        for row in rows:
-            source_id = str(row.get("source_id", ""))
-            snippet = str(row.get("snippet", "")).strip()
-            if not source_id or not snippet:
-                continue
-
-            hits.append(
-                DocumentRetrievalHit(
-                    snippet=snippet,
-                    score=(
-                        float(row["similarity"])
-                        if row.get("similarity") is not None
-                        else None
-                    ),
-                    source=DocumentSourceReference(
-                        source_id=source_id,
-                        source_type=(
-                            str(row["source_type"])
-                            if row.get("source_type") is not None
-                            else None
-                        ),
-                        source_uri=(
-                            str(row["source_uri"])
-                            if row.get("source_uri") is not None
-                            else None
-                        ),
-                        title=(
-                            str(row["title"]) if row.get("title") is not None else None
-                        ),
-                        chunk_id=(
-                            str(row["chunk_id"])
-                            if row.get("chunk_id") is not None
-                            else None
-                        ),
-                        page=(
-                            int(row["page"]) if row.get("page") is not None else None
-                        ),
-                    ),
-                )
-            )
+        hits = [hit for row in rows if (hit := row_to_hit(row)) is not None]
         logger.info("Document RAG search returned %d hits", len(hits))
         return hits
 

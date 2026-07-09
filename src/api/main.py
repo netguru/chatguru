@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 
+from agent.service import resolve_default_model
 from api.routes.chat import await_background_tasks
 from api.routes.chat import router as chat_router
 from api.routes.documents import router as documents_router
@@ -17,6 +18,7 @@ from config import (
     get_app_settings,
     get_docling_settings,
     get_fastapi_settings,
+    get_litellm_models_config,
     get_llm_settings,
     get_logger,
 )
@@ -33,6 +35,40 @@ app_settings = get_app_settings()
 fastapi_settings = get_fastapi_settings()
 
 
+def _model_provider(model_id: str) -> str:
+    """Return the LiteLLM provider a model id routes to (bare ids → openai)."""
+    return model_id.split("/", 1)[0] if "/" in model_id else "openai"
+
+
+def _warn_on_shared_key_across_providers(llm: object, models_config: object) -> None:
+    """Warn when one LLM_API_KEY would be sent to several direct providers.
+
+    The shared key is only forwarded for an explicit single-model deployment
+    (LLM_MODEL set). With no gateway (LLM_API_BASE empty), LiteLLM then routes
+    each picked model straight to its provider, so that one key reaches every
+    provider in the picker — leaking it to providers it doesn't belong to. The
+    safe multi-provider setup is to leave LLM_MODEL and LLM_API_KEY empty and
+    give each provider its own standard env var (OPENAI_API_KEY,
+    ANTHROPIC_API_KEY, …).
+    """
+    if not (llm.api_key and llm.model and not llm.api_base and models_config):  # type: ignore[attr-defined]
+        return
+    providers = {
+        _model_provider(m.id)
+        for p in models_config.providers  # type: ignore[attr-defined]
+        for m in p.models
+    }
+    if len(providers) > 1:
+        logger.warning(
+            "LLM_API_KEY is set with no LLM_API_BASE, but the models config spans "
+            "multiple providers (%s). That single key would be sent to each provider "
+            "directly. Leave LLM_API_KEY/LLM_API_BASE empty and set per-provider env "
+            "vars (OPENAI_API_KEY, ANTHROPIC_API_KEY, …), or point LLM_API_BASE at a "
+            "gateway that holds each provider's credentials.",
+            ", ".join(sorted(providers)),
+        )
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     """
@@ -44,13 +80,21 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Debug mode: %s", app_settings.debug)
 
     llm = get_llm_settings()
+    # Fail fast on a missing or malformed models config file.
+    models_config = get_litellm_models_config()
+    model_count = (
+        sum(len(p.models) for p in models_config.providers) if models_config else 0
+    )
     logger.info(
-        "LLM config — endpoint: %s | deployment: %s | api_version: %s | api_key_configured: %s",
-        llm.endpoint,
-        llm.deployment_name,
-        llm.api_version,
+        "LLM config — model: %s | api_base: %s | api_version: %s | "
+        "models_configured: %d | api_key_configured: %s",
+        resolve_default_model() or "(none configured)",
+        llm.api_base or "(provider default endpoint)",
+        llm.api_version or "(n/a)",
+        model_count,
         bool(llm.api_key),
     )
+    _warn_on_shared_key_across_providers(llm, models_config)
 
     init_langfuse()
     await init_persistence()

@@ -16,16 +16,37 @@ _converter = None
 _converter_lock = threading.Lock()
 
 
+def _bare_model_name(model: str) -> str:
+    """Strip a LiteLLM ``provider/`` prefix from a model id.
+
+    Docling POSTs directly to the vision endpoint (not through LiteLLM), so it
+    needs the raw model/deployment name the endpoint expects — e.g.
+    ``azure/mydeploy`` → ``mydeploy``, ``openai/gpt-4o`` → ``gpt-4o``. A bare id
+    without a prefix is returned unchanged.
+    """
+    return model.split("/", 1)[1] if "/" in model else model
+
+
+OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions"
+
+
 def _build_vision_url() -> str:
     """Derive the chat-completions URL for picture description.
 
-    Priority:
-    1. Explicit DOCLING_PICTURE_DESCRIPTION_URL override.
-    2. LLM_OPENAI_BASE_URL  → <base>/chat/completions  (already /v1-style)
-    3. OPENAI_ENDPOINT + LLM_API_VERSION set → Azure direct:
-           <endpoint>/openai/deployments/<deployment>/chat/completions?api-version=…
-    4. OPENAI_ENDPOINT only → OpenAI-compatible proxy (endpoint is already the /v1 base):
-           <endpoint>/chat/completions
+    Docling POSTs an OpenAI-style chat/completions request directly (not via
+    LiteLLM), so the target must be an OpenAI-compatible endpoint. Priority:
+
+    1. Explicit DOCLING_PICTURE_DESCRIPTION_URL override (use this for any
+       non-OpenAI-compatible provider, via an OpenAI-compatible proxy).
+    2. LLM_API_BASE + LLM_API_VERSION set → Azure-style deployment path:
+           <base>/openai/deployments/<deployment>/chat/completions?api-version=…
+    3. LLM_API_BASE only → OpenAI-compatible base URL:
+           <base>/chat/completions
+    4. No LLM_API_BASE but the model is OpenAI (``openai/…`` or a bare id, which
+       LiteLLM routes to OpenAI) → OpenAI's public endpoint.
+
+    Any other provider used via its default endpoint (e.g. ``anthropic/…``) has
+    no OpenAI-compatible URL to infer, so an explicit override is required.
     """
     docling = get_docling_settings()
     if docling.picture_description_url:
@@ -33,23 +54,32 @@ def _build_vision_url() -> str:
 
     llm = get_llm_settings()
 
-    if llm.openai_base_url:
-        return f"{llm.openai_base_url.rstrip('/')}/chat/completions"
-
-    if llm.endpoint:
-        base = llm.endpoint.rstrip("/")
-        # Azure OpenAI direct always has an api-version; deployment goes in the path.
-        if llm.api_version and llm.deployment_name:
+    if llm.api_base:
+        base = llm.api_base.rstrip("/")
+        # An api-version implies an Azure-style endpoint: the deployment name
+        # goes in the path (without the LiteLLM provider prefix) and the version
+        # in the query string.
+        if llm.api_version and llm.model:
+            deployment = _bare_model_name(llm.model)
             return (
-                f"{base}/openai/deployments/{llm.deployment_name}"
+                f"{base}/openai/deployments/{deployment}"
                 f"/chat/completions?api-version={llm.api_version}"
             )
-        # OpenAI-compatible proxy — endpoint is already a /v1-style base URL.
+        # Otherwise the base URL is already an OpenAI-compatible /v1 endpoint.
         return f"{base}/chat/completions"
 
+    # No base URL configured: fall back to OpenAI's public endpoint when the
+    # model routes to OpenAI (an ``openai/`` prefix, or a bare id — LiteLLM
+    # treats both as OpenAI). Other providers use native, non-OpenAI wire
+    # formats, so we can't infer a usable URL.
+    model = llm.model.strip()
+    if model and (model.startswith("openai/") or "/" not in model):
+        return OPENAI_CHAT_COMPLETIONS_URL
+
     msg = (
-        "Cannot derive picture description URL from LLM settings. "
-        "Set DOCLING_PICTURE_DESCRIPTION_URL explicitly."
+        "Cannot derive an OpenAI-compatible picture-description URL from LLM "
+        "settings. Set DOCLING_PICTURE_DESCRIPTION_URL explicitly (Docling "
+        "requires an OpenAI-compatible chat/completions endpoint)."
     )
     raise ValueError(msg)
 
@@ -79,6 +109,9 @@ def _get_converter() -> Any:
             vision_url = _build_vision_url()
             llm = get_llm_settings()
             api_key = docling.picture_description_api_key or llm.api_key
+            # Docling POSTs directly to the endpoint, so the body needs the bare
+            # model name — not the LiteLLM `provider/` prefixed id.
+            model_name = _bare_model_name(llm.model)
             pdf_opts.do_picture_description = True
             pdf_opts.enable_remote_services = True
             # params is spread directly into the JSON request body by Docling,
@@ -92,13 +125,13 @@ def _get_converter() -> Any:
                     "api-key": api_key,
                     "Authorization": f"Bearer {api_key}",
                 },
-                params={"model": llm.deployment_name},
+                params={"model": model_name},
                 prompt="Describe this image concisely, focusing on any data, charts, diagrams, or key visual elements.",
             )
             logger.info(
                 "Docling picture description enabled (url=%s, model=%s)",
                 vision_url,
-                llm.deployment_name,
+                model_name,
             )
 
         _converter = DocumentConverter(

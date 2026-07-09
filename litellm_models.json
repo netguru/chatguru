@@ -1,0 +1,14 @@
+{
+  "providers": [
+    {
+      "name": "OpenAI (via gateway)",
+      "models": [
+        { "label": "GPT-4o", "id": "openai/gpt-4o" },
+        { "label": "GPT-4o mini", "id": "openai/gpt-4o-mini" },
+        { "label": "GPT-4.1", "id": "openai/gpt-4.1" },
+        { "label": "GPT-4.1 mini", "id": "openai/gpt-4.1-mini" },
+        { "label": "GPT-3.5 Turbo", "id": "openai/gpt-35-turbo" }
+      ]
+    }
+  ]
+}

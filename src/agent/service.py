@@ -5,6 +5,7 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
@@ -15,11 +16,15 @@ from langchain_core.messages import (
 )
 from langchain_core.runnables import Runnable, RunnableConfig
 from langchain_core.tools import BaseTool, tool
-from langchain_openai import AzureChatOpenAI, ChatOpenAI
+from langchain_litellm import ChatLiteLLM
 from langfuse.langchain import CallbackHandler
 
 from agent.prompt import SYSTEM_PROMPT
-from config import get_llm_settings, get_logger
+from config import (
+    get_llm_settings,
+    get_logger,
+    resolve_default_model,
+)
 from document_rag.repository import DocumentRagRepository
 from mcp_integration import open_mcp_tools
 from tracing import (
@@ -33,33 +38,39 @@ from tracing import (
 from vector_db import VectorDatabase
 
 
-def _build_chat_llm() -> ChatOpenAI | AzureChatOpenAI:
-    """Build a ChatOpenAI client pointed at OPENAI_ENDPOINT."""
-    settings = get_llm_settings()
-    extra_kwargs: dict[str, Any] = {}
-    if settings.reasoning_effort:
-        extra_kwargs["reasoning_effort"] = settings.reasoning_effort
+def _build_llm_kwargs(settings: Any) -> dict[str, Any]:
+    """Assemble the shared LiteLLM connection kwargs from LLM settings.
 
-    compat_base = settings.openai_base_url.strip()
-    if compat_base:
-        return ChatOpenAI(
-            model=settings.deployment_name,
-            api_key=settings.api_key,
-            base_url=compat_base.rstrip("/"),
-            default_headers={"api-key": settings.api_key},
-            streaming=True,
-            temperature=settings.temperature,
-            **extra_kwargs,
-        )
-    return AzureChatOpenAI(
-        azure_deployment=settings.deployment_name,
-        api_key=settings.api_key,
-        azure_endpoint=settings.endpoint.rstrip("/"),
-        api_version=settings.api_version,
-        default_headers={"api-key": settings.api_key},
+    The shared ``LLM_API_KEY`` is forwarded only for an explicit single-model
+    deployment (``LLM_MODEL`` set). With no ``LLM_MODEL`` the app runs in
+    multi-provider picker mode, where forwarding one key to whichever provider a
+    picked model routes to would leak it; instead LiteLLM resolves each
+    provider's own credential from its standard env var (OPENAI_API_KEY,
+    ANTHROPIC_API_KEY, …).
+    """
+    kwargs: dict[str, Any] = {}
+    api_base = settings.api_base.strip()
+    if api_base:
+        kwargs["api_base"] = api_base.rstrip("/")
+    if settings.api_key and settings.model:
+        kwargs["api_key"] = settings.api_key
+        # Gateways such as Azure APIM authenticate via the `api-key` header.
+        kwargs["extra_headers"] = {"api-key": settings.api_key}
+    if settings.api_version:
+        kwargs["api_version"] = settings.api_version
+    if settings.reasoning_effort:
+        kwargs["reasoning_effort"] = settings.reasoning_effort
+    return kwargs
+
+
+def _build_chat_llm(model: str | None = None) -> BaseChatModel:
+    """Build a LiteLLM chat client for the configured model."""
+    settings = get_llm_settings()
+    return ChatLiteLLM(
+        model=model or settings.model,
         streaming=True,
         temperature=settings.temperature,
-        **extra_kwargs,
+        **_build_llm_kwargs(settings),
     )
 
 
@@ -156,8 +167,9 @@ class Agent:
     """
     Agent service for handling LLM interactions with streaming support.
 
-    Uses Azure OpenAI with LangChain for chat completions and tool calling.
-    Supports agentic tool-calling loop with user notifications.
+    Uses LiteLLM (via LangChain) for chat completions and tool calling, so any
+    LiteLLM-supported provider works. Supports an agentic tool-calling loop with
+    user notifications.
     """
 
     def __init__(
@@ -167,7 +179,7 @@ class Agent:
         mcp_connections: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         """
-        Initialize the agent with Azure OpenAI configuration.
+        Initialize the agent with the configured LLM.
 
         Args:
             vector_database: VectorDatabase for RAG search (calls sqlite-vec service)
@@ -179,7 +191,8 @@ class Agent:
         # Initialize Langfuse tracing (idempotent; also called at app startup)
         init_langfuse()
 
-        self._base_llm = _build_chat_llm()
+        self._default_model = resolve_default_model()
+        self._base_llm = _build_chat_llm(model=self._default_model)
         self._mcp_connections = mcp_connections or {}
 
         # Built-in tools depend only on the injected backends and are stable for
@@ -450,6 +463,7 @@ class Agent:
         *,
         session_id: str | None = None,
         visitor_id: str | None = None,
+        model: str | None = None,
     ) -> AsyncIterator[str]:
         """
         Stream agent responses asynchronously with conversation context.
@@ -465,6 +479,8 @@ class Agent:
                 (typically ends with the current user message).
             session_id: Optional session ID for Langfuse tracing
             visitor_id: Optional visitor ID for Langfuse tracing
+            model: Optional LiteLLM model ID to use for this request. When set,
+                overrides the agent's default model for this turn.
 
         Yields:
             Response chunks as strings (including tool call notifications)
@@ -476,6 +492,14 @@ class Agent:
         self._last_turn_sources = turn_sources
         _current_sources.set(turn_sources)
 
+        # Resolve the base LLM for this turn: honor a per-request model override,
+        # otherwise reuse the agent's pre-built default base LLM.
+        base_llm = (
+            _build_chat_llm(model=model)
+            if model and model != self._default_model
+            else self._base_llm
+        )
+
         # Open MCP sessions for the whole turn so stateful servers keep state
         # across tool calls; sessions close when this block exits.
         async with (
@@ -485,7 +509,7 @@ class Agent:
             ) as config,
         ):
             accepted = Agent._filter_mcp_tools(mcp_tools, self.tools)
-            turn_llm, turn_registry = self._bind_turn_tools(accepted)
+            turn_llm, turn_registry = self._bind_turn_tools(base_llm, accepted)
             # Tell the model about the MCP tools it actually has this turn. The
             # base system prompt (managed in Langfuse) only knows the built-in
             # tools, so without this the model may claim it lacks a capability
@@ -497,19 +521,23 @@ class Agent:
                 yield chunk
 
     def _bind_turn_tools(
-        self, accepted_mcp_tools: list[BaseTool]
+        self, base_llm: BaseChatModel, accepted_mcp_tools: list[BaseTool]
     ) -> tuple[Runnable[Any, BaseMessage], dict[str, BaseTool]]:
         """Combine built-in and (already filtered) MCP tools for a turn.
 
-        Returns the bound LLM + tool registry. Falls back to the pre-bound
-        built-in LLM when no MCP tools are present so turns without MCP incur no
-        extra binding work.
+        ``base_llm`` is the LLM to bind against — either the agent's default
+        base LLM or a per-request model override. Returns the bound LLM + tool
+        registry. When there are no MCP tools and the turn uses the default
+        model, reuses the pre-bound built-in LLM so those turns incur no extra
+        binding work.
         """
         if not accepted_mcp_tools:
-            return self.llm, self.tool_registry
+            if base_llm is self._base_llm:
+                return self.llm, self.tool_registry
+            return base_llm.bind_tools(self.tools), self.tool_registry
         turn_tools = [*self.tools, *accepted_mcp_tools]
         return (
-            self._base_llm.bind_tools(turn_tools),
+            base_llm.bind_tools(turn_tools),
             {tool.name: tool for tool in turn_tools},
         )
 
