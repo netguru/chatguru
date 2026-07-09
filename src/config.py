@@ -1,13 +1,28 @@
 """Configuration management for chatguru Agent."""
 
+import json
 import logging
 from functools import lru_cache
 from logging import Logger
 from logging.config import dictConfig
 from pathlib import Path
 
-from pydantic import AliasChoices, Field, field_validator
+from pydantic import AliasChoices, BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class LiteLLMModel(BaseModel):
+    label: str
+    id: str
+
+
+class LiteLLMProvider(BaseModel):
+    name: str
+    models: list[LiteLLMModel]
+
+
+class LiteLLMModelsConfig(BaseModel):
+    providers: list[LiteLLMProvider]
 
 
 def get_env_file_path() -> str:
@@ -142,7 +157,17 @@ class FastAPISettings(BaseSettings):
 
 
 class LLMSettings(BaseSettings):
-    """LLM settings loaded from environment variables."""
+    """LLM settings loaded from environment variables.
+
+    The app is provider-agnostic: chat runs through LiteLLM, which routes
+    ``provider/model`` ids (``openai/gpt-4o``, ``azure/<deployment>``,
+    ``anthropic/claude-...``, ``ollama/llama3``, …) to the right backend, and
+    embeddings run against any OpenAI-compatible endpoint. When ``api_base`` /
+    ``api_key`` are set they are forwarded to every provider (covering gateways
+    such as Azure APIM); when empty, LiteLLM falls back to each provider's own
+    default endpoint and standard credential env vars. Legacy ``OPENAI_*`` /
+    ``LLM_DEPLOYMENT_NAME`` names remain accepted as aliases.
+    """
 
     model_config = SettingsConfigDict(
         env_file=get_env_file_path(),
@@ -151,33 +176,31 @@ class LLMSettings(BaseSettings):
         case_sensitive=False,
         extra="ignore",
     )
-    endpoint: str = Field(
+    api_base: str = Field(
         default="",
-        validation_alias=AliasChoices("OPENAI_ENDPOINT"),
+        validation_alias=AliasChoices(
+            "LLM_API_BASE", "LLM_OPENAI_BASE_URL", "OPENAI_ENDPOINT"
+        ),
         description=(
-            "OpenAI-compatible base URL for chat and embeddings "
-            "(e.g. https://api.openai.com/v1 or an Azure APIM proxy). "
-            "The chat client appends /chat/completions; the embeddings client appends /embeddings."
+            "Base URL for the chat/embeddings API. Point it at an OpenAI-compatible "
+            "endpoint or a gateway (e.g. an Azure APIM proxy). Leave empty to use each "
+            "provider's default endpoint via LiteLLM. (LLM_API_BASE)"
         ),
     )
     api_key: str = Field(
         default="",
-        description="API key (LLM_API_KEY).",
+        description="API key forwarded to the provider/gateway (LLM_API_KEY).",
     )
     api_version: str = Field(
         default="",
-        description="API version string, required only for native Azure OpenAI (LLM_API_VERSION).",
+        description="API version string, required by some gateways such as Azure (LLM_API_VERSION).",
     )
-    deployment_name: str = Field(
+    model: str = Field(
         default="",
-        description="Model / deployment name (LLM_DEPLOYMENT_NAME).",
-    )
-    openai_base_url: str = Field(
-        default="",
+        validation_alias=AliasChoices("LLM_MODEL", "LLM_DEPLOYMENT_NAME"),
         description=(
-            "If set, chat uses OpenAI v1-compatible Chat Completions at this base URL "
-            "(e.g. Azure APIM .../plc/openai/v1). LLM_DEPLOYMENT_NAME is the model id. "
-            "Auth uses the api-key header (APIM subscription key)."
+            "Default model id in LiteLLM form, e.g. 'openai/gpt-4o', "
+            "'azure/<deployment>', 'anthropic/claude-3-5-sonnet'. (LLM_MODEL)"
         ),
     )
     temperature: float = Field(
@@ -187,32 +210,47 @@ class LLMSettings(BaseSettings):
     reasoning_effort: str = Field(
         default="",
         description=(
-            "Reasoning effort for OpenAI reasoning models (gpt-5 family, o-series). "
-            "Allowed values: 'none', 'low', 'medium', 'high'."
-            "it can be different for different models, please check docs https://developers.openai.com/api/docs/guides/reasoning#reasoning-effort"
+            "Reasoning effort for models that support it. "
+            "Allowed values: 'none', 'low', 'medium', 'high'. "
+            "Leave empty to use the model default; supported values vary by model. "
+            "(LLM_REASONING_EFFORT)"
         ),
     )
-    embeddings_endpoint: str = Field(
+    embeddings_api_base: str = Field(
         default="",
-        validation_alias=AliasChoices("OPENAI_EMBEDDINGS_ENDPOINT"),
+        validation_alias=AliasChoices(
+            "LLM_EMBEDDINGS_API_BASE", "OPENAI_EMBEDDINGS_ENDPOINT"
+        ),
         description=(
-            "OpenAI-compatible base URL for the embeddings model. Defaults to OPENAI_ENDPOINT when empty."
+            "Base URL for the embeddings API. Falls back to LLM_API_BASE when empty. "
+            "(LLM_EMBEDDINGS_API_BASE)"
         ),
     )
     embeddings_api_key: str = Field(
         default="",
-        validation_alias=AliasChoices("OPENAI_EMBEDDINGS_API_KEY"),
-        description=(
-            "API key for the embeddings endpoint. Defaults to LLM_API_KEY when empty."
+        validation_alias=AliasChoices(
+            "LLM_EMBEDDINGS_API_KEY", "OPENAI_EMBEDDINGS_API_KEY"
         ),
+        description="API key for the embeddings endpoint. Falls back to LLM_API_KEY when empty.",
     )
-    embedding_deployment_name: str = Field(
+    embedding_model: str = Field(
         default="text-embedding-ada-002",
-        description="Embeddings model / deployment name (LLM_EMBEDDING_DEPLOYMENT_NAME).",
+        validation_alias=AliasChoices(
+            "LLM_EMBEDDING_MODEL", "LLM_EMBEDDING_DEPLOYMENT_NAME"
+        ),
+        description="Embeddings model id (LLM_EMBEDDING_MODEL).",
     )
     embedding_dimensions: int = Field(
         default=1536,
         description="Embedding vector dimensions (LLM_EMBEDDING_DIMENSIONS).",
+    )
+    litellm_models_config_path: str = Field(
+        default="",
+        validation_alias=AliasChoices("LLM_LITELLM_MODELS_CONFIG"),
+        description=(
+            "Path to the JSON file listing selectable models; powers the model picker "
+            "(LLM_LITELLM_MODELS_CONFIG)."
+        ),
     )
 
 
@@ -260,6 +298,44 @@ class LangfuseSettings(BaseSettings):
 def get_llm_settings() -> LLMSettings:
     """Get LLM settings."""
     return LLMSettings()
+
+
+@lru_cache
+def get_litellm_models_config() -> LiteLLMModelsConfig | None:
+    """Load and cache the LiteLLM models config from the JSON file.
+
+    Returns None when LLM_LITELLM_MODELS_CONFIG is not set.
+    Raises FileNotFoundError / ValueError on invalid config.
+    """
+    settings = get_llm_settings()
+    if not settings.litellm_models_config_path:
+        return None
+    path = Path(settings.litellm_models_config_path)
+    if not path.exists():
+        msg = (
+            f"LiteLLM models config file not found: {path}. "
+            "Set LLM_LITELLM_MODELS_CONFIG to a valid path."
+        )
+        raise FileNotFoundError(msg)
+    with path.open(encoding="utf-8") as f:
+        data = json.load(f)
+    return LiteLLMModelsConfig(**data)
+
+
+def resolve_default_model() -> str | None:
+    """Pick the default model used when a request doesn't override it.
+
+    An explicit ``LLM_MODEL`` always wins so operators keep a single source of
+    truth for the deployment's model. The first entry in the models config is
+    only a fallback for when ``LLM_MODEL`` is unset.
+    """
+    model = get_llm_settings().model
+    if model:
+        return model
+    config = get_litellm_models_config()
+    if config and config.providers and config.providers[0].models:
+        return str(config.providers[0].models[0].id)
+    return None
 
 
 @lru_cache

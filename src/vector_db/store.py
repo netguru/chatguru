@@ -7,13 +7,11 @@ from pathlib import Path
 from typing import Any
 
 import sqlite_vec
-from langchain_openai import OpenAIEmbeddings
 
 from config import get_llm_settings, get_logger
+from embeddings import build_embeddings
 
 logger = get_logger("vector_db.store")
-
-EMBEDDING_DIM = 1536
 
 
 def _serialize_embedding(embedding: list[float]) -> bytes:
@@ -25,7 +23,7 @@ class VectorStore:
     """
     Vector store with semantic search using sqlite-vec.
 
-    Stores data in SQLite, generates embeddings via the configured OpenAI-compatible
+    Stores data in SQLite, generates embeddings via the configured embeddings
     endpoint, and performs vector similarity search with sqlite-vec.
     """
 
@@ -39,18 +37,9 @@ class VectorStore:
         self._db_path = Path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Initialize embeddings model
-        llm_settings = get_llm_settings()
-        embeddings_base_url = llm_settings.embeddings_endpoint or llm_settings.endpoint
-        embeddings_api_key = llm_settings.embeddings_api_key or llm_settings.api_key
-        self._embeddings = OpenAIEmbeddings(
-            model=llm_settings.embedding_deployment_name,
-            api_key=embeddings_api_key,
-            base_url=embeddings_base_url.rstrip("/"),
-            default_headers={"api-key": embeddings_api_key},
-        )
+        self._embedding_dim = get_llm_settings().embedding_dimensions
+        self._embeddings = build_embeddings()
 
-        # Setup database
         self._setup_database()
         logger.info("VectorStore initialized: %s", self._db_path)
 
@@ -99,7 +88,7 @@ class VectorStore:
                 f"""
                 CREATE VIRTUAL TABLE IF NOT EXISTS product_embeddings USING vec0(
                     product_id TEXT PRIMARY KEY,
-                    embedding FLOAT[{EMBEDDING_DIM}]
+                    embedding FLOAT[{self._embedding_dim}]
                 )
             """
             )

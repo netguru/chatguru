@@ -380,6 +380,7 @@ def _mock_astream_chunks(chunks: list[str]) -> Callable[..., AsyncIterator[str]]
         *,
         session_id: str | None = None,
         visitor_id: str | None = None,
+        model: str | None = None,
     ) -> AsyncIterator[str]:
         for chunk in chunks:
             yield chunk

@@ -49,6 +49,25 @@ export interface WsOutboundMessage {
   session_id?: string;
   visitor_id: string;
   messages: HistoryMessage[];
+  /** LiteLLM model ID for this request. Only sent when the LiteLLM provider is active. */
+  model?: string;
+}
+
+/** A single selectable LiteLLM model. Matches backend LiteLLMModel. */
+export interface LlmModel {
+  label: string;
+  id: string;
+}
+
+/** A provider group of models. Matches backend LiteLLMProvider. */
+export interface LlmModelProvider {
+  name: string;
+  models: LlmModel[];
+}
+
+/** Response shape of GET /models. Matches backend LiteLLMModelsConfig. */
+export interface LlmModelsResponse {
+  providers: LlmModelProvider[];
 }
 
 // Inbound WebSocket events — aligned with backend routes/chat.py

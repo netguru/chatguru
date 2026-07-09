@@ -21,6 +21,7 @@ def _mock_astream(chunks: list[str]) -> Callable[..., AsyncIterator[str]]:
         *,
         session_id: str | None = None,
         visitor_id: str | None = None,
+        model: str | None = None,
     ) -> AsyncIterator[str]:
         for chunk in chunks:
             yield chunk
@@ -317,6 +318,7 @@ def test_websocket_chat_with_conversation_history(async_app: TestClient) -> None
             *,
             session_id: str | None = None,
             visitor_id: str | None = None,
+            model: str | None = None,
         ) -> AsyncIterator[str]:
             nonlocal received_messages
             received_messages = messages
@@ -358,7 +360,7 @@ def test_websocket_chat_with_conversation_history(async_app: TestClient) -> None
 
 def test_websocket_chat_messages_empty_array(async_app: TestClient) -> None:
     """Test WebSocket with empty messages array (should fail validation)."""
-    with patch("src.agent.service.ChatOpenAI"):
+    with patch("src.agent.service._build_chat_llm"):
         with async_app.websocket_connect("/ws") as websocket:
             websocket.send_json({"session_id": "ws-empty-messages", "messages": []})
 
@@ -369,7 +371,7 @@ def test_websocket_chat_messages_empty_array(async_app: TestClient) -> None:
 
 def test_websocket_chat_without_messages_field(async_app: TestClient) -> None:
     """Test WebSocket chat without messages field (should fail validation)."""
-    with patch("src.agent.service.ChatOpenAI"):
+    with patch("src.agent.service._build_chat_llm"):
         with async_app.websocket_connect("/ws") as websocket:
             websocket.send_json({"session_id": "ws-no-messages-field"})
 
@@ -439,6 +441,7 @@ def test_websocket_error_response_includes_session_id(async_app: TestClient) -> 
             *,
             session_id: str | None = None,
             visitor_id: str | None = None,
+            model: str | None = None,
         ) -> AsyncIterator[str]:
             raise Exception("Simulated streaming error")
             yield  # Make it a generator  # noqa: B027
@@ -494,6 +497,7 @@ def test_websocket_history_with_multiple_turns(async_app: TestClient) -> None:
             *,
             session_id: str | None = None,
             visitor_id: str | None = None,
+            model: str | None = None,
         ) -> AsyncIterator[str]:
             nonlocal received_messages
             received_messages = messages

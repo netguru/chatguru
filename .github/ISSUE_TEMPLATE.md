@@ -48,8 +48,8 @@ If relevant, provide your configuration (redact sensitive information):
 
 ```bash
 # Relevant environment variables (redact API keys!)
-OPENAI_ENDPOINT=https://.../v1
-LLM_DEPLOYMENT_NAME=gpt-4o-mini
+LLM_MODEL=openai/gpt-4o-mini
+LLM_API_BASE=https://.../v1
 # etc.
 ```
 -->

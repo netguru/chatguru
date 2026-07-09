@@ -27,6 +27,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 
 # Copy only what's needed for the database service
 COPY src/vector_db/ ./src/vector_db/
+COPY src/embeddings.py ./src/embeddings.py
 COPY src/config.py ./src/config.py
 COPY src/rag/products.json ./data/products.json
 

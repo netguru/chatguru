@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from config import LLMSettings
-from title_generation.adapters.openai import OpenAITitleGenerator
+from title_generation.adapters.llm import LLMTitleGenerator
 from title_generation.utils import truncate_title
 
 
@@ -49,7 +49,7 @@ async def test_openai_generator_uses_llm_response() -> None:
     llm_response = MagicMock()
     llm_response.content = "Return Policy For Online Orders"
 
-    generator = OpenAITitleGenerator(LLMSettings())
+    generator = LLMTitleGenerator(LLMSettings())
     generator._llm = MagicMock()
     generator._llm.ainvoke = AsyncMock(return_value=llm_response)
 
@@ -64,7 +64,7 @@ async def test_openai_generator_strips_quotes_from_llm_response() -> None:
     llm_response = MagicMock()
     llm_response.content = '"Shopping Cart Help"'
 
-    generator = OpenAITitleGenerator(LLMSettings())
+    generator = LLMTitleGenerator(LLMSettings())
     generator._llm = MagicMock()
     generator._llm.ainvoke = AsyncMock(return_value=llm_response)
 
@@ -76,7 +76,7 @@ async def test_openai_generator_strips_quotes_from_llm_response() -> None:
 @pytest.mark.asyncio
 async def test_openai_generator_falls_back_on_llm_error() -> None:
     """If the LLM call raises, the function falls back to truncation silently."""
-    generator = OpenAITitleGenerator(LLMSettings())
+    generator = LLMTitleGenerator(LLMSettings())
     generator._llm = MagicMock()
     generator._llm.ainvoke = AsyncMock(side_effect=RuntimeError("network error"))
 
@@ -91,7 +91,7 @@ async def test_openai_generator_falls_back_on_empty_llm_response() -> None:
     llm_response = MagicMock()
     llm_response.content = "   "
 
-    generator = OpenAITitleGenerator(LLMSettings())
+    generator = LLMTitleGenerator(LLMSettings())
     generator._llm = MagicMock()
     generator._llm.ainvoke = AsyncMock(return_value=llm_response)
 
@@ -108,12 +108,12 @@ async def test_openai_generator_attaches_langfuse_callback_when_initialized() ->
 
     mock_handler = MagicMock()
 
-    generator = OpenAITitleGenerator(LLMSettings())
+    generator = LLMTitleGenerator(LLMSettings())
     generator._llm = MagicMock()
     generator._llm.ainvoke = AsyncMock(return_value=llm_response)
 
     with patch(
-        "title_generation.adapters.openai.get_langfuse_handler",
+        "title_generation.adapters.llm.get_langfuse_handler",
         return_value=mock_handler,
     ):
         result = await generator.generate("Some question")
@@ -129,13 +129,11 @@ async def test_openai_generator_no_langfuse_callback_when_not_initialized() -> N
     llm_response = MagicMock()
     llm_response.content = "Another Title"
 
-    generator = OpenAITitleGenerator(LLMSettings())
+    generator = LLMTitleGenerator(LLMSettings())
     generator._llm = MagicMock()
     generator._llm.ainvoke = AsyncMock(return_value=llm_response)
 
-    with patch(
-        "title_generation.adapters.openai.get_langfuse_handler", return_value=None
-    ):
+    with patch("title_generation.adapters.llm.get_langfuse_handler", return_value=None):
         result = await generator.generate("Another question")
 
     assert result == "Another Title"

@@ -5,12 +5,14 @@ import { ChatMessage } from "../components/chat/ChatMessage";
 import { Chip, ChipLabel } from "../components/ui/chip";
 import { Container } from "../components/ui/container";
 import { useChat } from "../hooks/useChat";
+import { useModels } from "../hooks/useModels";
 import { useSuggestions } from "../hooks/useSuggestions";
 import { selectCurrentMessages, useAppStore } from "../store/appStore";
 import { cn } from "../utils/utils";
 
 export function ChatPage() {
   const { sendMessage } = useChat();
+  const { providers, selectedModelId, setSelectedModelId } = useModels();
   const [inputValue, setInputValue] = useState("");
   const suggestions = useSuggestions();
 
@@ -86,11 +88,14 @@ export function ChatPage() {
 
         <ChatInput
           onSend={(text, attachmentIds, imagePreviewUrls) => {
-            sendMessage(text, attachmentIds, imagePreviewUrls);
+            sendMessage(text, attachmentIds, imagePreviewUrls, selectedModelId ?? undefined);
             setInputValue("");
           }}
           value={inputValue}
           onValueChange={setInputValue}
+          modelProviders={providers}
+          selectedModelId={selectedModelId}
+          onSelectModel={setSelectedModelId}
         />
 
         <p className="mt-2 text-t4 text-text-tertiary">

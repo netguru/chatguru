@@ -35,6 +35,7 @@ from attachment_storage import get_attachment_storage, is_attachment_storage_ena
 from config import (
     get_app_settings,
     get_document_rag_settings,
+    get_litellm_models_config,
     get_logger,
 )
 from document_rag import get_document_rag_repository
@@ -75,6 +76,22 @@ class HistoryMessage(BaseModel):
     )
 
 
+def _validate_model_id(model: str | None) -> None:
+    """Reject a per-request model ID that isn't in the models config.
+
+    No-op when no model is requested or no models config is loaded.
+    """
+    if model is None:
+        return
+    config = get_litellm_models_config()
+    if config is None:
+        return
+    valid_ids = {m.id for p in config.providers for m in p.models}
+    if model not in valid_ids:
+        msg = f"Unknown model '{model}'. Valid models: {sorted(valid_ids)}"
+        raise ValueError(msg)
+
+
 class ChatMessage(BaseModel):
     """WebSocket chat payload: full transcript including the current user turn last."""
 
@@ -92,6 +109,15 @@ class ChatMessage(BaseModel):
         default_factory=list,
         max_length=_MAX_TRANSCRIPT_MESSAGES,
         description="Full conversation for this request; last entry must be the current user message",
+    )
+    model: str | None = Field(
+        None,
+        max_length=256,
+        description=(
+            "Model ID to use for this request (e.g. 'openai/gpt-4o', "
+            "'anthropic/claude-3-5-sonnet-20241022'). Must be one of the models "
+            "listed in the models config; ignored when no models config is set."
+        ),
     )
 
     @model_validator(mode="after")
@@ -120,6 +146,10 @@ class ChatMessage(BaseModel):
         elif len(last.content) < 1 or len(last.content) > _MAX_LAST_USER_MESSAGE_LENGTH:
             msg = f"Last user message content must be between 1 and {_MAX_LAST_USER_MESSAGE_LENGTH} characters"
             raise ValueError(msg)
+        # When no models config is present, ignore any per-request model override.
+        if get_litellm_models_config() is None:
+            self.model = None
+        _validate_model_id(self.model)
         return self
 
 
@@ -148,6 +178,19 @@ router = APIRouter(tags=["chat"])
 
 # Strong references to background tasks so they aren't garbage-collected before completion.
 _background_tasks: set[asyncio.Task] = set()
+
+
+@router.get("/models")
+async def get_available_models() -> dict[str, Any]:
+    """Return the list of selectable models.
+
+    Returns an empty providers list when no models config file is configured,
+    so the frontend can use this to decide whether to show the model picker.
+    """
+    config = get_litellm_models_config()
+    if config is None:
+        return {"providers": []}
+    return {"providers": [p.model_dump() for p in config.providers]}
 
 
 async def await_background_tasks() -> None:
@@ -565,6 +608,7 @@ async def _stream_assistant_response(
     *,
     session_id: str,
     visitor_id: str,
+    model: str | None = None,
 ) -> str:
     """Stream the assistant reply token-by-token to *websocket* and return the
     accumulated full response.
@@ -574,6 +618,7 @@ async def _stream_assistant_response(
         transcript,
         session_id=session_id,
         visitor_id=visitor_id,
+        model=model,
     ):
         full_response += chunk
         await websocket.send_json(
@@ -650,6 +695,7 @@ async def _handle_chat_turn(
         transcript,
         session_id=session_id,
         visitor_id=visitor_id,
+        model=chat_message.model,
     )
     sources = agent.get_last_used_sources()
     trace_id = agent.last_trace_id
