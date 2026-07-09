@@ -9,7 +9,7 @@
 #   2. make env-setup      # Copy environment template
 #   3. make dev            # Start backend development server
 
-.PHONY: help install setup test coverage rag-eval ragas-llm-eval rag_dashboard vector-db dev run docker-build docker-run docker-run-detached docker-stop docker-down docker-logs docker-logs-backend docker-clean pre-commit-install pre-commit promptfoo-eval promptfoo-view promptfoo-test env-setup version clean migrate db-downgrade db-revision ingest-docs
+.PHONY: help install setup test coverage rag-eval ragas-llm-eval rag-dashboard vector-db dev run docker-build docker-run docker-run-detached docker-run-backend docker-stop docker-down docker-logs docker-logs-backend docker-clean pre-commit-install pre-commit promptfoo-eval promptfoo-view promptfoo-test env-setup version clean migrate db-downgrade db-revision ingest-docs
 
 # ============================================================================
 # Default Target
@@ -140,19 +140,25 @@ docker-build: ## Build backend Docker image
 	docker build -f docker/Dockerfile -t chatguru-agent .
 	@echo "✅ Backend image built successfully"
 
-docker-run: ## Run with Docker Compose (builds and starts in foreground)
-	@echo "🐳 Starting with Docker Compose..."
+docker-run: ## Run with Docker Compose incl. frontend UI (builds and starts in foreground)
+	@echo "🐳 Starting with Docker Compose (with frontend)..."
 	@echo "🔧 Backend API at http://localhost:8000"
 	@echo "📡 WebSocket endpoint at ws://localhost:8000/ws"
 	@echo "🧪 Minimal test UI at http://localhost:8000/"
-	docker-compose up --build
+	docker compose --profile frontend up --build
 
-docker-run-detached: ## Run with Docker Compose in background (detached mode)
-	@echo "🐳 Starting with Docker Compose (detached)..."
-	docker-compose up --build -d
+docker-run-detached: ## Run with Docker Compose incl. frontend UI in background (detached mode)
+	@echo "🐳 Starting with Docker Compose (with frontend, detached)..."
+	docker compose --profile frontend up --build -d
 	@echo "🔧 Backend API at http://localhost:8000"
 	@echo "📡 WebSocket endpoint at ws://localhost:8000/ws"
 	@echo "🧪 Minimal test UI at http://localhost:8000/"
+
+docker-run-backend: ## Run backend only (no frontend UI) in foreground
+	@echo "🐳 Starting backend only (no frontend)..."
+	@echo "🔧 Backend API at http://localhost:8000"
+	@echo "🧪 Minimal test UI at http://localhost:8000/"
+	docker compose up --build
 
 docker-stop: ## Stop Docker Compose services (keeps containers)
 	@echo "🛑 Stopping Docker Compose services..."
