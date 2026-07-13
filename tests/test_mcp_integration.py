@@ -154,17 +154,25 @@ def test_load_preserves_user_token_placeholder(tmp_path: Path) -> None:
     }
 
 
-def test_load_rejects_user_token_in_url(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "server",
+    [
+        # In the URL rather than a header value.
+        {"url": "https://example.com/mcp?token=${user_token}"},
+        # In a header *name* rather than a header value — neither expanded nor
+        # gated, so it would otherwise be sent literally over the wire.
+        {
+            "url": "https://example.com/mcp/",
+            "headers": {"${user_token}": "x"},
+        },
+    ],
+)
+def test_load_rejects_user_token_outside_header_value(
+    tmp_path: Path, server: dict
+) -> None:
     # ${user_token} is only expanded in header values; anywhere else it would
     # be sent as a literal string, so the entry is rejected at load time.
-    config_path = _write_config(
-        tmp_path,
-        {
-            "mcpServers": {
-                "internal": {"url": "https://example.com/mcp?token=${user_token}"}
-            }
-        },
-    )
+    config_path = _write_config(tmp_path, {"mcpServers": {"internal": server}})
 
     assert load_mcp_connections(config_path) == {}
 

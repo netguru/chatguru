@@ -72,8 +72,8 @@ goes out with an empty auth header. Servers that don't reference it are
 unaffected.
 
 `${user_token}` is only supported in **header values**; an entry referencing it
-anywhere else (e.g. in the `url`) is rejected at load time, since the literal
-placeholder would otherwise be sent over the wire.
+anywhere else (the `url` or a header *name*) is rejected at load time, since the
+literal placeholder would otherwise be sent over the wire.
 
 ## Failure behavior
 

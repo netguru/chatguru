@@ -75,6 +75,25 @@ def _expand_placeholders(value: Any) -> Any:
     return value
 
 
+def _misplaced_user_token(expanded: dict[str, Any]) -> str | None:
+    """Return where ``${user_token}`` illegally appears, or ``None`` if valid.
+
+    ``${user_token}`` is only substituted into header *values* (see
+    ``apply_user_token``). Anywhere else — the URL or a header *name* — it is
+    never expanded and would be sent literally over the wire, so such an entry
+    must be rejected at load time.
+    """
+    url = expanded.get("url")
+    if isinstance(url, str) and _USER_TOKEN_PLACEHOLDER in url:
+        return "its URL"
+    headers = expanded.get("headers")
+    if isinstance(headers, dict) and any(
+        isinstance(k, str) and _USER_TOKEN_PLACEHOLDER in k for k in headers
+    ):
+        return "a header name"
+    return None
+
+
 def connection_requires_user_token(connection: dict[str, Any]) -> bool:
     """Return True when any header value references ``${user_token}``."""
     headers = connection.get("headers")
@@ -137,12 +156,14 @@ def _build_connection(name: str, raw: Any) -> dict[str, Any] | None:  # noqa: PL
         )
         return None
 
-    if _USER_TOKEN_PLACEHOLDER in expanded["url"]:
+    misplaced = _misplaced_user_token(expanded)
+    if misplaced is not None:
         logger.warning(
-            "MCP server %r references ${%s} in its URL; it is only supported "
-            "in header values. Skipping.",
+            "MCP server %r references ${%s} in %s; it is only supported in "
+            "header values. Skipping.",
             name,
             USER_TOKEN_NAME,
+            misplaced,
         )
         return None
 
