@@ -132,6 +132,43 @@ def test_load_without_mcp_servers_key_returns_empty(tmp_path: Path) -> None:
     assert load_mcp_connections(config_path) == {}
 
 
+def test_load_preserves_user_token_placeholder(tmp_path: Path) -> None:
+    # ${user_token} is expanded per request, not at load time, so it must
+    # survive loading untouched rather than skipping the server.
+    config_path = _write_config(
+        tmp_path,
+        {
+            "mcpServers": {
+                "internal": {
+                    "url": "https://example.com/mcp/",
+                    "headers": {"Authorization": "Bearer ${user_token}"},
+                }
+            }
+        },
+    )
+
+    connections = load_mcp_connections(config_path)
+
+    assert connections["internal"]["headers"] == {
+        "Authorization": "Bearer ${user_token}"
+    }
+
+
+def test_load_rejects_user_token_in_url(tmp_path: Path) -> None:
+    # ${user_token} is only expanded in header values; anywhere else it would
+    # be sent as a literal string, so the entry is rejected at load time.
+    config_path = _write_config(
+        tmp_path,
+        {
+            "mcpServers": {
+                "internal": {"url": "https://example.com/mcp?token=${user_token}"}
+            }
+        },
+    )
+
+    assert load_mcp_connections(config_path) == {}
+
+
 # --- session (open_mcp_tools) ----------------------------------------------
 
 
@@ -254,6 +291,114 @@ async def test_open_mcp_tools_skips_server_in_failure_cooldown() -> None:
         async with open_mcp_tools(conns) as tools:
             assert tools == []
         assert factory.call_count == calls_after_first
+
+
+@pytest.mark.asyncio
+async def test_open_mcp_tools_token_gated_failure_skips_cooldown() -> None:
+    # A token-gated server's failure may be one user's bad token, so it must
+    # not enter the shared cooldown and block other users' valid tokens.
+    conns = {
+        "internal": {
+            "transport": "streamable_http",
+            "url": "https://internal/mcp/",
+            "headers": {"Authorization": "Bearer ${user_token}"},
+        }
+    }
+    factory = MagicMock(side_effect=_client_factory_by_name({"internal"}))
+
+    async def _fake_load(session: object) -> list[BaseTool]:
+        return [_fake_tool]
+
+    with (
+        patch("mcp_integration.session.MultiServerMCPClient", factory),
+        patch("mcp_integration.session.load_mcp_tools", _fake_load),
+    ):
+        async with open_mcp_tools(conns, user_token="bad-token") as tools:
+            assert tools == []
+        calls_after_first = factory.call_count
+        # The next turn retries instead of finding the server in cooldown.
+        async with open_mcp_tools(conns, user_token="good-token") as tools:
+            assert tools == []
+        assert factory.call_count == calls_after_first + 1
+
+
+@pytest.mark.asyncio
+async def test_open_mcp_tools_injects_user_token() -> None:
+    conns = {
+        "internal": {
+            "transport": "streamable_http",
+            "url": "https://x/mcp/",
+            "headers": {"Authorization": "Bearer ${user_token}"},
+        }
+    }
+    seen: dict[str, dict] = {}
+
+    def factory(connections: dict) -> object:
+        seen.update(connections)
+        client = MagicMock()
+
+        @asynccontextmanager
+        async def _session(server_name: str) -> AsyncIterator[str]:
+            yield "session"
+
+        client.session = _session
+        return client
+
+    async def _fake_load(session: object) -> list[BaseTool]:
+        return [_fake_tool]
+
+    with (
+        patch("mcp_integration.session.MultiServerMCPClient", side_effect=factory),
+        patch("mcp_integration.session.load_mcp_tools", _fake_load),
+    ):
+        async with open_mcp_tools(conns, user_token="tok-123") as tools:
+            assert [t.name for t in tools] == ["_fake_tool"]
+
+    assert seen["internal"]["headers"] == {"Authorization": "Bearer tok-123"}
+
+
+@pytest.mark.asyncio
+async def test_open_mcp_tools_skips_server_requiring_token_when_missing() -> None:
+    conns = {
+        "internal": {
+            "transport": "streamable_http",
+            "url": "https://x/mcp/",
+            "headers": {"Authorization": "Bearer ${user_token}"},
+        }
+    }
+
+    async def _fake_load(session: object) -> list[BaseTool]:
+        return [_fake_tool]
+
+    with (
+        patch(
+            "mcp_integration.session.MultiServerMCPClient",
+            side_effect=_client_factory_by_name(set()),
+        ),
+        patch("mcp_integration.session.load_mcp_tools", _fake_load),
+    ):
+        # No user_token supplied -> the token-gated server is skipped.
+        async with open_mcp_tools(conns) as tools:
+            assert tools == []
+
+
+@pytest.mark.asyncio
+async def test_open_mcp_tools_leaves_non_token_server_unaffected() -> None:
+    conns = {"public": {"transport": "streamable_http", "url": "https://x/mcp/"}}
+
+    async def _fake_load(session: object) -> list[BaseTool]:
+        return [_fake_tool]
+
+    with (
+        patch(
+            "mcp_integration.session.MultiServerMCPClient",
+            side_effect=_client_factory_by_name(set()),
+        ),
+        patch("mcp_integration.session.load_mcp_tools", _fake_load),
+    ):
+        # A server that doesn't reference ${user_token} loads even without one.
+        async with open_mcp_tools(conns, user_token=None) as tools:
+            assert [t.name for t in tools] == ["_fake_tool"]
 
 
 # --- bootstrap -------------------------------------------------------------

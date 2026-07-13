@@ -36,6 +36,13 @@ _DEFAULT_TRANSPORT = "streamable_http"
 # Matches ${VAR} placeholders inside string values.
 _PLACEHOLDER = re.compile(r"\$\{([^}]+)\}")
 
+# Reserved placeholder name. Unlike ${ENV_VAR} placeholders (expanded from the
+# environment at load time), ``${user_token}`` is expanded per chat turn with
+# the calling user's token — see ``apply_user_token``. A server references it to
+# opt in to receiving the user's token in a header.
+USER_TOKEN_NAME = "user_token"  # noqa: S105 - placeholder name, not a secret
+_USER_TOKEN_PLACEHOLDER = "${" + USER_TOKEN_NAME + "}"
+
 
 class _MissingEnvVarError(ValueError):
     """Raised when a ${VAR} placeholder has no matching environment variable."""
@@ -46,11 +53,15 @@ def _expand_placeholders(value: Any) -> Any:
 
     Raises ``_MissingEnvVarError`` when a referenced variable is unset so the
     caller can skip the offending server rather than send a literal ``${...}``.
+    The reserved ``${user_token}`` placeholder is left untouched here; it is
+    expanded per request instead (see ``apply_user_token``).
     """
     if isinstance(value, str):
 
         def _replace(match: re.Match[str]) -> str:
             name = match.group(1)
+            if name == USER_TOKEN_NAME:
+                return match.group(0)
             env_value = os.environ.get(name)
             if env_value is None:
                 raise _MissingEnvVarError(name)
@@ -64,7 +75,29 @@ def _expand_placeholders(value: Any) -> Any:
     return value
 
 
-def _build_connection(name: str, raw: Any) -> dict[str, Any] | None:
+def connection_requires_user_token(connection: dict[str, Any]) -> bool:
+    """Return True when any header value references ``${user_token}``."""
+    headers = connection.get("headers")
+    if not isinstance(headers, dict):
+        return False
+    return any(
+        isinstance(v, str) and _USER_TOKEN_PLACEHOLDER in v for v in headers.values()
+    )
+
+
+def apply_user_token(connection: dict[str, Any], user_token: str) -> dict[str, Any]:
+    """Return a copy of ``connection`` with ``${user_token}`` expanded in headers."""
+    headers = connection.get("headers")
+    if not isinstance(headers, dict):
+        return connection
+    expanded_headers = {
+        k: v.replace(_USER_TOKEN_PLACEHOLDER, user_token) if isinstance(v, str) else v
+        for k, v in headers.items()
+    }
+    return {**connection, "headers": expanded_headers}
+
+
+def _build_connection(name: str, raw: Any) -> dict[str, Any] | None:  # noqa: PLR0911
     """Validate and normalize a single server entry into a connection dict.
 
     Returns ``None`` (after logging) when the entry is unusable so loading can
@@ -101,6 +134,15 @@ def _build_connection(name: str, raw: Any) -> dict[str, Any] | None:
             "MCP server %r references unset environment variable ${%s}; skipping.",
             name,
             exc.args[0],
+        )
+        return None
+
+    if _USER_TOKEN_PLACEHOLDER in expanded["url"]:
+        logger.warning(
+            "MCP server %r references ${%s} in its URL; it is only supported "
+            "in header values. Skipping.",
+            name,
+            USER_TOKEN_NAME,
         )
         return None
 

@@ -10,6 +10,13 @@
     "example-sse": {
       "url": "https://mcp.example.com/sse",
       "transport": "sse"
+    },
+    "internal-tools": {
+      "url": "https://tools.internal/mcp/",
+      "transport": "streamable_http",
+      "headers": {
+        "Authorization": "Bearer ${user_token}"
+      }
     }
   }
 }

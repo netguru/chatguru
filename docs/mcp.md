@@ -46,6 +46,35 @@ file. Set the referenced variable (e.g. `MCP_GITHUB_TOKEN`) in your `.env` or
 deployment environment. If a referenced variable is unset, that server is
 skipped with a logged warning rather than sending a literal `${...}` token.
 
+### Per-user tokens via `${user_token}`
+
+When an integrated system does **user-based** authorization (access to specific
+tools depends on who is asking), a server entry can forward the calling user's
+token by referencing the reserved `${user_token}` placeholder in a header:
+
+```json
+"internal-tools": {
+  "url": "https://tools.internal/mcp/",
+  "transport": "streamable_http",
+  "headers": { "Authorization": "Bearer ${user_token}" }
+}
+```
+
+Unlike `${ENV_VAR}` placeholders (expanded once at load time), `${user_token}`
+is expanded **per chat turn** with the `auth_token` field of the chat message
+payload (intended to carry the app's login token; frontend support is not wired
+up yet). The token is never logged or persisted.
+
+Referencing `${user_token}` is how a server *opts in* to receiving the token —
+it acts as a per-server allowlist. A server that needs the token but gets none
+for a turn (unauthenticated request) is **skipped for that turn**, so no request
+goes out with an empty auth header. Servers that don't reference it are
+unaffected.
+
+`${user_token}` is only supported in **header values**; an entry referencing it
+anywhere else (e.g. in the `url`) is rejected at load time, since the literal
+placeholder would otherwise be sent over the wire.
+
 ## Failure behavior
 
 Everything degrades gracefully — the app always starts:
@@ -55,8 +84,10 @@ Everything degrades gracefully — the app always starts:
 | `MCP_CONFIG_PATH` missing / file not found  | Warning logged, no MCP tools loaded.    |
 | Invalid JSON / no `mcpServers` key          | Warning logged, no MCP tools loaded.    |
 | `${VAR}` placeholder unset                  | That server skipped.                    |
+| `${user_token}` referenced but none supplied | That server skipped for the turn.      |
+| `${user_token}` referenced outside a header value | That server rejected at load time. |
 | stdio/`command` or unsupported transport    | That server skipped.                    |
-| A server is unreachable or slow to connect  | Skipped after a 10s timeout, then skipped for a 60s cooldown so it isn't re-probed every turn; others still load. |
+| A server is unreachable or slow to connect  | Skipped after a 10s timeout, then skipped for a 60s cooldown so it isn't re-probed every turn; others still load. Token-gated servers are exempt from the cooldown — their failures may be one user's bad token, and cooling down would block other users' valid tokens. |
 | MCP tool name collides with a built-in tool | The MCP tool is dropped (built-in wins).|
 
 Each server is opened through its own session, so one slow or broken server

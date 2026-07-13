@@ -120,6 +120,15 @@ class ChatMessage(BaseModel):
             "listed in the models config; ignored when no models config is set."
         ),
     )
+    auth_token: str | None = Field(
+        None,
+        max_length=8192,
+        description=(
+            "Per-user token forwarded to MCP servers whose config references "
+            "${user_token}. Never persisted or logged; used only to authorize "
+            "MCP tool access for this turn."
+        ),
+    )
 
     @model_validator(mode="after")
     def ensure_messages_valid(self) -> Self:
@@ -602,7 +611,7 @@ async def _persist_user_turn(
     )
 
 
-async def _stream_assistant_response(
+async def _stream_assistant_response(  # noqa: PLR0913
     websocket: WebSocket,
     agent: Agent,
     transcript: list[dict[str, Any]],
@@ -610,6 +619,7 @@ async def _stream_assistant_response(
     session_id: str,
     visitor_id: str,
     model: str | None = None,
+    auth_token: str | None = None,
 ) -> str:
     """Stream the assistant reply token-by-token to *websocket* and return the
     accumulated full response.
@@ -620,6 +630,7 @@ async def _stream_assistant_response(
         session_id=session_id,
         visitor_id=visitor_id,
         model=model,
+        auth_token=auth_token,
     ):
         full_response += chunk
         await websocket.send_json(
@@ -697,6 +708,7 @@ async def _handle_chat_turn(
         session_id=session_id,
         visitor_id=visitor_id,
         model=chat_message.model,
+        auth_token=chat_message.auth_token,
     )
     sources = agent.get_last_used_sources()
     trace_id = agent.last_trace_id

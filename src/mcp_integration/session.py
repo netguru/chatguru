@@ -23,6 +23,10 @@ from langchain_mcp_adapters.client import Connection, MultiServerMCPClient
 from langchain_mcp_adapters.tools import load_mcp_tools
 
 from config import get_logger
+from mcp_integration.config_loader import (
+    apply_user_token,
+    connection_requires_user_token,
+)
 
 logger = get_logger(__name__)
 
@@ -50,12 +54,19 @@ def _in_cooldown(name: str, now: float) -> bool:
 @asynccontextmanager
 async def open_mcp_tools(
     connections: dict[str, dict[str, Any]],
+    *,
+    user_token: str | None = None,
 ) -> AsyncIterator[list[BaseTool]]:
     """Open a live session per server and yield their combined tools.
 
     The sessions stay open for the duration of the ``async with`` block, so
     stateful tool sequences work. On exit every session is closed. Yields an
     empty list when ``connections`` is empty.
+
+    ``user_token`` is the calling user's token. Servers whose headers reference
+    ``${user_token}`` receive it substituted in; if such a server needs it but
+    no token was supplied, that server is skipped for the turn (the others still
+    load), so no request goes out with an empty auth header.
     """
     if not connections:
         yield []
@@ -68,6 +79,15 @@ async def open_mcp_tools(
             if _in_cooldown(name, now):
                 logger.debug("Skipping MCP server %r (in failure cooldown)", name)
                 continue
+            uses_user_token = connection_requires_user_token(connection)
+            if uses_user_token:
+                if not user_token:
+                    logger.debug(
+                        "Skipping MCP server %r (requires a user token, none supplied)",
+                        name,
+                    )
+                    continue
+                connection = apply_user_token(connection, user_token)  # noqa: PLW2901
             try:
                 client = MultiServerMCPClient({name: cast("Connection", connection)})
                 async with asyncio.timeout(_SESSION_OPEN_TIMEOUT_SECONDS):
@@ -75,7 +95,11 @@ async def open_mcp_tools(
                     server_tools = await load_mcp_tools(session)
             except Exception as exc:  # noqa: BLE001 - isolate any per-server failure
                 # CancelledError is a BaseException, so cancellation still propagates.
-                _recent_failures[name] = now
+                # Token-gated servers stay out of the shared cooldown: their
+                # failures may be caused by one user's bad token, and cooling
+                # down would block every other user's valid token for 60s.
+                if not uses_user_token:
+                    _recent_failures[name] = now
                 logger.warning(
                     "Failed to open MCP session for server %r (%s: %s); skipping.",
                     name,
