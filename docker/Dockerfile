@@ -63,7 +63,11 @@ WORKDIR /app
 COPY --from=builder /app/.venv ./.venv
 
 COPY src/ ./src/
-COPY rag_data/ /app/rag_data/
+# rag_data is an optional document-ingestion drop dir; create it empty so the
+# build never depends on the (untracked) directory being present in the context.
+# The entrypoint only ingests when this dir is non-empty at runtime, and
+# docker-compose mounts a volume over it.
+RUN mkdir -p /app/rag_data
 COPY docker/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
