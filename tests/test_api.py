@@ -22,6 +22,7 @@ def _mock_astream(chunks: list[str]) -> Callable[..., AsyncIterator[str]]:
         session_id: str | None = None,
         visitor_id: str | None = None,
         model: str | None = None,
+        auth_token: str | None = None,
     ) -> AsyncIterator[str]:
         for chunk in chunks:
             yield chunk
@@ -319,6 +320,7 @@ def test_websocket_chat_with_conversation_history(async_app: TestClient) -> None
             session_id: str | None = None,
             visitor_id: str | None = None,
             model: str | None = None,
+            auth_token: str | None = None,
         ) -> AsyncIterator[str]:
             nonlocal received_messages
             received_messages = messages
@@ -356,6 +358,50 @@ def test_websocket_chat_with_conversation_history(async_app: TestClient) -> None
             assert received_messages[0]["content"] == "What's the weather like?"
             assert received_messages[1]["content"] == "The weather is sunny today!"
             assert received_messages[2]["content"] == "What did I ask about?"
+
+
+def test_websocket_chat_forwards_auth_token(async_app: TestClient) -> None:
+    """The auth_token from the message payload is passed through to the agent."""
+    received_auth_token: str | None = None
+
+    with patch("api.routes.chat.Agent") as mock_agent_class:
+        mock_agent_instance = MagicMock()
+        mock_agent_instance.last_trace_id = None
+        mock_agent_instance.get_last_used_sources.return_value = []
+
+        async def astream_gen(
+            messages: list[dict[str, str]],
+            *,
+            session_id: str | None = None,
+            visitor_id: str | None = None,
+            model: str | None = None,
+            auth_token: str | None = None,
+        ) -> AsyncIterator[str]:
+            nonlocal received_auth_token
+            received_auth_token = auth_token
+            yield "ok"
+
+        mock_agent_instance.astream = astream_gen
+        mock_agent_class.return_value = mock_agent_instance
+
+        with async_app.websocket_connect("/ws") as websocket:
+            websocket.send_json(
+                {
+                    "session_id": "test-session",
+                    "visitor_id": "visitor-auth-token",
+                    "messages": [{"role": "user", "content": "Hi"}],
+                    "auth_token": "tok-123",
+                }
+            )
+
+            while True:
+                data = websocket.receive_json()
+                if data["type"] == "end":
+                    break
+                elif data["type"] == "error":
+                    pytest.fail(f"Received error: {data['content']}")
+
+            assert received_auth_token == "tok-123"
 
 
 def test_websocket_chat_messages_empty_array(async_app: TestClient) -> None:
@@ -442,6 +488,7 @@ def test_websocket_error_response_includes_session_id(async_app: TestClient) -> 
             session_id: str | None = None,
             visitor_id: str | None = None,
             model: str | None = None,
+            auth_token: str | None = None,
         ) -> AsyncIterator[str]:
             raise Exception("Simulated streaming error")
             yield  # Make it a generator  # noqa: B027
@@ -498,6 +545,7 @@ def test_websocket_history_with_multiple_turns(async_app: TestClient) -> None:
             session_id: str | None = None,
             visitor_id: str | None = None,
             model: str | None = None,
+            auth_token: str | None = None,
         ) -> AsyncIterator[str]:
             nonlocal received_messages
             received_messages = messages

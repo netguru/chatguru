@@ -464,6 +464,7 @@ class Agent:
         session_id: str | None = None,
         visitor_id: str | None = None,
         model: str | None = None,
+        auth_token: str | None = None,
     ) -> AsyncIterator[str]:
         """
         Stream agent responses asynchronously with conversation context.
@@ -481,6 +482,8 @@ class Agent:
             visitor_id: Optional visitor ID for Langfuse tracing
             model: Optional LiteLLM model ID to use for this request. When set,
                 overrides the agent's default model for this turn.
+            auth_token: Optional per-user token forwarded to MCP servers whose
+                headers reference ``${user_token}`` (see ``open_mcp_tools``).
 
         Yields:
             Response chunks as strings (including tool call notifications)
@@ -503,7 +506,7 @@ class Agent:
         # Open MCP sessions for the whole turn so stateful servers keep state
         # across tool calls; sessions close when this block exits.
         async with (
-            open_mcp_tools(self._mcp_connections) as mcp_tools,
+            open_mcp_tools(self._mcp_connections, user_token=auth_token) as mcp_tools,
             self._tracing_context(
                 session_id=session_id, visitor_id=visitor_id
             ) as config,
