@@ -5,6 +5,8 @@ repos:
       - id: no-commit-to-branch
       - id: check-merge-conflict
       - id: check-json
+        # VS Code settings are JSONC (allow comments); strict JSON parser rejects them.
+        exclude: ^\.vscode/
       - id: check-toml
       - id: check-yaml
       - id: detect-private-key
