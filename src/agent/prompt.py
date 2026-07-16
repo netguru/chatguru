@@ -253,7 +253,7 @@ def load_fallback_prompt() -> str:
     path = Path(path_str)
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         logger.warning(
             "Could not read AGENT_SYSTEM_PROMPT_FALLBACK_FILE %r; using built-in prompt",
             path_str,
