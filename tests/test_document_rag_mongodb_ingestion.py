@@ -26,7 +26,10 @@ def test_mongodb_ingestion_adapter_ensure_ready_raises_on_timeout() -> None:
         patch.object(adapter, "_mongo_client", return_value=client_context),
         patch.object(adapter, "_collection", return_value=collection),
         # Four monotonic() calls: deadline start, two in-time loop checks, then timeout exit.
-        patch("document_rag.ingestion.adapters.mongodb.time.monotonic", side_effect=[0, 0, 60, 121]),
+        patch(
+            "document_rag.ingestion.adapters.mongodb.time.monotonic",
+            side_effect=[0, 0, 60, 121],
+        ),
         patch("document_rag.ingestion.adapters.mongodb.time.sleep"),
         pytest.raises(
             TimeoutError,

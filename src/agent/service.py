@@ -19,7 +19,7 @@ from langchain_core.tools import BaseTool, tool
 from langchain_litellm import ChatLiteLLM
 from langfuse.langchain import CallbackHandler
 
-from agent.prompt import SYSTEM_PROMPT
+from agent.prompt import load_fallback_prompt
 from config import (
     get_llm_settings,
     get_logger,
@@ -381,10 +381,14 @@ class Agent:
         The system prompt is fetched from Langfuse (``CHAT_SYSTEM_PROMPT``) on
         every turn so edits in the Langfuse UI take effect within the SDK
         cache TTL (~60 s) without redeploying.  When Langfuse is unavailable
-        the call falls back to the local ``SYSTEM_PROMPT`` (StyleBot) so the
-        chat surface stays functional.
+        the call falls back to ``load_fallback_prompt()`` — the local md file
+        configured via ``AGENT_SYSTEM_PROMPT_FALLBACK_FILE`` or, failing that,
+        the built-in ``SYSTEM_PROMPT`` (StyleBot) — so the chat surface stays
+        functional.
         """
-        system_prompt = get_prompt_text(CHAT_SYSTEM_PROMPT_NAME, fallback=SYSTEM_PROMPT)
+        system_prompt = get_prompt_text(
+            CHAT_SYSTEM_PROMPT_NAME, fallback=load_fallback_prompt()
+        )
         messages: list[BaseMessage] = [SystemMessage(content=system_prompt.strip())]
         messages.extend(_convert_history_to_messages(transcript))
         return messages

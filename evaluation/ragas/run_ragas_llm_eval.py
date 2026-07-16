@@ -32,16 +32,16 @@ from ragas.embeddings.base import LangchainEmbeddingsWrapper
 from ragas.evaluation import EvaluationResult
 from ragas.llms import llm_factory
 from ragas.metrics import AnswerRelevancy, Faithfulness
+from src.config import get_logger
+from src.rag.documents import create_product_document
+from src.rag.simple_retriever import SimpleProductRetriever
+from src.vector_db import create_vector_database
 
 from evaluation.ragas.test_ragas_dataset import (
     build_complete_ragas_dataset,
     build_empty_ragas_dataset,
     build_ragas_dataset_with_contexts,
 )
-from src.config import get_logger
-from src.rag.documents import create_product_document
-from src.rag.simple_retriever import SimpleProductRetriever
-from src.vector_db import create_vector_database
 
 logger = get_logger("ragas_llm_eval")
 

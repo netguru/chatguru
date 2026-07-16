@@ -13,6 +13,14 @@ coherent even when the prompt-management plane is down.
 Update the live prompt in Langfuse — not here — for product changes.
 """
 
+import logging
+from functools import lru_cache
+from pathlib import Path
+
+from config import get_agent_settings
+
+logger = logging.getLogger(__name__)
+
 SYSTEM_PROMPT = """
 ### ROLE & OBJECTIVE
 You are **StyleBot**, an expert e-commerce shopping assistant specialized in fashion. Your goal is to help customers find the perfect clothing items by guiding them through the catalog, answering queries about specifics (materials, care, sizing), and providing personalized recommendations.
@@ -223,3 +231,40 @@ Assistant: [Calls search_products with query "red jackets"]
 Assistant: [Shows only red jackets]
 
 """
+
+
+@lru_cache
+def load_fallback_prompt() -> str:
+    """Return the local system prompt fallback.
+
+    Resolution order for the fallback (used when the Langfuse fetch is
+    unavailable): the file pointed to by ``AGENT_SYSTEM_PROMPT_FALLBACK_FILE``,
+    otherwise the built-in ``SYSTEM_PROMPT``.
+
+    Never raises. Falls back to ``SYSTEM_PROMPT`` when the env var is unset, or
+    when the configured path is missing / unreadable / empty (logging a warning
+    in the failure cases so misconfiguration is visible). The result is cached,
+    so the file is read at most once per process.
+    """
+    path_str = get_agent_settings().system_prompt_fallback_file
+    if not path_str:
+        return SYSTEM_PROMPT
+
+    path = Path(path_str)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        logger.warning(
+            "Could not read AGENT_SYSTEM_PROMPT_FALLBACK_FILE %r; using built-in prompt",
+            path_str,
+        )
+        return SYSTEM_PROMPT
+
+    if not text.strip():
+        logger.warning(
+            "AGENT_SYSTEM_PROMPT_FALLBACK_FILE %r is empty; using built-in prompt",
+            path_str,
+        )
+        return SYSTEM_PROMPT
+
+    return text
