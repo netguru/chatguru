@@ -344,6 +344,32 @@ def get_langfuse_settings() -> LangfuseSettings:
     return LangfuseSettings()
 
 
+class AgentSettings(BaseSettings):
+    """Chat agent settings loaded from environment variables."""
+
+    model_config = SettingsConfigDict(
+        env_file=get_env_file_path(),
+        env_prefix="AGENT_",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+    system_prompt_fallback_file: str = Field(
+        default="",
+        description=(
+            "Path to a local .md file used as the chat system prompt fallback "
+            "when the Langfuse fetch is unavailable. Falls back to the built-in "
+            "prompt when unset or unreadable. (AGENT_SYSTEM_PROMPT_FALLBACK_FILE)"
+        ),
+    )
+
+
+@lru_cache
+def get_agent_settings() -> AgentSettings:
+    """Get chat agent settings."""
+    return AgentSettings()
+
+
 class VectorDBSettings(BaseSettings):
     """Vector database settings."""
 
