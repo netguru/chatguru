@@ -69,6 +69,10 @@ def _build_chat_llm(model: str | None = None) -> BaseChatModel:
     return ChatLiteLLM(
         model=model or settings.model,
         streaming=True,
+        # Request per-chunk token usage on streamed responses. ChatLiteLLM has
+        # no `stream_usage` flag (it is silently ignored); its typed
+        # `stream_options` field is forwarded to litellm on every stream call.
+        stream_options={"include_usage": True},
         temperature=settings.temperature,
         **_build_llm_kwargs(settings),
     )
@@ -163,6 +167,19 @@ async def _execute_tool(
         return f"Error executing tool: {e}", False
 
 
+def _accumulate_usage(
+    running: dict[str, int], message: AIMessageChunk | AIMessage
+) -> bool:
+    """Add a message's usage_metadata into *running*. Returns True if any was found."""
+    usage = getattr(message, "usage_metadata", None)
+    if not usage:
+        return False
+    running["prompt_tokens"] += int(usage.get("input_tokens", 0) or 0)
+    running["completion_tokens"] += int(usage.get("output_tokens", 0) or 0)
+    running["total_tokens"] += int(usage.get("total_tokens", 0) or 0)
+    return True
+
+
 class Agent:
     """
     Agent service for handling LLM interactions with streaming support.
@@ -215,6 +232,8 @@ class Agent:
             tool.name: tool for tool in self.tools
         }
         self._last_langfuse_handler: CallbackHandler | None = None
+        self._last_usage: dict[str, int] | None = None
+        self._last_model: str | None = None
 
     @staticmethod
     def _create_rag_tool(db: VectorDatabase) -> BaseTool:
@@ -404,6 +423,16 @@ class Agent:
             return None
         return self._last_langfuse_handler.last_trace_id
 
+    @property
+    def last_usage(self) -> dict[str, int] | None:
+        """Token usage summed across the most recent astream() turn, or None."""
+        return self._last_usage
+
+    @property
+    def last_model(self) -> str | None:
+        """Model id resolved for the most recent astream() turn."""
+        return self._last_model
+
     @staticmethod
     async def _process_tool_calls(
         full_response: AIMessageChunk | AIMessage,
@@ -499,6 +528,8 @@ class Agent:
             ``{"type": "tool_result", "name": str, "result": Any}``
         """
         self._last_langfuse_handler = None
+        self._last_usage = None
+        self._last_model = model or self._default_model
         lc_messages = Agent._build_messages_from_transcript(messages)
         # Each astream() call gets a fresh, task-local source list via ContextVar.
         turn_sources: list[dict[str, Any]] = []
@@ -600,6 +631,7 @@ class Agent:
         tool_registry: dict[str, BaseTool],
     ) -> AsyncIterator[dict[str, Any]]:
         """Run the agentic loop until no more tool calls or max iterations."""
+        running_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         for iteration in range(MAX_TOOL_ITERATIONS):
             full_response: AIMessageChunk | None = None
 
@@ -615,6 +647,11 @@ class Agent:
                 content: Any = getattr(chunk, "content", "")
                 if content:
                     yield {"type": "token", "content": str(content)}
+
+            if full_response is not None and _accumulate_usage(
+                running_usage, full_response
+            ):
+                self._last_usage = dict(running_usage)
 
             if full_response is None or not full_response.tool_calls:
                 logger.info("Agentic loop completed after %d iterations", iteration + 1)

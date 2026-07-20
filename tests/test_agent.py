@@ -541,3 +541,78 @@ class TestExtractProductQuery:
         original = "affordable"
         result = Agent._extract_product_query(original)
         assert result == original
+
+
+@pytest.mark.asyncio
+async def test_last_usage_sums_across_iterations() -> None:
+    """last_usage sums usage_metadata across every agentic-loop iteration."""
+    call_count = {"count": 0}
+
+    async def mock_astream(
+        messages: list, *, config: dict | None = None
+    ) -> AsyncIterator[AIMessageChunk]:
+        call_count["count"] += 1
+        if call_count["count"] == 1:
+            chunk = AIMessageChunk(content="Searching...")
+            chunk.tool_calls = [
+                {"name": "search_products", "args": {"query": "x"}, "id": "c1"}
+            ]
+            chunk.usage_metadata = {
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "total_tokens": 120,
+            }
+            yield chunk
+        else:
+            final = AIMessageChunk(content="Done")
+            final.usage_metadata = {
+                "input_tokens": 200,
+                "output_tokens": 30,
+                "total_tokens": 230,
+            }
+            yield final
+
+    mock_db = MagicMock()
+    mock_db.search = AsyncMock(return_value=[])
+    mock_db.format_products.return_value = "none"
+
+    with patch("src.agent.service._build_chat_llm") as mock_build:
+        mock_instance = GenericFakeChatModel(messages=iter([]))
+        object.__setattr__(mock_instance, "bind_tools", lambda tools: mock_instance)
+        object.__setattr__(mock_instance, "astream", mock_astream)
+        mock_build.return_value = mock_instance
+        agent = Agent(vector_database=mock_db)
+
+        async for _ in agent.astream(
+            [{"role": "user", "content": "x"}], model="openai/gpt-5-mini"
+        ):
+            pass
+
+    assert agent.last_usage == {
+        "prompt_tokens": 300,
+        "completion_tokens": 50,
+        "total_tokens": 350,
+    }
+    assert agent.last_model == "openai/gpt-5-mini"
+
+
+@pytest.mark.asyncio
+async def test_last_usage_is_none_without_metadata() -> None:
+    """last_usage is None when the model reports no usage_metadata."""
+
+    async def mock_astream(
+        messages: list, *, config: dict | None = None
+    ) -> AsyncIterator[AIMessageChunk]:
+        yield AIMessageChunk(content="Hi")
+
+    with patch("src.agent.service._build_chat_llm") as mock_build:
+        mock_instance = GenericFakeChatModel(messages=iter([]))
+        object.__setattr__(mock_instance, "bind_tools", lambda tools: mock_instance)
+        object.__setattr__(mock_instance, "astream", mock_astream)
+        mock_build.return_value = mock_instance
+        agent = Agent()
+        async for _ in agent.astream([{"role": "user", "content": "Hello"}]):
+            pass
+
+    assert agent.last_usage is None
+    assert agent.last_model == agent._default_model
