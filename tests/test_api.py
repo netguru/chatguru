@@ -997,6 +997,8 @@ def test_websocket_emits_tool_frames_and_usage(async_app: TestClient) -> None:
                 frames.append(data)
                 if data["type"] == "end":
                     break
+                elif data["type"] == "error":
+                    pytest.fail(data["content"])
 
     types = [f["type"] for f in frames]
     assert types.index("tool_call") < types.index("tool_result")
@@ -1017,20 +1019,92 @@ def test_websocket_flag_off_hides_tool_frames(async_app: TestClient) -> None:
     from config import get_app_settings
 
     get_app_settings.cache_clear()
-    with (
-        patch.dict("os.environ", {"TOOL_FRAMES_ENABLED": "false"}),
-        patch("api.routes.chat.Agent") as mock_agent_class,
-    ):
+    try:
+        with (
+            patch.dict("os.environ", {"TOOL_FRAMES_ENABLED": "false"}),
+            patch("api.routes.chat.Agent") as mock_agent_class,
+        ):
+            mock_agent_instance = MagicMock()
+            mock_agent_instance.last_trace_id = None
+            mock_agent_instance.get_last_used_sources.return_value = []
+            mock_agent_instance.last_usage = {
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15,
+            }
+            mock_agent_instance.last_model = "openai/gpt-5-mini"
+            mock_agent_instance.astream = _mock_astream_with_tool()
+            mock_agent_class.return_value = mock_agent_instance
+
+            with async_app.websocket_connect("/ws") as websocket:
+                websocket.send_json(
+                    {
+                        "session_id": "s1",
+                        "visitor_id": "v1",
+                        "messages": [{"role": "user", "content": "hi"}],
+                    }
+                )
+                frames = []
+                while True:
+                    data = websocket.receive_json()
+                    frames.append(data)
+                    if data["type"] == "end":
+                        break
+                    elif data["type"] == "error":
+                        pytest.fail(data["content"])
+    finally:
+        get_app_settings.cache_clear()
+
+    types = [f["type"] for f in frames]
+    assert "tool_call" not in types
+    assert "tool_result" not in types
+    end = frames[-1]
+    assert "usage" not in end
+    assert "model" not in end
+
+
+def _mock_astream_echoing_token(token: str) -> Callable[..., AsyncIterator[dict]]:
+    """Mock astream whose tool args and result echo the auth token verbatim."""
+
+    async def _gen(
+        messages: list[dict[str, str]],
+        *,
+        session_id: str | None = None,
+        visitor_id: str | None = None,
+        model: str | None = None,
+        auth_token: str | None = None,
+    ) -> AsyncIterator[dict]:
+        yield {"type": "token", "content": "Checking. "}
+        yield {
+            "type": "tool_call",
+            "name": "search_documents",
+            "args": {
+                "query": "pricing",
+                "nested": {"note": f"bearer {token}", "api_key": "SECRET"},
+                "headers": [f"Authorization: {token}"],
+            },
+        }
+        yield {
+            "type": "tool_result",
+            "name": "search_documents",
+            "result": f"MCP error: invalid token: {token}",
+        }
+        yield {"type": "token", "content": "Done."}
+
+    return _gen
+
+
+def test_websocket_scrubs_auth_token_from_tool_frames(async_app: TestClient) -> None:
+    """The forwarded auth token never appears in any frame — not in nested args,
+    not in the tool result."""
+    token = "tok-live-abc123-do-not-leak"
+    with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = None
         mock_agent_instance.get_last_used_sources.return_value = []
-        mock_agent_instance.last_usage = {
-            "prompt_tokens": 10,
-            "completion_tokens": 5,
-            "total_tokens": 15,
-        }
-        mock_agent_instance.last_model = "openai/gpt-5-mini"
-        mock_agent_instance.astream = _mock_astream_with_tool()
+        mock_agent_instance.last_usage = None
+        mock_agent_instance.last_model = None
+        mock_agent_instance.astream = _mock_astream_echoing_token(token)
         mock_agent_class.return_value = mock_agent_instance
 
         with async_app.websocket_connect("/ws") as websocket:
@@ -1038,6 +1112,7 @@ def test_websocket_flag_off_hides_tool_frames(async_app: TestClient) -> None:
                 {
                     "session_id": "s1",
                     "visitor_id": "v1",
+                    "auth_token": token,
                     "messages": [{"role": "user", "content": "hi"}],
                 }
             )
@@ -1047,11 +1122,16 @@ def test_websocket_flag_off_hides_tool_frames(async_app: TestClient) -> None:
                 frames.append(data)
                 if data["type"] == "end":
                     break
+                elif data["type"] == "error":
+                    pytest.fail(data["content"])
 
-    get_app_settings.cache_clear()
-    types = [f["type"] for f in frames]
-    assert "tool_call" not in types
-    assert "tool_result" not in types
-    end = frames[-1]
-    assert "usage" not in end
-    assert "model" not in end
+    # The token literal appears in NO frame.
+    assert token not in str(frames)
+    call = next(f for f in frames if f["type"] == "tool_call")
+    assert call["args"]["query"] == "pricing"
+    assert call["args"]["nested"]["api_key"] == "[redacted]"  # nested key redaction
+    assert call["args"]["nested"]["note"] == "bearer [redacted]"
+    assert call["args"]["headers"] == ["Authorization: [redacted]"]
+    result = next(f for f in frames if f["type"] == "tool_result")
+    assert result["result"] == "MCP error: invalid token: [redacted]"
+    assert "SECRET" not in str(frames)

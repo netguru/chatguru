@@ -73,18 +73,28 @@ def _truncate_frame_value(value: Any) -> Any:
     return value
 
 
-def _sanitize_tool_args(args: Any) -> Any:
-    """Redact auth-bearing keys and truncate long values in tool args."""
-    if not isinstance(args, dict):
-        return _truncate_frame_value(args)
-    return {
-        k: (
-            "[redacted]"
-            if k.lower() in _REDACT_TOOL_ARG_KEYS
-            else _truncate_frame_value(v)
-        )
-        for k, v in args.items()
-    }
+def _sanitize_frame_value(value: Any, *, auth_token: str | None = None) -> Any:
+    """Recursively sanitize a tool frame value before sending it to the client.
+
+    Redacts auth-bearing keys at any nesting depth, replaces every occurrence
+    of the literal *auth_token* inside string values, and truncates long strings.
+    """
+    if isinstance(value, str):
+        if auth_token:
+            value = value.replace(auth_token, "[redacted]")
+        return _truncate_frame_value(value)
+    if isinstance(value, dict):
+        return {
+            k: (
+                "[redacted]"
+                if isinstance(k, str) and k.lower() in _REDACT_TOOL_ARG_KEYS
+                else _sanitize_frame_value(v, auth_token=auth_token)
+            )
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_sanitize_frame_value(item, auth_token=auth_token) for item in value]
+    return value
 
 
 class HistoryMessage(BaseModel):
@@ -671,7 +681,7 @@ async def _stream_assistant_response(  # noqa: PLR0913
                 {
                     "type": "tool_call",
                     "name": event["name"],
-                    "args": _sanitize_tool_args(event["args"]),
+                    "args": _sanitize_frame_value(event["args"], auth_token=auth_token),
                     "session_id": session_id,
                 }
             )
@@ -680,7 +690,9 @@ async def _stream_assistant_response(  # noqa: PLR0913
                 {
                     "type": "tool_result",
                     "name": event["name"],
-                    "result": _truncate_frame_value(event["result"]),
+                    "result": _sanitize_frame_value(
+                        event["result"], auth_token=auth_token
+                    ),
                     "session_id": session_id,
                 }
             )
