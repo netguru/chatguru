@@ -26,6 +26,9 @@ import { Button } from "../ui/button";
 import { IconButton } from "../ui/icon-button";
 import { Loader } from "../ui/loader";
 import { AttachmentChip } from "./AttachmentChip";
+import { ToolCallList } from "./ToolCallList";
+
+const TOOL_CALLS_ENABLED = import.meta.env.VITE_TOOL_CALLS_ENABLED !== "false";
 
 interface Props {
   message: ChatMessageType;
@@ -186,6 +189,9 @@ export function ChatMessage({ message }: Props) {
             })()
           ) : (
             <div className={markdownProseClass}>
+              {TOOL_CALLS_ENABLED && message.toolCalls?.length ? (
+                <ToolCallList toolCalls={message.toolCalls} />
+              ) : null}
               {message.content ? (
                 <ReactMarkdown
                   remarkPlugins={[remarkGfm]}
