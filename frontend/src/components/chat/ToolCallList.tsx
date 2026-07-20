@@ -23,6 +23,7 @@ function ToolCallChip({ call }: { call: ToolCall }) {
     <div className="rounded-m border border-border-neutral-soft bg-surface-neutral-soft">
       <button
         type="button"
+        aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
         className="flex w-full items-center gap-2 px-3 py-2 text-t3 text-text-primary cursor-pointer"
       >

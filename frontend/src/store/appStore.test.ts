@@ -36,4 +36,21 @@ describe("tool-call store actions", () => {
     expect(calls[0]).toMatchObject({ args: { query: "a" }, result: "first", status: "done" });
     expect(calls[1]).toMatchObject({ args: { query: "b" }, status: "running" });
   });
+
+  it("marks running tool calls as done when the stream errors", () => {
+    const s = useAppStore.getState();
+    s.addToolCallToLastMessage("search_documents", { query: "pricing" });
+    s.markLastMessageError("Something went wrong");
+    const calls = lastAssistant().toolCalls ?? [];
+    expect(calls[0].status).toBe("done");
+    expect(calls[0].result).toBeUndefined();
+  });
+
+  it("marks running tool calls as done when the stream finalizes", () => {
+    const s = useAppStore.getState();
+    s.addToolCallToLastMessage("search_documents", { query: "pricing" });
+    s.finalizeLastMessage("All done", null);
+    const calls = lastAssistant().toolCalls ?? [];
+    expect(calls[0].status).toBe("done");
+  });
 });

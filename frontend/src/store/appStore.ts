@@ -28,6 +28,11 @@ function generateId(): string {
   return Math.random().toString(36).slice(2, 11);
 }
 
+/** Resolve any still-running tool calls so chips don't spin forever after the stream ends. */
+function settleRunningToolCalls(toolCalls: ToolCall[] | undefined): ToolCall[] | undefined {
+  return toolCalls?.map((c) => (c.status === "running" ? { ...c, status: "done" } : c));
+}
+
 function createSession(): Session {
   return {
     id: generateId(),
@@ -175,6 +180,7 @@ export const useAppStore = create<AppState>((set) => ({
           ...last,
           content,
           sources: sources ?? undefined,
+          toolCalls: settleRunningToolCalls(last.toolCalls),
           isStreaming: false,
           ...(traceId != null ? { traceId } : {}),
         };
@@ -189,7 +195,12 @@ export const useAppStore = create<AppState>((set) => ({
         const msgs = [...s.messages];
         const last = msgs[msgs.length - 1];
         if (!last?.isStreaming) return s;
-        msgs[msgs.length - 1] = { ...last, content, isStreaming: false };
+        msgs[msgs.length - 1] = {
+          ...last,
+          content,
+          toolCalls: settleRunningToolCalls(last.toolCalls),
+          isStreaming: false,
+        };
         return { ...s, messages: msgs };
       }),
     })),

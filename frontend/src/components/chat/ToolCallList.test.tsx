@@ -14,9 +14,11 @@ describe("ToolCallList", () => {
     const chip = screen.getByRole("button", { name: /search_documents/ });
     expect(chip).toBeInTheDocument();
     // Collapsed: details not shown.
+    expect(chip).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByText(/pricing/)).not.toBeInTheDocument();
     await userEvent.click(chip);
     // Expanded: args + result visible.
+    expect(chip).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText(/pricing/)).toBeInTheDocument();
     expect(screen.getByText(/3 docs/)).toBeInTheDocument();
   });
