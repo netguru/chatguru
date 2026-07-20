@@ -60,6 +60,33 @@ _MAX_LAST_USER_MESSAGE_LENGTH = 200_000  # same ceiling as _MAX_CONTENT_LENGTH
 _MAX_ATTACHMENTS_PER_MESSAGE = 5
 
 
+_REDACT_TOOL_ARG_KEYS = frozenset(
+    {"auth_token", "user_token", "token", "authorization", "api_key"}
+)
+_MAX_FRAME_VALUE_CHARS = 10_000
+
+
+def _truncate_frame_value(value: Any) -> Any:
+    """Cap long string values so frames stay small; non-strings pass through."""
+    if isinstance(value, str) and len(value) > _MAX_FRAME_VALUE_CHARS:
+        return value[:_MAX_FRAME_VALUE_CHARS] + "…[truncated]"
+    return value
+
+
+def _sanitize_tool_args(args: Any) -> Any:
+    """Redact auth-bearing keys and truncate long values in tool args."""
+    if not isinstance(args, dict):
+        return _truncate_frame_value(args)
+    return {
+        k: (
+            "[redacted]"
+            if k.lower() in _REDACT_TOOL_ARG_KEYS
+            else _truncate_frame_value(v)
+        )
+        for k, v in args.items()
+    }
+
+
 class HistoryMessage(BaseModel):
     """Individual message in conversation history."""
 
@@ -621,29 +648,46 @@ async def _stream_assistant_response(  # noqa: PLR0913
     model: str | None = None,
     auth_token: str | None = None,
 ) -> str:
-    """Stream the assistant reply token-by-token to *websocket* and return the
-    accumulated full response.
+    """Stream the assistant reply to *websocket*, emitting token and (when enabled)
+    tool_call/tool_result frames, and return the accumulated assistant text.
     """
+    frames_enabled = get_app_settings().tool_frames_enabled
     full_response = ""
-    async for chunk in agent.astream(
+    async for event in agent.astream(
         transcript,
         session_id=session_id,
         visitor_id=visitor_id,
         model=model,
         auth_token=auth_token,
     ):
-        full_response += chunk
-        await websocket.send_json(
-            {
-                "type": "token",
-                "content": chunk,
-                "session_id": session_id,
-            }
-        )
+        etype = event["type"]
+        if etype == "token":
+            full_response += event["content"]
+            await websocket.send_json(
+                {"type": "token", "content": event["content"], "session_id": session_id}
+            )
+        elif etype == "tool_call" and frames_enabled:
+            await websocket.send_json(
+                {
+                    "type": "tool_call",
+                    "name": event["name"],
+                    "args": _sanitize_tool_args(event["args"]),
+                    "session_id": session_id,
+                }
+            )
+        elif etype == "tool_result" and frames_enabled:
+            await websocket.send_json(
+                {
+                    "type": "tool_result",
+                    "name": event["name"],
+                    "result": _truncate_frame_value(event["result"]),
+                    "session_id": session_id,
+                }
+            )
     return full_response
 
 
-async def _send_end_frame(
+async def _send_end_frame(  # noqa: PLR0913
     websocket: WebSocket,
     *,
     session_id: str,
@@ -651,6 +695,8 @@ async def _send_end_frame(
     sources: list[Any],
     stored_user_attachments: list[dict[str, str]],
     trace_id: str | None,
+    usage: dict[str, int] | None = None,
+    model: str | None = None,
 ) -> None:
     """Send the terminating ``end`` frame for a chat turn."""
     end_frame: dict[str, Any] = {
@@ -660,6 +706,11 @@ async def _send_end_frame(
         "sources": sources,
         "user_attachments": stored_user_attachments,
     }
+    if get_app_settings().tool_frames_enabled:
+        if model is not None:
+            end_frame["model"] = model
+        if usage is not None:
+            end_frame["usage"] = usage
     safe_trace_id = (
         trace_id.replace("\n", "\\n").replace("\r", "\\r")
         if trace_id is not None
@@ -712,6 +763,8 @@ async def _handle_chat_turn(
     )
     sources = agent.get_last_used_sources()
     trace_id = agent.last_trace_id
+    usage = agent.last_usage
+    model = agent.last_model
 
     await _send_end_frame(
         websocket,
@@ -720,6 +773,8 @@ async def _handle_chat_turn(
         sources=sources,
         stored_user_attachments=stored_user_attachments,
         trace_id=trace_id,
+        usage=usage,
+        model=model,
     )
 
     if repo is not None:

@@ -374,7 +374,7 @@ def test_get_client_ip_ignores_proxy_headers_when_trust_proxy_disabled() -> None
 # ---------------------------------------------------------------------------
 
 
-def _mock_astream_chunks(chunks: list[str]) -> Callable[..., AsyncIterator[str]]:
+def _mock_astream_chunks(chunks: list[str]) -> Callable[..., AsyncIterator[dict]]:
     async def _gen(
         messages: list[dict[str, str]],
         *,
@@ -382,9 +382,9 @@ def _mock_astream_chunks(chunks: list[str]) -> Callable[..., AsyncIterator[str]]
         visitor_id: str | None = None,
         model: str | None = None,
         auth_token: str | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[dict]:
         for chunk in chunks:
-            yield chunk
+            yield {"type": "token", "content": chunk}
 
     return _gen
 
@@ -423,7 +423,12 @@ def test_websocket_rate_limit_allowed_continues_to_stream(
         patch("api.routes.chat.Agent") as mock_agent_class,
         patch("api.routes.chat.consume_rate_limit", new=AsyncMock(return_value=True)),
     ):
-        mock_agent = MagicMock(astream=_mock_astream_chunks(chunks), last_trace_id=None)
+        mock_agent = MagicMock(
+            astream=_mock_astream_chunks(chunks),
+            last_trace_id=None,
+            last_usage=None,
+            last_model=None,
+        )
         mock_agent.get_last_used_sources.return_value = []
         mock_agent_class.return_value = mock_agent
 
@@ -460,7 +465,12 @@ def test_websocket_rate_limit_skipped_when_ip_unknown(async_app: TestClient) -> 
         patch("api.routes.chat.consume_rate_limit", consume_mock),
         patch("api.routes.chat.get_client_ip", return_value=None),
     ):
-        mock_agent = MagicMock(astream=_mock_astream_chunks(chunks), last_trace_id=None)
+        mock_agent = MagicMock(
+            astream=_mock_astream_chunks(chunks),
+            last_trace_id=None,
+            last_usage=None,
+            last_model=None,
+        )
         mock_agent.get_last_used_sources.return_value = []
         mock_agent_class.return_value = mock_agent
 

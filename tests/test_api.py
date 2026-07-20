@@ -13,8 +13,8 @@ from api.main import create_app
 from persistence import get_chat_history_repository
 
 
-def _mock_astream(chunks: list[str]) -> Callable[..., AsyncIterator[str]]:
-    """Create a mock async generator matching ``Agent.astream`` signature."""
+def _mock_astream(chunks: list[str]) -> Callable[..., AsyncIterator[dict]]:
+    """Create a mock astream yielding token event dicts."""
 
     async def _gen(
         messages: list[dict[str, str]],
@@ -23,9 +23,9 @@ def _mock_astream(chunks: list[str]) -> Callable[..., AsyncIterator[str]]:
         visitor_id: str | None = None,
         model: str | None = None,
         auth_token: str | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[dict]:
         for chunk in chunks:
-            yield chunk
+            yield {"type": "token", "content": chunk}
 
     return _gen
 
@@ -58,6 +58,8 @@ def test_websocket_chat_success(async_app: TestClient) -> None:
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = None
         mock_agent_instance.get_last_used_sources.return_value = []
+        mock_agent_instance.last_usage = None
+        mock_agent_instance.last_model = None
         mock_agent_instance.astream = _mock_astream(chunks)
         mock_agent_class.return_value = mock_agent_instance
 
@@ -96,6 +98,8 @@ def test_websocket_chat_without_session_id(async_app: TestClient) -> None:
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = None
         mock_agent_instance.get_last_used_sources.return_value = []
+        mock_agent_instance.last_usage = None
+        mock_agent_instance.last_model = None
         mock_agent_instance.astream = _mock_astream(["Hello!"])
         mock_agent_class.return_value = mock_agent_instance
 
@@ -124,6 +128,8 @@ def test_websocket_chat_with_empty_string_session_id(async_app: TestClient) -> N
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = None
         mock_agent_instance.get_last_used_sources.return_value = []
+        mock_agent_instance.last_usage = None
+        mock_agent_instance.last_model = None
         mock_agent_instance.astream = _mock_astream(["Hello!"])
         mock_agent_class.return_value = mock_agent_instance
 
@@ -241,6 +247,8 @@ def test_websocket_streaming_multiple_chunks(async_app: TestClient) -> None:
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = None
         mock_agent_instance.get_last_used_sources.return_value = []
+        mock_agent_instance.last_usage = None
+        mock_agent_instance.last_model = None
         mock_agent_instance.astream = _mock_astream(chunks)
         mock_agent_class.return_value = mock_agent_instance
 
@@ -313,6 +321,8 @@ def test_websocket_chat_with_conversation_history(async_app: TestClient) -> None
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = None
         mock_agent_instance.get_last_used_sources.return_value = []
+        mock_agent_instance.last_usage = None
+        mock_agent_instance.last_model = None
 
         async def astream_gen(
             messages: list[dict[str, str]],
@@ -321,11 +331,11 @@ def test_websocket_chat_with_conversation_history(async_app: TestClient) -> None
             visitor_id: str | None = None,
             model: str | None = None,
             auth_token: str | None = None,
-        ) -> AsyncIterator[str]:
+        ) -> AsyncIterator[dict]:
             nonlocal received_messages
             received_messages = messages
             for chunk in chunks:
-                yield chunk
+                yield {"type": "token", "content": chunk}
 
         mock_agent_instance.astream = astream_gen
         mock_agent_class.return_value = mock_agent_instance
@@ -368,6 +378,8 @@ def test_websocket_chat_forwards_auth_token(async_app: TestClient) -> None:
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = None
         mock_agent_instance.get_last_used_sources.return_value = []
+        mock_agent_instance.last_usage = None
+        mock_agent_instance.last_model = None
 
         async def astream_gen(
             messages: list[dict[str, str]],
@@ -376,10 +388,10 @@ def test_websocket_chat_forwards_auth_token(async_app: TestClient) -> None:
             visitor_id: str | None = None,
             model: str | None = None,
             auth_token: str | None = None,
-        ) -> AsyncIterator[str]:
+        ) -> AsyncIterator[dict]:
             nonlocal received_auth_token
             received_auth_token = auth_token
-            yield "ok"
+            yield {"type": "token", "content": "ok"}
 
         mock_agent_instance.astream = astream_gen
         mock_agent_class.return_value = mock_agent_instance
@@ -434,6 +446,8 @@ def test_websocket_session_id_preserved_across_messages(async_app: TestClient) -
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = None
         mock_agent_instance.get_last_used_sources.return_value = []
+        mock_agent_instance.last_usage = None
+        mock_agent_instance.last_model = None
         mock_agent_instance.astream = _mock_astream(chunks)
         mock_agent_class.return_value = mock_agent_instance
 
@@ -481,6 +495,8 @@ def test_websocket_error_response_includes_session_id(async_app: TestClient) -> 
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = None
         mock_agent_instance.get_last_used_sources.return_value = []
+        mock_agent_instance.last_usage = None
+        mock_agent_instance.last_model = None
 
         async def astream_gen(
             messages: list[dict[str, str]],
@@ -489,7 +505,7 @@ def test_websocket_error_response_includes_session_id(async_app: TestClient) -> 
             visitor_id: str | None = None,
             model: str | None = None,
             auth_token: str | None = None,
-        ) -> AsyncIterator[str]:
+        ) -> AsyncIterator[dict]:
             raise Exception("Simulated streaming error")
             yield  # Make it a generator  # noqa: B027
 
@@ -538,6 +554,8 @@ def test_websocket_history_with_multiple_turns(async_app: TestClient) -> None:
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = None
         mock_agent_instance.get_last_used_sources.return_value = []
+        mock_agent_instance.last_usage = None
+        mock_agent_instance.last_model = None
 
         async def astream_gen(
             messages: list[dict[str, str]],
@@ -546,11 +564,11 @@ def test_websocket_history_with_multiple_turns(async_app: TestClient) -> None:
             visitor_id: str | None = None,
             model: str | None = None,
             auth_token: str | None = None,
-        ) -> AsyncIterator[str]:
+        ) -> AsyncIterator[dict]:
             nonlocal received_messages
             received_messages = messages
             for chunk in chunks:
-                yield chunk
+                yield {"type": "token", "content": chunk}
 
         mock_agent_instance.astream = astream_gen
         mock_agent_class.return_value = mock_agent_instance
@@ -602,6 +620,8 @@ def test_websocket_missing_visitor_id_returns_error(async_app: TestClient) -> No
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = None
         mock_agent_instance.get_last_used_sources.return_value = []
+        mock_agent_instance.last_usage = None
+        mock_agent_instance.last_model = None
         mock_agent_instance.astream = _mock_astream(["Hello!"])
         mock_agent_class.return_value = mock_agent_instance
 
@@ -801,6 +821,8 @@ def test_websocket_omitted_visitor_id_succeeds_without_persistence() -> None:
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = None
         mock_agent_instance.get_last_used_sources.return_value = []
+        mock_agent_instance.last_usage = None
+        mock_agent_instance.last_model = None
         mock_agent_instance.astream = _mock_astream(["Hi!"])
         mock_agent_class.return_value = mock_agent_instance
 
@@ -874,6 +896,8 @@ def test_end_frame_includes_trace_id_when_langfuse_active(
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = "trace-abc123"
         mock_agent_instance.get_last_used_sources.return_value = []
+        mock_agent_instance.last_usage = None
+        mock_agent_instance.last_model = None
         mock_agent_instance.astream = _mock_astream(["Hi!"])
         mock_agent_class.return_value = mock_agent_instance
 
@@ -901,6 +925,8 @@ def test_end_frame_omits_trace_id_when_langfuse_disabled(async_app: TestClient) 
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = None
         mock_agent_instance.get_last_used_sources.return_value = []
+        mock_agent_instance.last_usage = None
+        mock_agent_instance.last_model = None
         mock_agent_instance.astream = _mock_astream(["Hi!"])
         mock_agent_class.return_value = mock_agent_instance
 
@@ -920,3 +946,112 @@ def test_end_frame_omits_trace_id_when_langfuse_disabled(async_app: TestClient) 
                     break
                 elif data["type"] == "error":
                     pytest.fail(f"Unexpected error: {data['content']}")
+
+
+def _mock_astream_with_tool() -> Callable[..., AsyncIterator[dict]]:
+    async def _gen(
+        messages: list[dict[str, str]],
+        *,
+        session_id: str | None = None,
+        visitor_id: str | None = None,
+        model: str | None = None,
+        auth_token: str | None = None,
+    ) -> AsyncIterator[dict]:
+        yield {"type": "token", "content": "Let me check. "}
+        yield {
+            "type": "tool_call",
+            "name": "search_documents",
+            "args": {"query": "pricing", "auth_token": "SECRET"},
+        }
+        yield {"type": "tool_result", "name": "search_documents", "result": "3 docs"}
+        yield {"type": "token", "content": "Done."}
+
+    return _gen
+
+
+def test_websocket_emits_tool_frames_and_usage(async_app: TestClient) -> None:
+    with patch("api.routes.chat.Agent") as mock_agent_class:
+        mock_agent_instance = MagicMock()
+        mock_agent_instance.last_trace_id = None
+        mock_agent_instance.get_last_used_sources.return_value = []
+        mock_agent_instance.last_usage = {
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+        }
+        mock_agent_instance.last_model = "openai/gpt-5-mini"
+        mock_agent_instance.astream = _mock_astream_with_tool()
+        mock_agent_class.return_value = mock_agent_instance
+
+        with async_app.websocket_connect("/ws") as websocket:
+            websocket.send_json(
+                {
+                    "session_id": "s1",
+                    "visitor_id": "v1",
+                    "messages": [{"role": "user", "content": "hi"}],
+                }
+            )
+            frames = []
+            while True:
+                data = websocket.receive_json()
+                frames.append(data)
+                if data["type"] == "end":
+                    break
+
+    types = [f["type"] for f in frames]
+    assert types.index("tool_call") < types.index("tool_result")
+    call = next(f for f in frames if f["type"] == "tool_call")
+    assert call["name"] == "search_documents"
+    assert call["args"]["query"] == "pricing"
+    assert call["args"]["auth_token"] == "[redacted]"  # sanitized
+    result = next(f for f in frames if f["type"] == "tool_result")
+    assert result["result"] == "3 docs"
+    end = frames[-1]
+    assert end["model"] == "openai/gpt-5-mini"
+    assert end["usage"]["total_tokens"] == 15
+    # No frame anywhere leaks the raw secret.
+    assert "SECRET" not in str(frames)
+
+
+def test_websocket_flag_off_hides_tool_frames(async_app: TestClient) -> None:
+    from config import get_app_settings
+
+    get_app_settings.cache_clear()
+    with (
+        patch.dict("os.environ", {"TOOL_FRAMES_ENABLED": "false"}),
+        patch("api.routes.chat.Agent") as mock_agent_class,
+    ):
+        mock_agent_instance = MagicMock()
+        mock_agent_instance.last_trace_id = None
+        mock_agent_instance.get_last_used_sources.return_value = []
+        mock_agent_instance.last_usage = {
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+        }
+        mock_agent_instance.last_model = "openai/gpt-5-mini"
+        mock_agent_instance.astream = _mock_astream_with_tool()
+        mock_agent_class.return_value = mock_agent_instance
+
+        with async_app.websocket_connect("/ws") as websocket:
+            websocket.send_json(
+                {
+                    "session_id": "s1",
+                    "visitor_id": "v1",
+                    "messages": [{"role": "user", "content": "hi"}],
+                }
+            )
+            frames = []
+            while True:
+                data = websocket.receive_json()
+                frames.append(data)
+                if data["type"] == "end":
+                    break
+
+    get_app_settings.cache_clear()
+    types = [f["type"] for f in frames]
+    assert "tool_call" not in types
+    assert "tool_result" not in types
+    end = frames[-1]
+    assert "usage" not in end
+    assert "model" not in end
