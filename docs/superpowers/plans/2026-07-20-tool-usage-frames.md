@@ -367,18 +367,16 @@ Change `_run_agentic_loop` to accumulate into a per-call running total and store
 
 ```python
         running_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-        usage_seen = False
 ```
 
-After each inner `async for chunk` stream completes (right after the streaming loop, before the tool-call check), accumulate from the aggregated response:
+After each inner `async for chunk` stream completes (right after the streaming loop, before the tool-call check), accumulate from the aggregated response and publish the running total whenever any metadata was found:
 
 ```python
             if full_response is not None and _accumulate_usage(running_usage, full_response):
-                usage_seen = True
                 self._last_usage = dict(running_usage)
 ```
 
-(Placing the assignment inside the loop keeps `last_usage` correct even if a later iteration lacks metadata.) The `usage_seen` local guards nothing further here but documents intent; `self._last_usage` stays `None` when no metadata ever arrives.
+(Publishing inside the loop keeps `last_usage` correct across iterations; `self._last_usage` stays `None` when no metadata ever arrives.)
 
 Add the properties near `last_trace_id`:
 
