@@ -1,5 +1,12 @@
 import { create } from "zustand";
-import type { ChatMessage, HistoryMessage, Source, StoredAttachment, VectorDbType } from "../types/chat";
+import type {
+  ChatMessage,
+  HistoryMessage,
+  Source,
+  StoredAttachment,
+  ToolCall,
+  VectorDbType,
+} from "../types/chat";
 
 // ─── Session ─────────────────────────────────────────────────────────────────
 
@@ -59,6 +66,8 @@ interface AppState {
   appendTokenToLastMessage: (token: string) => void;
   finalizeLastMessage: (content: string, sources: Source[] | null, traceId?: string | null) => void;
   markLastMessageError: (content: string) => void;
+  addToolCallToLastMessage: (name: string, args: Record<string, unknown>) => void;
+  resolveToolResultOnLastMessage: (name: string, result: unknown) => void;
   addToHistory: (entry: HistoryMessage) => void;
 
   // ── Layout ────────────────────────────────────────────────────────────────
@@ -185,6 +194,39 @@ export const useAppStore = create<AppState>((set) => ({
       }),
     })),
 
+  addToolCallToLastMessage: (name, args) =>
+    set((state) => ({
+      sessions: state.sessions.map((s) => {
+        if (s.id !== state.currentSessionId) return s;
+        const msgs = [...s.messages];
+        const last = msgs[msgs.length - 1];
+        if (!last?.isStreaming) return s;
+        const toolCalls: ToolCall[] = [
+          ...(last.toolCalls ?? []),
+          { name, args, status: "running" },
+        ];
+        msgs[msgs.length - 1] = { ...last, toolCalls };
+        return { ...s, messages: msgs };
+      }),
+    })),
+
+  resolveToolResultOnLastMessage: (name, result) =>
+    set((state) => ({
+      sessions: state.sessions.map((s) => {
+        if (s.id !== state.currentSessionId) return s;
+        const msgs = [...s.messages];
+        const last = msgs[msgs.length - 1];
+        if (!last?.isStreaming || !last.toolCalls) return s;
+        const toolCalls = [...last.toolCalls];
+        // Fill the earliest still-running call with the same name.
+        const idx = toolCalls.findIndex((c) => c.name === name && c.status === "running");
+        if (idx === -1) return s;
+        toolCalls[idx] = { ...toolCalls[idx], result, status: "done" };
+        msgs[msgs.length - 1] = { ...last, toolCalls };
+        return { ...s, messages: msgs };
+      }),
+    })),
+
   addToHistory: (entry) =>
     set((state) => ({
       sessions: state.sessions.map((s) =>
@@ -238,7 +280,7 @@ export const useAppStore = create<AppState>((set) => ({
         currentSessionId:
           state.currentSessionId && mergedSessions.some((s) => s.id === state.currentSessionId)
             ? state.currentSessionId
-            : mergedSessions[0]?.id ?? null,
+            : (mergedSessions[0]?.id ?? null),
       };
     }),
 
@@ -252,7 +294,9 @@ export const useAppStore = create<AppState>((set) => ({
           content: entry.content,
           ...(entry.traceId ? { traceId: entry.traceId } : {}),
           ...(entry.sources ? { sources: entry.sources } : {}),
-          ...(entry.storedAttachments?.length ? { storedAttachments: entry.storedAttachments } : {}),
+          ...(entry.storedAttachments?.length
+            ? { storedAttachments: entry.storedAttachments }
+            : {}),
         }));
         return {
           ...s,
