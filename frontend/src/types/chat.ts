@@ -30,6 +30,21 @@ export interface Source {
   restricted?: boolean;
 }
 
+/** A tool invocation surfaced during a streamed assistant turn. */
+export interface ToolCall {
+  name: string;
+  args: Record<string, unknown>;
+  result?: unknown;
+  status: "running" | "done";
+}
+
+/** Token usage for a turn. Matches backend end-frame `usage`. */
+export interface TokenUsage {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+}
+
 export interface ChatMessage {
   id: string;
   role: MessageRole;
@@ -41,6 +56,7 @@ export interface ChatMessage {
   imageUrls?: string[];
   /** Server-persisted attachments — shown in both live chat (after end frame) and history. */
   storedAttachments?: StoredAttachment[];
+  toolCalls?: ToolCall[];
 }
 
 // Outbound WebSocket message — matches backend ChatMessage schema.
@@ -73,7 +89,7 @@ export interface LlmModelsResponse {
 // Inbound WebSocket events — aligned with backend routes/chat.py
 // Backend sends: token → … → end (or error). No 'start' event is emitted.
 // Shape: { type, content, session_id } — no request_id / timestamp / error_code.
-export type WsEventType = "token" | "end" | "error";
+export type WsEventType = "token" | "end" | "error" | "tool_call" | "tool_result";
 
 export interface WsBaseEvent {
   type: WsEventType;
@@ -83,6 +99,18 @@ export interface WsBaseEvent {
 export interface WsTokenEvent extends WsBaseEvent {
   type: "token";
   content: string;
+}
+
+export interface WsToolCallEvent extends WsBaseEvent {
+  type: "tool_call";
+  name: string;
+  args: Record<string, unknown>;
+}
+
+export interface WsToolResultEvent extends WsBaseEvent {
+  type: "tool_result";
+  name: string;
+  result: unknown;
 }
 
 // Raw source shape sent by the backend in the "end" WebSocket frame.
@@ -103,6 +131,9 @@ export interface WsEndEvent extends WsBaseEvent {
   sources?: BackendSource[] | null;
   /** Attachments stored by the backend for the preceding user message. */
   user_attachments?: StoredAttachment[];
+  model?: string;
+  usage?: TokenUsage;
+  cost_usd?: number;
 }
 
 export interface WsErrorEvent extends WsBaseEvent {
@@ -110,4 +141,10 @@ export interface WsErrorEvent extends WsBaseEvent {
   content: string;
 }
 
-export type WsEvent = WsBaseEvent | WsTokenEvent | WsEndEvent | WsErrorEvent;
+export type WsEvent =
+  | WsBaseEvent
+  | WsTokenEvent
+  | WsEndEvent
+  | WsErrorEvent
+  | WsToolCallEvent
+  | WsToolResultEvent;
