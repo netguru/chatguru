@@ -70,8 +70,6 @@ make dev
 
 ## In Use
 
-**Check the live demo at http://localhost:8000/**
-
 This is how you can use the WebSocket API in your app:
 
 ```python
@@ -224,7 +222,6 @@ make dev
 #### 5. Access the Application
 
 - **Frontend**: http://localhost:5173
-- **Test UI (Minimal)**: http://localhost:8000/  _(for smoke testing only)_
 - **Backend API**: http://localhost:8000
 - **API Documentation**: http://localhost:8000/docs
 - **WebSocket Endpoint**: ws://localhost:8000/ws
@@ -260,7 +257,6 @@ docker compose up --build
 #### 3. Access the Application
 
 - **Frontend**: http://localhost:5173
-- **Test UI (Minimal)**: http://localhost:8000/  _(for smoke testing only)_
 - **Backend API**: http://localhost:8000
 - **API Documentation**: http://localhost:8000/docs
 - **WebSocket Endpoint**: ws://localhost:8000/ws
@@ -546,7 +542,6 @@ docker run -p 8000:8000 --env-file .env chatguru-agent
 - **Backend API**: `8000` (host) → `8000` (container)
 - **Product DB**: `8001` (host) → `8001` (container)
 - **WebSocket**: `ws://localhost:8000/ws`
-- **Test UI**: `http://localhost:8000/` (minimal, not production)
 
 ### Frontend Service
 
