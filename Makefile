@@ -40,8 +40,7 @@ setup: install pre-commit-install ## Complete development setup (installs deps +
 	@echo "2. Edit .env with your credentials"
 	@echo "3. Run 'make dev' to start the backend development server"
 	@echo "4. Run 'make frontend-dev' to start the React frontend at http://localhost:5173"
-	@echo "5. Visit http://localhost:8000/ for the minimal test UI"
-	@echo "6. Visit http://localhost:8000/docs for API documentation"
+	@echo "5. Visit http://localhost:8000/docs for API documentation"
 
 env-setup: ## Copy environment template from env.example to .env
 	@echo "⚙️  Setting up environment..."
@@ -144,7 +143,6 @@ docker-run: ## Run with Docker Compose incl. frontend UI (builds and starts in f
 	@echo "🐳 Starting with Docker Compose (with frontend)..."
 	@echo "🔧 Backend API at http://localhost:8000"
 	@echo "📡 WebSocket endpoint at ws://localhost:8000/ws"
-	@echo "🧪 Minimal test UI at http://localhost:8000/"
 	docker compose --profile frontend up --build
 
 docker-run-detached: ## Run with Docker Compose incl. frontend UI in background (detached mode)
@@ -152,12 +150,10 @@ docker-run-detached: ## Run with Docker Compose incl. frontend UI in background 
 	docker compose --profile frontend up --build -d
 	@echo "🔧 Backend API at http://localhost:8000"
 	@echo "📡 WebSocket endpoint at ws://localhost:8000/ws"
-	@echo "🧪 Minimal test UI at http://localhost:8000/"
 
 docker-run-backend: ## Run backend only (no frontend UI) in foreground
 	@echo "🐳 Starting backend only (no frontend)..."
 	@echo "🔧 Backend API at http://localhost:8000"
-	@echo "🧪 Minimal test UI at http://localhost:8000/"
 	docker compose up --build
 
 docker-stop: ## Stop Docker Compose services (keeps containers)
