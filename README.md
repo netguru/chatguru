@@ -84,7 +84,9 @@ async def chat():
     async with websockets.connect(uri) as websocket:
         # Send message
         await websocket.send(json.dumps({
-            "message": "Hello, how are you?",
+            "messages": [
+                {"role": "user", "content": "Hello, how are you?"},
+            ],
             "session_id": None
         }))
 
