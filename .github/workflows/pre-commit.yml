@@ -31,7 +31,7 @@ jobs:
 
       - name: Run pre-commit hooks
         run: |
-          SKIP=no-commit-to-branch uv run pre-commit run --all-files --show-diff-on-failure
+          uv run pre-commit run --all-files --show-diff-on-failure
 
   test:
     runs-on: ubuntu-latest
