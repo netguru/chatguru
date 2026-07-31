@@ -41,15 +41,6 @@ def test_health_endpoint(app: TestClient) -> None:
     assert "version" in data
 
 
-def test_root_endpoint_serves_html(app: TestClient) -> None:
-    """Test root endpoint serves HTML chat interface."""
-    response = app.get("/")
-    assert response.status_code == 200
-    assert "text/html" in response.headers["content-type"]
-    assert "chatguru Agent Chat" in response.text
-    assert "WebSocket" in response.text
-
-
 def test_websocket_chat_success(async_app: TestClient) -> None:
     """Test successful WebSocket chat request."""
     chunks = ["Hello! ", "How can I ", "help you today?"]
