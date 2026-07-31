@@ -713,15 +713,12 @@ async def _handle_chat_turn(
     sources = agent.get_last_used_sources()
     trace_id = agent.last_trace_id
 
-    await _send_end_frame(
-        websocket,
-        session_id=session_id,
-        resolved_answer=resolved_answer,
-        sources=sources,
-        stored_user_attachments=stored_user_attachments,
-        trace_id=trace_id,
-    )
-
+    # Persist *before* the "end" frame, never after.  Clients treat "end" as
+    # terminal and may disconnect the moment they see it; anything still awaited
+    # at that point gets hard-cancelled mid-transaction, which loses the reply and
+    # can leave a half-torn-down DB connection behind.  Writing first also means
+    # the trace_id carried by the "end" frame is already resolvable by
+    # POST /feedback, which validates ownership against this row.
     if repo is not None:
         try:
             await repo.append_message(
@@ -733,13 +730,24 @@ async def _handle_chat_turn(
                 sources=json.dumps(sources) if sources else None,
             )
         except Exception:
-            # The response has already been delivered to the client via the "end"
-            # frame. Sending another frame here would violate the protocol contract
-            # (clients treat "end" as terminal). Log and move on.
+            # Deliberately swallowed: "end" is terminal by contract and must always
+            # arrive, so a persistence failure must not strand the client mid-turn.
+            # Sending an error frame instead would clobber the answer the client has
+            # already streamed. Log and still send "end".
             logger.exception(
-                "Failed to persist assistant message (session_id=%s); response already delivered",
+                "Failed to persist assistant message (session_id=%s); "
+                "delivering the response anyway",
                 session_id,
             )
+
+    await _send_end_frame(
+        websocket,
+        session_id=session_id,
+        resolved_answer=resolved_answer,
+        sources=sources,
+        stored_user_attachments=stored_user_attachments,
+        trace_id=trace_id,
+    )
 
 
 async def _parse_message(

@@ -86,3 +86,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   for managing Alembic database migrations.
 - Docker entrypoint (`docker/entrypoint.sh`) that automatically runs
   `alembic upgrade head` on container start when a SQLAlchemy URL is configured.
+
+### Fixed
+
+- **Assistant replies are no longer lost when a client disconnects.** The assistant
+  message is now persisted *before* the terminal `end` websocket frame is sent, not
+  after. Previously a client that went away on `end` (tab close, navigation, network
+  drop) had its reply silently dropped — the user turn was stored but the answer was
+  not, so it vanished on reload.
+- **`POST /feedback` no longer returns a spurious 403** for feedback submitted
+  immediately after a reply. Ownership is validated against the `trace_id` stored on
+  the assistant row, which is now committed before the `end` frame that carries that
+  same `trace_id` reaches the client.
