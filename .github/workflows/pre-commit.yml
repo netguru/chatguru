@@ -30,6 +30,11 @@ jobs:
           uv sync --extra dev
 
       - name: Run pre-commit hooks
+        env:
+          # Local-only guard rail: it blocks `git commit` while on main/master.
+          # actions/checkout checks out a real `main` branch on push events, so the
+          # hook trips here — in CI, where there is no commit to guard.
+          SKIP: no-commit-to-branch
         run: |
           uv run pre-commit run --all-files --show-diff-on-failure
 
