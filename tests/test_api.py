@@ -1,7 +1,9 @@
 """API endpoint tests."""
 
 import asyncio
+import uuid
 from collections.abc import AsyncIterator, Callable
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -10,6 +12,7 @@ from fastapi.testclient import TestClient
 from unittest.mock import AsyncMock
 
 from api.main import create_app
+from api.routes import chat as chat_routes
 from persistence import get_chat_history_repository
 
 
@@ -911,3 +914,116 @@ def test_end_frame_omits_trace_id_when_langfuse_disabled(async_app: TestClient) 
                     break
                 elif data["type"] == "error":
                     pytest.fail(f"Unexpected error: {data['content']}")
+
+
+# ============================================================================
+# Assistant-turn persistence ordering
+#
+# The assistant row must be committed *before* the terminal "end" frame goes
+# out.  Clients treat "end" as terminal and may disconnect immediately, and
+# starlette's TestClient hard-cancels the ASGI task on websocket exit — so any
+# write still in flight after "end" is lost, and a cancel landing inside the
+# transaction can leave a half-torn-down aiosqlite connection behind.
+# ============================================================================
+
+
+def test_assistant_message_is_persisted_before_the_end_frame(
+    async_app: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The assistant row is written before the terminal "end" frame is sent."""
+    events: list[str] = []
+    repo = get_chat_history_repository()
+    assert repo is not None
+    original_append = repo.append_message
+    original_send_end = chat_routes._send_end_frame
+
+    async def recording_append(**kwargs: Any) -> Any:
+        if kwargs.get("role") == "assistant":
+            events.append("persist-assistant")
+        return await original_append(**kwargs)
+
+    async def recording_send_end(*args: Any, **kwargs: Any) -> Any:
+        events.append("end-frame")
+        return await original_send_end(*args, **kwargs)
+
+    monkeypatch.setattr(repo, "append_message", recording_append)
+    monkeypatch.setattr(chat_routes, "_send_end_frame", recording_send_end)
+
+    with patch("api.routes.chat.Agent") as mock_agent_class:
+        mock_agent_instance = MagicMock()
+        mock_agent_instance.last_trace_id = None
+        mock_agent_instance.get_last_used_sources.return_value = []
+        mock_agent_instance.astream = _mock_astream(["Hi!"])
+        mock_agent_class.return_value = mock_agent_instance
+
+        with async_app.websocket_connect("/ws") as websocket:
+            websocket.send_json(
+                {
+                    "session_id": f"session-{uuid.uuid4()}",
+                    "visitor_id": f"visitor-{uuid.uuid4()}",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                }
+            )
+
+            while True:
+                data = websocket.receive_json()
+                if data["type"] == "end":
+                    break
+                if data["type"] == "error":
+                    pytest.fail(f"Unexpected error: {data['content']}")
+
+    assert events == ["persist-assistant", "end-frame"]
+
+
+def test_assistant_message_survives_client_disconnect_on_end(
+    async_app: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A client that disconnects the instant it sees "end" still gets its reply stored."""
+    visitor_id = f"visitor-{uuid.uuid4()}"
+    session_id = f"session-{uuid.uuid4()}"
+
+    repo = get_chat_history_repository()
+    assert repo is not None
+    original_append = repo.append_message
+
+    async def slow_assistant_append(**kwargs: Any) -> Any:
+        if kwargs.get("role") == "assistant":
+            # Widen the window in which a disconnect could cancel this write.
+            # asyncio.sleep holds no DB connection, so when the write happens
+            # after "end" the cancel is clean: the row is simply missing rather
+            # than wedging event-loop shutdown.
+            await asyncio.sleep(0.2)
+        return await original_append(**kwargs)
+
+    monkeypatch.setattr(repo, "append_message", slow_assistant_append)
+
+    with patch("api.routes.chat.Agent") as mock_agent_class:
+        mock_agent_instance = MagicMock()
+        mock_agent_instance.last_trace_id = None
+        mock_agent_instance.get_last_used_sources.return_value = []
+        mock_agent_instance.astream = _mock_astream(["Hello!"])
+        mock_agent_class.return_value = mock_agent_instance
+
+        with async_app.websocket_connect("/ws") as websocket:
+            websocket.send_json(
+                {
+                    "session_id": session_id,
+                    "visitor_id": visitor_id,
+                    "messages": [{"role": "user", "content": "Hi"}],
+                }
+            )
+
+            while True:
+                data = websocket.receive_json()
+                if data["type"] == "end":
+                    break
+                if data["type"] == "error":
+                    pytest.fail(f"Unexpected error: {data['content']}")
+        # Leaving the block disconnects immediately — exactly what a client that
+        # treats "end" as terminal does.
+
+    response = async_app.get(
+        "/history", params={"visitor_id": visitor_id, "session_id": session_id}
+    )
+    assert response.status_code == 200
+    assert {"role": "assistant", "content": "Hello!"} in response.json()
