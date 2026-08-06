@@ -14,15 +14,10 @@ graph LR
         UI[React/Vite Frontend<br/>frontend/] -->|WebSocket /ws| API[FastAPI API]
         API --> AGENT[Agent Service]
         AGENT --> LLM[LLM via LiteLLM<br/>any provider]
-        AGENT -->|RAG Tool| PRODUCTDB[Product DB<br/>sqlite-vec]
         AGENT -->|search_documents| DOCRAG[Document RAG Repo<br/>MongoDB]
         AGENT --> LANGFUSE[Langfuse<br/>Tracing]
-        API -.-> MINI_UI[Minimal HTML at /<br/>(tests only)]
-    end
-
-    subgraph "Future Extensions"
-        MCP[MCP Tools<br/>Commerce Platforms]
-        AGENT -.-> MCP
+        AGENT -.->|MCP tools, opt-in| MCP[MCP Servers<br/>remote tools]
+        AGENT -.->|search_products, available but disabled| PRODUCTDB[Product DB<br/>MongoDB / sqlite-vec]
     end
 ```
 
@@ -31,8 +26,8 @@ graph LR
 The system is designed to evolve from a simple chat interface to a full agentic commerce platform:
 
 **Phase 1**: Basic chat with an LLM (provider-agnostic via LiteLLM) ✅
-**Phase 2 (Current)**: RAG with sqlite-vec vector database ✅
-**Phase 3**: Integrate MCP tools for commerce platforms (PimCore, Strapi, Medusa.js, Stripe)
+**Phase 2 (Current)**: RAG with a pluggable vector database — MongoDB (Atlas Local) by default, sqlite-vec via `--profile sqlite` ✅
+**Phase 3**: MCP tool integration ✅ (opt-in); commerce-platform connectors (PimCore, Strapi, Medusa.js, Stripe) still planned
 **Phase 4**: Full agentic commerce with payment processing and order management
 
 ## Component Details
@@ -46,7 +41,7 @@ The system is designed to evolve from a simple chat interface to a full agentic 
 - **CORS Middleware**: Cross-origin resource sharing
 - **Health Checks**: Service health monitoring
 - **Request/Response Models**: Pydantic validation
-- **WebSocket Gateway**: Streaming endpoint at `/ws` (expects `message`, optional `session_id`, and `messages` history array)
+- **WebSocket Gateway**: Streaming endpoint at `/ws` (expects a `messages` transcript whose last entry is the current user turn; optional `session_id`, `visitor_id`, `model`, and `auth_token` — there is no top-level `message` field)
 
 **Key Features**:
 - Async request handling
@@ -54,31 +49,33 @@ The system is designed to evolve from a simple chat interface to a full agentic 
 - Request validation and error handling
 - CORS configuration for web clients
 
-### 2. Agent Layer (Direct LangChain)
+### 2. Agent Layer (LangChain + LiteLLM agentic loop)
 
 **Purpose**: Core AI agent logic and conversation management
 
 **Current Implementation**:
-- **Agent Service**: Direct LangChain implementation using LiteLLM (`ChatLiteLLM`)
-- **System Prompts**: Configurable prompts for different use cases
-- **Message Processing**: Human and system message handling
-- **Response Generation**: Direct LLM invocation for responses
+- **Agent Service**: LangChain + LiteLLM (`ChatLiteLLM`) driving an async, streaming tool-calling loop
+- **Agentic Loop**: `astream()` streams tokens, detects tool calls, executes them, appends results, and re-prompts until the model returns a final answer or `MAX_TOOL_ITERATIONS` (10) is reached
+- **Tools**: Built-in `search_products` and `search_documents`, plus optional remote MCP tools discovered live for each turn
+- **System Prompt**: Fetched from Langfuse (`CHAT_SYSTEM_PROMPT`) on every turn so edits apply without a redeploy; falls back to the local `agent/prompt.py` prompt when Langfuse is unavailable
+- **Multimodal**: Image attachments on the current user turn are passed to the LLM as `image_url` content blocks
 
 **Architecture**:
-- **Simplified Design**: Removed LangGraph complexity for MVP
 - **Provider-agnostic**: LiteLLM routes by model id (`openai/…`, `azure/…`, `anthropic/…`, `ollama/…`)
-- **Future Extensibility**: Ready for LangGraph reintroduction when needed
+- **Per-request model override**: A request may select any model listed in the models config; otherwise the default model is used
 - **Testing**: Uses GenericFakeChatModel for reliable testing
 
 **Workflow**:
-1. **Receive Message**: Accept user input via API
-2. **Format Messages**: Create system and human message pair
-3. **Generate Response**: Direct LLM call via LiteLLM
-4. **Return Response**: Send formatted response to client
+1. **Receive Transcript**: Accept the full conversation over the WebSocket
+2. **Build Messages**: Prepend the (Langfuse-managed) system prompt to the transcript
+3. **Stream & Iterate**: Stream tokens; when the model emits tool calls, execute them, append results, and continue the loop
+4. **Finish**: Stop when the model returns a final answer (or the iteration cap is hit) and send the terminating frame
 
-### 3. Product Database (sqlite-vec)
+### 3. Product Database (vector search — MongoDB / sqlite-vec)
 
 **Purpose**: Semantic product search with vector embeddings
+
+**Status**: Available but disabled in the current chat runtime. Built for an earlier product-search demo and since unused; the live Chatguru/Netguru assistant relies on document RAG (`search_documents`) instead. The agent is constructed with `vector_database=None` (`src/api/routes/chat.py`), so no `search_products` tool is registered at all in the live runtime — the constructor's `else` branch adds no tool, leaving only `search_documents` bound. The live Langfuse system prompt likewise does not reference product search (the local fallback prompt in `agent/prompt.py` still does). The service and code below remain in place and can be re-enabled.
 
 **Architecture**:
 - **Separate Container**: Runs as `vector-db` service on port 8001 (Docker Compose sqlite profile)
@@ -99,12 +96,15 @@ Agent → HTTP GET /search?q=... → product-db container → sqlite-vec → Res
 
 ### 4. Document RAG Repository
 
-**Purpose**: Retrieval-only document context for grounded answers (`search_documents` tool).
+**Purpose**: Grounded document context for the `search_documents` tool — retrieval with numbered citations, plus source-document serving and an ingestion pipeline.
 
 **Architecture**:
 - Port + adapter + factory + lifecycle bootstrap (mirrors persistence architecture)
 - Typed retrieval models (`DocumentRetrievalHit`, `DocumentSourceReference`)
-- MongoDB vector search adapter as first backend
+- MongoDB vector search adapter (default), with a Cosmos DB adapter alongside
+- Retrieval returns snippets tagged with stable citation numbers; the WebSocket `end` frame carries the structured sources
+- Source documents live in MongoDB GridFS and are served over `GET /documents/{path}`
+- Ingestion subsystem (`document_rag/ingestion/`, CLI-driven) runs at startup from `/app/rag_data`, guarded by a sentinel so it ingests once (see `docker/entrypoint.sh`)
 
 **Lifecycle policy**:
 - Disabled by default (`DOCUMENT_RAG_ENABLED=false`)
@@ -126,10 +126,11 @@ See [document-rag.md](document-rag.md) for implementation details.
 - **Features**: Request tracing, performance monitoring, prompt management
 - **Integration**: Automatic callback handlers
 
-#### Future MCP Tools
-- **Purpose**: Agentic commerce capabilities
-- **Integration**: Model Context Protocol for external platform access
-- **Examples**: E-commerce platforms, payment systems, inventory management
+#### MCP Tools (opt-in)
+- **Status**: Implemented and off by default; enable with `MCP_ENABLED=true` and `MCP_CONFIG_PATH`
+- **Integration**: Remote Model Context Protocol servers; tools are discovered live per turn and bound alongside the built-in tools
+- **Purpose**: Extends the agent with external capabilities (e.g. live web access, automation, and future commerce-platform access)
+- See [mcp.md](mcp.md) for configuration
 
 ## Data Flow
 
@@ -138,8 +139,8 @@ See [document-rag.md](document-rag.md) for implementation details.
 ```
 React/Vite Frontend (frontend/) → WebSocket /ws → Agent Service → LLM (via LiteLLM) → Streamed Tokens
        ↓                              ↓              ↓                ↓
-  Sends {message, messages[],     Validation     Direct LLM      Langfuse
-        session_id} payloads      & Routing      Call            Tracing
+  Sends {messages[], session_id,   Validation     Tool-calling    Langfuse
+        visitor_id, model} payload & Routing      loop (astream)  Tracing
 ```
 
 ### 2. Current Implementation
@@ -147,41 +148,33 @@ React/Vite Frontend (frontend/) → WebSocket /ws → Agent Service → LLM (via
 **Agent Service**:
 ```python
 class Agent:
-    def __init__(self) -> None:
-        self.agent = ChatLiteLLM(
-            model=settings.model,          # e.g. "openai/gpt-4o", "azure/<deployment>"
-            api_base=settings.api_base,    # optional; empty = provider default
-            api_key=settings.api_key,
-            api_version=settings.api_version,  # optional; required by some gateways
-            streaming=True,
-        )
-
-    def run(self, message: str) -> str:
-        messages = [
-            SystemMessage(content=SYSTEM_PROMPT.strip()),
-            HumanMessage(content=message),
-        ]
-        response = self.agent.invoke(messages)
-        return str(response.content)
+    async def astream(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        session_id: str | None = None,
+        visitor_id: str | None = None,
+        model: str | None = None,      # optional per-request model override
+        auth_token: str | None = None, # optional token forwarded to MCP servers
+    ) -> AsyncIterator[str]:
+        ...  # streams tokens and runs the tool-calling loop
 ```
 
-**API Request/Response**:
+**WebSocket payload** (chat is WebSocket-only — no HTTP request/response models):
 ```python
-class ChatRequest(BaseModel):
-    message: str = Field(..., min_length=1, max_length=2000)
-    session_id: str | None = Field(None)
-
-class ChatResponse(BaseModel):
-    response: str
-    session_id: str
-    metadata: dict[str, Any] = Field(default_factory=dict)
+class ChatMessage(BaseModel):
+    messages: list[HistoryMessage]   # full transcript; last entry is the current user turn
+    session_id: str | None = None
+    visitor_id: str | None = None    # required when persistence is enabled
+    model: str | None = None         # optional per-request model override
+    auth_token: str | None = None    # optional token forwarded to MCP servers
 ```
 
 ### 3. Error Handling
 
-- **API Level**: HTTP status codes and error messages
-- **Agent Level**: Graceful degradation and fallback responses
-- **External Services**: Retry logic and circuit breakers
+- **API Level**: HTTP endpoints (feedback, uploads, document serving) return standard HTTP status codes
+- **WebSocket Level**: Chat errors are sent as typed `error` frames (`{"type": "error", "error_type": ..., "content": ..., "session_id": ...}`) — e.g. invalid payload, validation failure, rate-limit exceeded, missing visitor_id, persistence write failure, internal error
+- **Agent/Tool Level**: Per-tool exceptions are caught and returned to the model as tool-result text, so the agentic loop recovers and continues instead of aborting the turn
 
 ## Whitelabel Design Considerations
 
@@ -215,8 +208,9 @@ class ChatResponse(BaseModel):
 ### 3. Configuration Management
 
 **Environment Variables**:
-- Required: LLM credentials (`LLM_MODEL`, `LLM_API_KEY`), Langfuse credentials
-- Optional: `LLM_API_BASE` / gateway settings, brand settings, feature flags
+- Required: LLM credentials — `LLM_API_KEY` in single-model mode (forwarded only when `LLM_MODEL` is set); in picker mode each provider uses its own key (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, …)
+- Model selection: set `LLM_MODEL` to pin a single model, or leave it unset to enable the multi-model picker (`litellm_models.json` + frontend ModelSelector), whose first listed model becomes the default
+- Optional: Langfuse credentials (tracing + remote prompt management; falls back to the local prompt and no-op tracing when absent), `LLM_API_BASE` / gateway settings, brand settings, feature flags
 - Development: Debug mode, logging levels
 
 **Future Database Configuration**:
@@ -234,7 +228,7 @@ class ChatResponse(BaseModel):
 
 ### 2. Data Privacy
 - Session-based conversation storage
-- No persistent user data (current)
+- Optional chat-history persistence (opt-in via `PERSISTENCE_DATABASE_URL`, Alembic-migrated SQLite/PostgreSQL); disabled by default, so the service is stateless unless configured
 - Configurable data retention
 - GDPR compliance considerations
 
@@ -271,17 +265,17 @@ class ChatResponse(BaseModel):
 - Pluggable vector store backends
 - Search optimization
 
-### 2. MCP Tool Integration
+### 2. MCP Tool Integration (implemented, opt-in)
 - Tool registration system
-- Dynamic tool loading
+- Dynamic per-turn tool loading
 - Tool-specific configuration
 - Error handling per tool
 
 ### 3. Multi-Modal Support
-- Image processing capabilities
-- Document parsing
-- Voice input/output
-- Rich media responses
+- ✅ Image input (attachments sent to the LLM as `image_url` content blocks)
+- ✅ Document parsing (Docling upload pipeline)
+- Voice input/output (future)
+- Rich media responses (future)
 
 ## Development Workflow
 
@@ -314,13 +308,13 @@ class ChatResponse(BaseModel):
 - ✅ Makefile for development workflow
 
 ### Phase 2: RAG Enhancement ✅
-- ✅ sqlite-vec vector database
+- ✅ Pluggable vector database (MongoDB default, sqlite-vec optional)
 - ✅ Product embeddings via OpenAI-compatible endpoint
 - ✅ Semantic search via RAG tool
 - ✅ Separate database container
 
 ### Phase 3: Agentic Commerce
-- MCP tool integration
+- ✅ MCP tool integration (opt-in)
 - E-commerce platform connections
 - Payment processing
 - Order management

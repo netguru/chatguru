@@ -22,6 +22,10 @@ data/
 .cursor/worktrees.json
 .DS_Store
 frontend/node_modules/
+.ai
 
 # vscode
 .vscode
+
+# JetBrains
+.idea/
