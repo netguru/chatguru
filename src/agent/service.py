@@ -492,7 +492,7 @@ class Agent:
             finally:
                 output_text = "".join(output_chunks)
                 span.update(output=output_text)
-                langfuse.update_current_trace(input=input_value, output=output_text)
+                langfuse.set_current_trace_io(input=input_value, output=output_text)
                 await flush_langfuse_async()
 
     async def astream(

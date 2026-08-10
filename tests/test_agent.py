@@ -346,7 +346,7 @@ async def test_astream_populates_trace_input_and_output() -> None:
     assert "Hi there" in str(obs_kwargs["input"])
 
     # Trace-level input/output populated so the Langfuse UI is not blank.
-    trace_kwargs = mock_langfuse.update_current_trace.call_args.kwargs
+    trace_kwargs = mock_langfuse.set_current_trace_io.call_args.kwargs
     assert "Hi there" in str(trace_kwargs["input"])
     assert trace_kwargs["output"] == "Hello world"
 
