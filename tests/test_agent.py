@@ -278,10 +278,14 @@ async def test_last_trace_id_resets_between_calls() -> None:
 
     @asynccontextmanager
     async def fake_tracing_context(
-        self: Agent, *, session_id: str | None, visitor_id: str | None
-    ) -> AsyncIterator[dict]:
+        self: Agent,
+        *,
+        session_id: str | None,
+        visitor_id: str | None,
+        input_value: object,
+    ) -> AsyncIterator[tuple[dict, list[str]]]:
         self._last_langfuse_handler = handlers.pop(0)
-        yield {}
+        yield {}, []
 
     with patch("src.agent.service._build_chat_llm") as mock_build:
         mock_instance = GenericFakeChatModel(messages=iter([]))
@@ -299,6 +303,52 @@ async def test_last_trace_id_resets_between_calls() -> None:
             async for _ in agent.astream([{"role": "user", "content": "Hello"}]):
                 pass
             assert agent.last_trace_id is None
+
+
+@pytest.mark.asyncio
+async def test_astream_populates_trace_input_and_output() -> None:
+    """The chat-response trace records the conversation input and streamed output.
+
+    Regression test: the root ``chat-response`` span (which drives the trace's
+    displayed input/output) was created empty, so Langfuse traces showed no
+    input or output even though nested generations had data.
+    """
+    chunks = ["Hello", " ", "world"]
+
+    async def mock_astream(
+        messages: list, *, config: dict | None = None
+    ) -> AsyncIterator[AIMessageChunk]:
+        for chunk in chunks:
+            yield AIMessageChunk(content=chunk)
+
+    mock_langfuse = MagicMock()
+
+    with (
+        patch("src.agent.service._build_chat_llm") as mock_build,
+        patch("src.agent.service.is_langfuse_initialized", return_value=True),
+        patch("src.agent.service.get_client", return_value=mock_langfuse),
+        patch("src.agent.service.CallbackHandler", return_value=MagicMock()),
+        patch("src.agent.service.propagate_attributes", MagicMock()),
+        patch("src.agent.service.flush_langfuse_async", new=AsyncMock()),
+    ):
+        mock_instance = GenericFakeChatModel(messages=iter([]))
+        object.__setattr__(mock_instance, "bind_tools", lambda tools: mock_instance)
+        object.__setattr__(mock_instance, "astream", mock_astream)
+        mock_build.return_value = mock_instance
+
+        agent = Agent()
+        async for _ in agent.astream([{"role": "user", "content": "Hi there"}]):
+            pass
+
+    # Root span created with the conversation transcript as its input.
+    obs_kwargs = mock_langfuse.start_as_current_observation.call_args.kwargs
+    assert obs_kwargs["name"] == "chat-response"
+    assert "Hi there" in str(obs_kwargs["input"])
+
+    # Trace-level input/output populated so the Langfuse UI is not blank.
+    trace_kwargs = mock_langfuse.update_current_trace.call_args.kwargs
+    assert "Hi there" in str(trace_kwargs["input"])
+    assert trace_kwargs["output"] == "Hello world"
 
 
 def test_agent_registers_both_document_and_product_tools() -> None:
