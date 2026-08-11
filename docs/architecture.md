@@ -75,7 +75,7 @@ The system is designed to evolve from a simple chat interface to a full agentic 
 
 **Purpose**: Semantic product search with vector embeddings
 
-**Status**: Available but disabled in the current chat runtime. Built for an earlier product-search demo and since unused; the live Chatguru/Netguru assistant relies on document RAG (`search_documents`) instead. The agent is constructed with `vector_database=None` (`src/api/routes/chat.py`), so no `search_products` tool is registered at all in the live runtime — the constructor's `else` branch adds no tool, leaving only `search_documents` bound. The live Langfuse system prompt likewise does not reference product search (the local fallback prompt in `agent/prompt.py` still does). The service and code below remain in place and can be re-enabled.
+**Status**: Present in the repo but not wired into the default chat runtime. The WebSocket handler constructs the Agent with `vector_database=None` (`src/api/routes/chat.py`), so the constructor's `else` branch (`src/agent/service.py`) registers no tool — only `search_documents` is bound. The built-in fallback system prompt (`agent/prompt.py`, StyleBot) still references `search_products`; the active prompt is fetched at runtime from Langfuse (`CHAT_SYSTEM_PROMPT`) and is not stored in this repo. The service and code below remain in place and can be re-enabled by passing a `VectorDatabase` instance to the Agent.
 
 **Architecture**:
 - **Separate Container**: Runs as `vector-db` service on port 8001 (Docker Compose sqlite profile)
