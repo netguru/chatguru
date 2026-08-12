@@ -93,6 +93,28 @@ _current_sources: ContextVar[list[dict[str, Any]]] = ContextVar("_current_source
 _IMAGE_MIME_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
 
 
+def _build_trace_input(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Build a compact Langfuse trace input from the turn transcript.
+
+    Strips base64 attachment payloads so the trace input stays small and
+    readable, keeping only attachment names and MIME types for context.
+    """
+    cleaned: list[dict[str, Any]] = []
+    for msg in messages:
+        entry: dict[str, Any] = {
+            "role": msg.get("role"),
+            "content": msg.get("content", ""),
+        }
+        attachments = msg.get("attachments")
+        if attachments:
+            entry["attachments"] = [
+                {"name": a.get("name"), "mime_type": a.get("mime_type")}
+                for a in attachments
+            ]
+        cleaned.append(entry)
+    return cleaned
+
+
 def _convert_history_to_messages(history: list[dict[str, Any]]) -> list[BaseMessage]:
     """Convert history dicts to LangChain message objects.
 
@@ -431,15 +453,23 @@ class Agent:
         *,
         session_id: str | None,
         visitor_id: str | None,
-    ) -> AsyncIterator[RunnableConfig]:
-        """Yield the LangChain ``RunnableConfig`` to use for this turn.
+        input_value: Any,
+    ) -> AsyncIterator[tuple[RunnableConfig, list[str]]]:
+        """Yield the LangChain ``RunnableConfig`` plus an output accumulator.
 
         Opens a Langfuse "chat-response" span and wires a fresh
         ``CallbackHandler`` into the config when Langfuse is initialised;
         yields an empty config otherwise.
+
+        The root ``chat-response`` span drives the trace's displayed
+        input/output, but the nested ``CallbackHandler`` generations never set
+        it. So the caller appends every streamed chunk to the yielded list and,
+        on exit, its text plus ``input_value`` are written to the span and trace
+        — otherwise the trace shows blank input/output in the Langfuse UI.
         """
+        output_chunks: list[str] = []
         if not is_langfuse_initialized():
-            yield {}
+            yield {}, output_chunks
             return
 
         langfuse = get_client()
@@ -447,7 +477,8 @@ class Agent:
             langfuse.start_as_current_observation(
                 as_type="span",
                 name="chat-response",
-            ),
+                input=input_value,
+            ) as span,
             propagate_attributes(
                 trace_name="chat-response",
                 session_id=session_id,
@@ -457,8 +488,11 @@ class Agent:
             handler = CallbackHandler()
             self._last_langfuse_handler = handler
             try:
-                yield {"callbacks": [handler]}
+                yield {"callbacks": [handler]}, output_chunks
             finally:
+                output_text = "".join(output_chunks)
+                span.update(output=output_text)
+                langfuse.set_current_trace_io(input=input_value, output=output_text)
                 await flush_langfuse_async()
 
     async def astream(
@@ -512,8 +546,10 @@ class Agent:
         async with (
             open_mcp_tools(self._mcp_connections, user_token=auth_token) as mcp_tools,
             self._tracing_context(
-                session_id=session_id, visitor_id=visitor_id
-            ) as config,
+                session_id=session_id,
+                visitor_id=visitor_id,
+                input_value=_build_trace_input(messages),
+            ) as (config, output_chunks),
         ):
             accepted = Agent._filter_mcp_tools(mcp_tools, self.tools)
             turn_llm, turn_registry = self._bind_turn_tools(base_llm, accepted)
@@ -525,6 +561,8 @@ class Agent:
             async for chunk in self._run_agentic_loop(
                 turn_messages, config, turn_llm, turn_registry
             ):
+                # Accumulate for the trace-level output written on context exit.
+                output_chunks.append(chunk)
                 yield chunk
 
     def _bind_turn_tools(
