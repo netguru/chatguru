@@ -35,7 +35,7 @@ chatguru Agent ships with WebSocket streaming, RAG capabilities, and comprehensi
 
 **Key Features:**
 - Real-time WebSocket streaming for instant responses
-- RAG-powered product search and recommendations
+- RAG-powered answers grounded in a document knowledge base
 - Comprehensive API documentation with Swagger UI
 
 ## Installation <a name="Installation"></a>
@@ -106,9 +106,8 @@ asyncio.run(chat())
 ## ✨ Features
 
 - **🚀 WebSocket Streaming**: Real-time streaming chat responses via WebSocket
-- **🧪 Minimal Test UI**: Lightweight HTML at `/` for smoke testing only
 - **🎨 Whitelabel Design**: Easily customizable for different brands and tenants
-- **🧠 RAG Capabilities**: Semantic product search with sqlite-vec vector database
+- **🧠 RAG Capabilities**: Semantic document retrieval with MongoDB Atlas Vector Search or sqlite-vec
 - **🛒 Agentic Commerce**: Ready for MCP (Model Context Protocol) integration
 - **📊 Observability**: Built-in Langfuse tracing and monitoring
 - **✅ Testing**: Comprehensive test suite with promptfoo LLM evaluation
@@ -125,13 +124,10 @@ graph LR
         UI[React/Vite Frontend<br/>frontend/] -->|WebSocket| API[FastAPI API]
         API -->|Streaming| AGENT[Agent Service]
         AGENT -->|ChatLiteLLM| LLM[LLM<br/>any provider]
-        AGENT -->|RAG Tool| PRODUCTDB[Product DB<br/>sqlite-vec]
+        AGENT -->|search_documents| DOCRAG[Document RAG<br/>MongoDB]
         AGENT --> LANGFUSE[Langfuse<br/>Tracing]
-    end
-
-    subgraph "Future Extensions"
-        MCP[MCP Tools<br/>Commerce Platforms]
-        AGENT -.-> MCP
+        AGENT -.->|MCP tools, opt-in| MCP[MCP Servers<br/>remote tools]
+        AGENT -.->|search_products, available but disabled| VECTORDB[Product Vector DB<br/>MongoDB / sqlite-vec]
     end
 ```
 
@@ -142,7 +138,7 @@ For detailed architecture documentation, see [docs/architecture.md](docs/archite
 - **Backend**: FastAPI + Uvicorn (async)
 - **AI/ML**: LangChain + LiteLLM
 - **LLM Provider**: Provider-agnostic via LiteLLM (OpenAI, Azure, Anthropic, Google, Ollama, …)
-- **Vector Search**: sqlite-vec (semantic product search)
+- **Vector Search**: MongoDB Atlas Vector Search (default) or sqlite-vec
 - **Rate Limiting**: Redis 7 + hiredis (atomic Lua per-IP quotas)
 - **Observability**: Langfuse
 - **Testing**: pytest + promptfoo + GenericFakeChatModel
@@ -258,7 +254,7 @@ docker compose up --build
 
 #### 3. Access the Application
 
-- **Frontend**: http://localhost:5173
+- **Frontend** (with `--profile frontend`): http://localhost:${FRONTEND_PORT:-80}
 - **Backend API**: http://localhost:8000
 - **API Documentation**: http://localhost:8000/docs
 - **WebSocket Endpoint**: ws://localhost:8000/ws
@@ -287,18 +283,40 @@ The application uses environment variables for configuration. Copy `env.example`
 | `APP_NAME` | Application name | `chatguru Agent` |
 | `DEBUG` | Enable debug mode | `false` |
 | `LOG_LEVEL` | Logging level | `INFO` |
-| `VECTOR_DB_TYPE` | Database type | `sqlite` |
-| `VECTOR_DB_SQLITE_URL` | SQLite service URL | `http://product-db:8001` |
+| `VECTOR_DB_TYPE` | Database type (`sqlite` or `mongodb`) | `mongodb` |
+| `VECTOR_DB_SQLITE_URL` | SQLite service URL (used when `VECTOR_DB_TYPE=sqlite`) | `http://localhost:8001` |
+| `VECTOR_DB_MONGODB_URI` | MongoDB connection URI (used when `VECTOR_DB_TYPE=mongodb`) | `mongodb://localhost:27017` |
+| `VECTOR_DB_MONGODB_API_URL` | MongoDB vector-DB API service URL | `http://localhost:8002` |
+| `VECTOR_DB_MONGODB_DATABASE` | MongoDB database name | `products` |
+| `VECTOR_DB_MONGODB_COLLECTION` | MongoDB collection name | `products` |
 | `PERSISTENCE_DATABASE_URL` | Async SQLAlchemy URL for chat history storage | *(unset — disabled)* |
 | `LLM_API_BASE` | Base URL for chat + embeddings (OpenAI-compatible endpoint or gateway, e.g. Azure APIM); empty = provider default | *(empty)* |
 | `LLM_API_VERSION` | API version, required by some gateways such as Azure | *(empty)* |
+| `LLM_TEMPERATURE` | Sampling temperature | `1` |
+| `LLM_REASONING_EFFORT` | Reasoning effort (`none`/`low`/`medium`/`high`) for models that support it; empty = model default | *(empty)* |
+| `LLM_EMBEDDING_MODEL` | Embeddings model id | `text-embedding-ada-002` |
+| `LLM_EMBEDDING_DIMENSIONS` | Embedding vector dimensions | `1536` |
+| `LLM_EMBEDDINGS_API_BASE` | Embeddings endpoint base URL; falls back to `LLM_API_BASE` when empty | *(empty)* |
+| `LLM_EMBEDDINGS_API_KEY` | Embeddings API key; falls back to `LLM_API_KEY` when empty | *(empty)* |
+| `AGENT_SYSTEM_PROMPT_FALLBACK_FILE` | Local `.md` used as the system-prompt fallback when Langfuse is unavailable | *(empty)* |
 | `TITLE_GENERATION_PROVIDER` | Title provider: `llm`, `fallback`, `custom` | `llm` |
 | `TITLE_GENERATION_CUSTOM_CLASS` | Custom class path (`module.path:ClassName`) when provider is `custom` | *(empty)* |
 | `RATE_LIMIT_ENABLED` | Enable Redis-backed per-IP rate limiting | `false` |
 | `RATE_LIMIT_REDIS_URL` | Redis connection URL | `redis://localhost:6379/0` |
 | `RATE_LIMIT_MAX_MESSAGES` | Max LLM messages per IP per fixed window | `10` |
+| `RATE_LIMIT_MAX_UPLOADS` | Max document uploads per IP per window | `10` |
 | `RATE_LIMIT_WINDOW_SECONDS` | Fixed window length in seconds (86400 = 24 h) | `86400` |
 | `RATE_LIMIT_TRUST_PROXY` | Read real IP from `X-Forwarded-For` / `X-Real-IP` (only when behind a trusted proxy) | `false` |
+| `DOCLING_ENABLED` | Enable `POST /process-document` document uploads | `true` |
+| `DOCLING_MAX_FILE_SIZE_BYTES` | Maximum upload size in bytes (20 MiB) | `20971520` |
+| `DOCLING_PICTURE_DESCRIPTION_ENABLED` | VLM image descriptions for pictures in documents | `false` |
+| `ATTACHMENT_STORAGE_ENABLED` | Enable attachment binary storage | `true` |
+| `ATTACHMENT_STORAGE_TYPE` | Storage backend (`filesystem`) | `filesystem` |
+| `ATTACHMENT_STORAGE_BASE_PATH` | Base directory for filesystem attachment storage | `./attachments` |
+| `DOCUMENT_RAG_ENABLED` | Enable the document-RAG repository and startup ingestion | `false` |
+| `DOCUMENT_RAG_BACKEND` | Document-RAG backend (`mongodb` / `cosmos`) | `mongodb` |
+| `MCP_ENABLED` | Load tools from remote MCP servers | `false` |
+| `MCP_CONFIG_PATH` | Path to the MCP servers JSON config (see [docs/mcp.md](docs/mcp.md)) | *(empty)* |
 
 #### Rate limiting (Docker)
 
@@ -371,16 +389,27 @@ Responses are streamed as JSON messages:
 
 ### REST API
 
-- **Health Check**: `GET /health`
-- **API Documentation**: `GET /docs` (Swagger UI)
-- **OpenAPI Schema**: `GET /openapi.json`
+Always available:
 
-The following endpoints are only registered when `PERSISTENCE_DATABASE_URL` is set:
+- **`GET /health`** — health check
+- **`GET /docs`** — Swagger UI; **`GET /openapi.json`** — OpenAPI schema
+- **`GET /models`** — selectable chat models for the picker (empty list hides the picker)
+- **`POST /feedback`** — record a thumbs-up/down score for an assistant message (via Langfuse)
+- **`GET /documents/{source_path}`** — stream a source document from the document-RAG store
+
+Registered only when `DOCLING_ENABLED=true` (the default):
+
+- **`POST /process-document`** — upload and ingest a document
+- **`POST /upload-attachment`** — store a chat attachment
+
+Registered only when `PERSISTENCE_DATABASE_URL` is set:
 
 - **`GET /history`** — returns stored messages for a `visitor_id` + `session_id` pair, oldest first.
   - Query params: `visitor_id` (required), `session_id` (default: `"default"`)
 - **`GET /conversations`** — returns all conversations for a `visitor_id`, newest first.
   - Query params: `visitor_id` (required)
+- **`POST /conversations/title`** — generate and persist a title for an existing conversation.
+- **`GET /attachments/{attachment_id}`** — download a stored attachment.
 
 ## 🛠️ Development
 
@@ -445,23 +474,35 @@ chatguru/
 ├── src/                     # Main application code
 │   ├── api/                 # FastAPI application
 │   │   ├── main.py         # FastAPI app setup
-│   │   ├── templates/      # Minimal HTML test UI
 │   │   └── routes/         # API routes
-│   │       └── chat.py     # WebSocket chat endpoint
+│   │       ├── chat.py     # WebSocket chat, /models, /feedback
+│   │       ├── documents.py # Document upload + attachments
+│   │       └── history.py  # Chat history (persistence)
 │   ├── agent/              # Agent implementation
 │   │   ├── service.py      # LangChain agent with streaming
 │   │   ├── prompt.py       # System prompts
 │   │   └── __init__.py
-│   ├── product_db/          # Product database (sqlite-vec)
+│   ├── vector_db/           # Vector database (sqlite-vec / MongoDB)
 │   │   ├── api.py          # FastAPI service
-│   │   ├── store.py        # ProductStore with embeddings
-│   │   ├── sqlite.py       # HTTP client for agent
+│   │   ├── store.py        # sqlite-vec store with embeddings
+│   │   ├── sqlite.py       # sqlite-vec HTTP client for agent
+│   │   ├── mongodb_store.py # MongoDB Atlas vector store
+│   │   ├── mongodb.py      # MongoDB HTTP client for agent
 │   │   ├── base.py         # Abstract interface
 │   │   └── factory.py      # Database factory
+│   ├── document_rag/        # Document RAG retrieval (MongoDB / Cosmos)
+│   ├── document_processing/ # Document ingestion (Docling)
+│   ├── attachment_storage/  # Uploaded-attachment storage
+│   ├── persistence/         # Chat history persistence (SQLAlchemy)
+│   ├── rate_limiting/       # Redis-backed per-IP rate limiting
+│   ├── title_generation/    # Conversation title providers
+│   ├── mcp_integration/     # Remote MCP tool servers
 │   ├── rag/                # RAG components
 │   │   ├── documents.py    # Document handling
 │   │   ├── simple_retriever.py  # Retriever interface
 │   │   └── products.json   # Sample products data
+│   ├── embeddings.py        # Embedding client
+│   ├── tracing.py           # Langfuse tracing setup
 │   ├── config.py           # Configuration management
 │   └── main.py             # Application entry point
 ├── tests/                  # Test suite
@@ -475,7 +516,11 @@ chatguru/
 │   └── promptfooconfig.yaml
 ├── docker/                 # Docker configuration
 │   ├── Dockerfile          # Backend Dockerfile
-│   └── Dockerfile.db       # Product database Dockerfile
+│   ├── Dockerfile.db       # SQLite vector DB Dockerfile
+│   ├── Dockerfile.mongodb  # MongoDB vector DB Dockerfile
+│   ├── Dockerfile.frontend # Frontend (nginx) Dockerfile
+│   ├── entrypoint.sh       # Backend container entrypoint
+│   └── nginx.conf          # Frontend nginx config
 ├── .pre-commit-config.yaml # Pre-commit hooks
 ├── docker-compose.yml      # Docker Compose setup
 ├── Makefile                # Development commands
@@ -540,16 +585,22 @@ docker run -p 8000:8000 --env-file .env chatguru-agent
 
 ### Ports
 
-- **Frontend**: `5173` (host) → `5173` (container)
 - **Backend API**: `8000` (host) → `8000` (container)
-- **Product DB**: `8001` (host) → `8001` (container)
+- **Vector DB (MongoDB API, default)**: `8002` (host) → `8002` (container)
+- **Vector DB (sqlite-vec, `--profile sqlite`)**: `8001` (host) → `8001` (container)
+- **Frontend (`--profile frontend`)**: `${FRONTEND_PORT:-80}` (host) → `80` (container)
 - **WebSocket**: `ws://localhost:8000/ws`
 
 ### Frontend Service
 
-The `frontend` service is included in Docker Compose and starts automatically on port 5173.
-`WS_PROXY_TARGET` controls where Vite proxies WebSocket traffic inside the Docker network
-(default: `http://chatguru-agent:8000`).
+The `frontend` service is **opt-in** behind the `frontend` profile — add `--profile frontend`
+(or run `make docker-run`) to start it; `docker compose up` alone runs the backend only. It builds
+the React app and serves the static bundle via nginx (`docker/Dockerfile.frontend`) on
+`FRONTEND_PORT` (default `80`), proxying `/ws`, `/conversations`, and `/history` to the backend.
+
+For local development the Vite dev server (`make frontend-dev`, port 5173) proxies the same routes;
+override its backend target with `API_PROXY_TARGET` / `WS_PROXY_TARGET`
+(default: `http://localhost:8000`).
 
 ## 🐛 Troubleshooting
 
