@@ -848,9 +848,10 @@ async def websocket_chat(websocket: WebSocket) -> None:
     try:
         # Legacy products vector DB is disconnected — the Chatguru/Netguru
         # consultant persona uses the document RAG knowledge base (services,
-        # case studies, etc.) instead. The Agent still registers
-        # `search_products` as a no-op stub, but the system prompt no longer
-        # mentions it, so the model has no reason to call it.
+        # case studies, etc.) instead. Passing vector_database=None means the
+        # Agent registers no `search_products` tool at all (only
+        # `search_documents` is bound), and the live Langfuse system prompt
+        # doesn't reference product search, so the model has no reason to call it.
         document_repo = get_document_rag_repository()
         agent = Agent(
             vector_database=None,
