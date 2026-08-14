@@ -58,6 +58,7 @@ The response model is typed and backend-agnostic:
   - `title: str | None`
   - `chunk_id: str | None`
   - `page: int | None`
+  - `source_url: str | None` — original page URL for HTML documents saved from the web
 
 ## Lifecycle and startup behavior
 
@@ -138,7 +139,8 @@ Example end frame:
       "title": "Guide",
       "chunk_id": "guide.pdf#3:abcd1234",
       "source_type": "pdf",
-      "page": null
+      "page": null,
+      "source_url": null
     }
   ]
 }
@@ -146,6 +148,18 @@ Example end frame:
 
 Frontend renders inline citation links from `[N]` markers in the streamed
 content and shows cited sources in the sources sidebar.
+
+When a source has a non-null `source_url` (HTML pages saved from the web),
+the frontend prefers it over the `/documents/{source_path}` proxy: inline
+`[N]` citations link to the original page, and the sidebar row opens it in a
+new tab. Sources without `source_url` behave as before (PDF/MD preview via
+the proxy; other types disabled).
+
+`source_url` is only honoured when it is an absolute `http(s)://` URL —
+`mapBackendSources` is the single gate, and anything else (a relative path,
+another scheme, an empty string) falls back to the proxy. Link targets are
+percent-encoded before being written into markdown, and the PDF `#page=N`
+fragment is appended to proxy URLs only, never to an external page.
 
 ## Fetch full documents for source panel
 
@@ -253,6 +267,20 @@ Supported file extensions by default:
 - `.md`, `.txt`, `.pdf`, `.docx`, `.html`, `.htm`
 
 You can override with `--extensions` (comma-separated).
+
+### Original page URL for saved HTML
+
+For `.html`/`.htm` files the CLI extracts the original page URL and stores it
+as `source_url` on both chunks and source files:
+
+- Chrome's `<!-- saved from url=(NNNN)https://… -->` comment wins
+- `<link rel="canonical" href="https://…">` is the fallback (absolute
+  `http(s)://` URLs only; quoted or bare attribute values)
+
+The scan reads the first 64 KB of the file and stops at the closing head tag,
+matched case-insensitively — page content, which may be user-generated, must
+not be able to supply the URL. Files without either marker get
+`source_url = null` and fall back to the `/documents` proxy in the frontend.
 
 Current ingestion adapter support:
 

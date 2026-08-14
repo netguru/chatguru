@@ -66,6 +66,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Original-page links for HTML sources** — the ingestion CLI extracts the source
+  page URL from saved HTML files (Chrome's "saved from url" comment, falling back to
+  `<link rel="canonical">`) and stores it as `source_url` on chunks and source files.
+  Inline `[N]` citations and the sources sidebar link to the original page in a new
+  tab; sources without a URL behave as before. The extracted URL is treated as
+  untrusted: only absolute `http(s)://` values are used, link targets are
+  percent-encoded before rendering, and only `<head>` is scanned so page content
+  cannot supply the URL. See [docs/document-rag.md](docs/document-rag.md).
 - **Redis-backed per-IP rate limiting** (opt-in, disabled by default). Set `RATE_LIMIT_ENABLED=true`
   to enforce a configurable message quota per IP per fixed window. The check and counter increment
   are a single atomic Redis Lua transaction — no TOCTOU gap. Proxy-trust (`RATE_LIMIT_TRUST_PROXY`)

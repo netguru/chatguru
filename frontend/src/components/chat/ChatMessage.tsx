@@ -44,13 +44,31 @@ function parseUserMessage(content: string): { documents: string[]; text: string 
   return { documents, text };
 }
 
-function isDocumentCitationHref(href: string | undefined): boolean {
-  if (!href) return false;
+const DOCUMENTS_PREFIX = "/documents/";
+
+/**
+ * Parse a citation href we can preview in-app. Anything else returns null and
+ * keeps plain new-tab link behaviour.
+ */
+function parseDocumentCitation(href: string | undefined): Source | null {
+  if (!href) return null;
+
+  let url: URL;
+  let sourceUri: string;
   try {
-    return new URL(href, window.location.origin).pathname.startsWith("/documents/");
+    url = new URL(href, window.location.origin);
+    if (url.origin !== window.location.origin) return null;
+    if (!url.pathname.startsWith(DOCUMENTS_PREFIX)) return null;
+    sourceUri = decodeURIComponent(url.pathname.slice(DOCUMENTS_PREFIX.length));
   } catch {
-    return false;
+    return null;
   }
+
+  if (!isPreviewableSource(sourceUri)) return null;
+
+  const pageMatch = url.hash.match(/^#page=(\d+)$/);
+  const page = pageMatch ? parseInt(pageMatch[1], 10) : undefined;
+  return { file: sourceUri, url: url.pathname, pages: page != null ? [page] : [] };
 }
 
 export function ChatMessage({ message }: Props) {
@@ -65,26 +83,6 @@ export function ChatMessage({ message }: Props) {
   const [feedbackGiven, setFeedbackGiven] = useState<0 | 1 | null>(null);
   const [activePreviewSource, setActivePreviewSource] = useState<Source | null>(null);
   const { submitFeedback, isSubmitting } = useFeedback();
-
-  function handleCitationLinkClick(href: string) {
-    try {
-      const url = new URL(href, window.location.origin);
-      const isDocumentLink = url.pathname.startsWith("/documents/");
-      if (!isDocumentLink) return false;
-      const sourceUri = url.pathname.replace("/documents/", "");
-      if (!isPreviewableSource(sourceUri)) return false;
-      const pageMatch = url.hash.match(/^#page=(\d+)$/);
-      const page = pageMatch ? parseInt(pageMatch[1], 10) : undefined;
-      setActivePreviewSource({
-        file: sourceUri,
-        url: url.pathname,
-        pages: page != null ? [page] : [],
-      });
-      return true;
-    } catch {
-      return false;
-    }
-  }
 
   return (
     <>
@@ -191,15 +189,15 @@ export function ChatMessage({ message }: Props) {
                   remarkPlugins={[remarkGfm]}
                   components={{
                     a: ({ node: _node, href, ...props }) => {
-                      const isDocLink = isDocumentCitationHref(href);
-                      if (isDocLink && href) {
+                      const previewSource = parseDocumentCitation(href);
+                      if (previewSource) {
                         return (
                           <a
                             {...props}
                             href={href}
                             onClick={(e) => {
                               e.preventDefault();
-                              handleCitationLinkClick(href);
+                              setActivePreviewSource(previewSource);
                             }}
                             style={{ cursor: "pointer" }}
                           />

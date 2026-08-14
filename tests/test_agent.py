@@ -241,6 +241,69 @@ async def test_agent_collects_structured_sources_from_document_tool() -> None:
     assert sources[0]["source_id"] == "doc-42"
 
 
+class _FakeHtmlDocumentRepository:
+    async def connect(self) -> None:
+        return
+
+    async def search(self, query: str, limit: int = 5) -> list:
+        from document_rag.models import DocumentRetrievalHit, DocumentSourceReference
+
+        return [
+            DocumentRetrievalHit(
+                snippet=f"Snippet for {query}",
+                score=0.91,
+                source=DocumentSourceReference(
+                    source_id="doc-html",
+                    source_uri="article.html",
+                    title="Article",
+                    source_type="html",
+                    source_url="https://example.com/articles/sample/",
+                ),
+            )
+        ]
+
+    async def close(self) -> None:
+        return
+
+
+@pytest.mark.asyncio
+async def test_agent_sources_payload_includes_source_url() -> None:
+    call_count = {"count": 0}
+
+    async def mock_astream(
+        messages: list, *, config: dict | None = None
+    ) -> AsyncIterator[AIMessageChunk]:
+        call_count["count"] += 1
+        if call_count["count"] == 1:
+            chunk = AIMessageChunk(content="Checking docs...")
+            chunk.tool_calls = [
+                {
+                    "name": "search_documents",
+                    "args": {"query": "example", "limit": 3},
+                    "id": "doc_call_1",
+                }
+            ]
+            yield chunk
+        else:
+            yield AIMessageChunk(content="Done")
+
+    with patch("src.agent.service._build_chat_llm") as mock_build:
+        mock_instance = GenericFakeChatModel(messages=iter([]))
+        object.__setattr__(mock_instance, "bind_tools", lambda tools: mock_instance)
+        object.__setattr__(mock_instance, "astream", mock_astream)
+        mock_build.return_value = mock_instance
+        agent = Agent(document_repository=_FakeHtmlDocumentRepository())
+
+        _ = [
+            chunk
+            async for chunk in agent.astream([{"role": "user", "content": "example"}])
+        ]
+
+    sources = agent.get_last_used_sources()
+    assert len(sources) == 1
+    assert sources[0]["source_url"] == "https://example.com/articles/sample/"
+
+
 @pytest.mark.asyncio
 async def test_last_trace_id_is_none_without_langfuse() -> None:
     """last_trace_id returns None when Langfuse is not initialised."""
