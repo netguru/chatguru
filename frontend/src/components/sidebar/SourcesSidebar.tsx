@@ -1,9 +1,17 @@
-import { FileIcon, FilePdfIcon, FileTextIcon, LockSimpleIcon, XIcon } from "@phosphor-icons/react";
+import {
+  ArrowSquareOutIcon,
+  FileIcon,
+  FilePdfIcon,
+  FileTextIcon,
+  GlobeIcon,
+  LockSimpleIcon,
+  XIcon,
+} from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { useAppStore } from "../../store/appStore";
 import type { Source } from "../../types/chat";
-import { isMarkdownSource, isPdfSource, isPreviewableSource } from "../../utils/sourceMapping";
+import { classifySource, type SourceKind } from "../../utils/sourceMapping";
 import { RequestAccessModal } from "../modals/RequestAccessModal";
 import { SourceViewerModal } from "../modals/SourceViewerModal";
 import {
@@ -16,6 +24,14 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from "../ui/sidebar/sidebar";
+
+const KIND_ICONS: Record<SourceKind, typeof FileIcon> = {
+  restricted: LockSimpleIcon,
+  pdf: FilePdfIcon,
+  markdown: FileTextIcon,
+  external: GlobeIcon,
+  opaque: FileIcon,
+};
 
 export function SourcesSidebar() {
   const sources = useAppStore((s) => s.sourcesPanelSources);
@@ -31,11 +47,13 @@ export function SourcesSidebar() {
     closeSourcesPanel();
   }, [pathname, currentSessionId, closeSourcesPanel]);
 
-  function handleSourceClick(source: Source) {
-    if (source.restricted) {
+  function handleSourceClick(source: Source, kind: SourceKind) {
+    if (kind === "restricted") {
       setRequestAccessSource(source);
-    } else if (isPreviewableSource(source.file)) {
+    } else if (kind === "pdf" || kind === "markdown") {
       setActivePreviewSource(source);
+    } else if (kind === "external") {
+      window.open(source.url, "_blank", "noopener,noreferrer");
     }
   }
 
@@ -61,32 +79,38 @@ export function SourcesSidebar() {
 
           <SidebarContent>
             <SidebarMenu>
-              {sources.map((source) => (
-                <SidebarMenuItem key={`${source.file}-${source.pages?.join(",")}`}>
-                  <SidebarMenuButton
-                    onClick={() => handleSourceClick(source)}
-                    disabled={!source.restricted && !isPreviewableSource(source.file)}
-                  >
-                    {source.restricted ? (
-                      <LockSimpleIcon weight="bold" />
-                    ) : isPdfSource(source.file) ? (
-                      <FilePdfIcon weight="bold" />
-                    ) : isMarkdownSource(source.file) ? (
-                      <FileTextIcon weight="bold" />
-                    ) : (
-                      <FileIcon weight="bold" />
-                    )}
-                    <div className="flex flex-col min-w-0">
-                      <span className="truncate">{source.file}</span>
-                      {(source.pages?.length ?? 0) > 0 && (
-                        <span className="text-t5 text-text-tertiary">
-                          p. {source.pages?.join(", ")}
-                        </span>
+              {sources.map((source) => {
+                const kind = classifySource(source);
+                const Icon = KIND_ICONS[kind];
+                return (
+                  <SidebarMenuItem key={`${source.file}-${source.pages?.join(",")}`}>
+                    <SidebarMenuButton
+                      onClick={() => handleSourceClick(source, kind)}
+                      disabled={kind === "opaque"}
+                    >
+                      <Icon weight="bold" />
+                      <div className="flex flex-col min-w-0">
+                        <span className="truncate">{source.file}</span>
+                        {(source.pages?.length ?? 0) > 0 && (
+                          <span className="text-t5 text-text-tertiary">
+                            p. {source.pages?.join(", ")}
+                          </span>
+                        )}
+                      </div>
+                      {kind === "external" && (
+                        <>
+                          <span className="sr-only">Opens in a new tab</span>
+                          <ArrowSquareOutIcon
+                            weight="bold"
+                            aria-hidden="true"
+                            className="ms-auto shrink-0 text-text-tertiary"
+                          />
+                        </>
                       )}
-                    </div>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                );
+              })}
             </SidebarMenu>
           </SidebarContent>
         </Sidebar>

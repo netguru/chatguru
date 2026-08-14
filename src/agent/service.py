@@ -321,6 +321,7 @@ class Agent:
                                 "chunk_id": src.chunk_id,
                                 "source_type": src.source_type,
                                 "page": src.page,
+                                "source_url": src.source_url,
                             }
                         )
                         seen[src.source_id] = len(sources)

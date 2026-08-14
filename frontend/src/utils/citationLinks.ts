@@ -1,4 +1,5 @@
 import type { Source } from "../types/chat";
+import { isExternalSourceUrl } from "./sourceMapping";
 
 /**
  * Matches citation patterns: [1], [2, p. 3], [1, p. 1–2], [1, p. 1; 2, p. 3], etc.
@@ -7,6 +8,17 @@ import type { Source } from "../types/chat";
  */
 const CITATION_RE =
   /\[(\d+)(?:,\s*p\.\s*(\d+)(?:[\u2013-]\s*\d+)?)?(?:\s*;\s*\d+\s*,\s*p\.\s*\d+(?:[\u2013-]\s*\d+)?)*\]/g;
+
+/**
+ * Source URLs come from ingested documents, so an unescaped ")" would close the
+ * link early and let the rest render as markdown of its own.
+ */
+function encodeMarkdownUrl(url: string): string {
+  return url.replace(
+    /[()<>"\s]/g,
+    (c) => `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`
+  );
+}
 
 /**
  * Collect distinct 1-based citation numbers from the text, clamped to the
@@ -37,9 +49,10 @@ export function filterCitedSources(content: string, sources: Source[]): Source[]
 
 /**
  * Inject inline citation links into response text. Replaces [1], [2], [1, p. 3],
- * [1, p. 1–2], [1, p. 1; 1, p. 2] etc. with markdown links to the document proxy URL.
- * Appends #page=N when the citation has an explicit page or the source has pages.
- * Uses source.file as link title (path). Returns text suitable for react-markdown.
+ * [1, p. 1–2], [1, p. 1; 1, p. 2] etc. with markdown links to the source's url —
+ * the document proxy, or the original page for sources saved from the web.
+ * Appends #page=N to proxy links when the citation has an explicit page or the
+ * source has pages. Uses source.file as link title (path).
  *
  * Citation numbers are compacted before link injection: e.g. if the model only
  * cited [4] out of sources 1–5, the rendered output will show [1] pointing at
@@ -72,39 +85,34 @@ export function injectCitationLinks(content: string, sources: Source[]): string 
     .map((old) => sources[old - 1])
     .filter((s): s is Source => s != null);
 
-  const sourceUrls: string[] = [];
-  const sourceTitles: string[] = [];
+  // `external` must be read off the raw url — resolving makes every url
+  // absolute, after which the http(s) test can no longer tell them apart.
+  const links = compactSources.map((s) => {
+    if (!s.url) return { url: "", title: s.file?.split(/[/\\]/).pop() ?? "", external: false };
 
-  for (const s of compactSources) {
-    if (!s.url) {
-      sourceUrls.push("");
-      sourceTitles.push(s.file?.split(/[/\\]/).pop() ?? "");
-      continue;
-    }
-    let fullUrl: string;
+    let resolved: string;
     try {
-      fullUrl = new URL(s.url, window.location.origin).toString();
+      resolved = new URL(s.url, window.location.origin).toString();
     } catch {
-      fullUrl = s.url;
+      resolved = s.url;
     }
-    sourceUrls.push(fullUrl);
-    sourceTitles.push(s.file ?? "");
-  }
+    return { url: resolved, title: s.file ?? "", external: isExternalSourceUrl(s.url) };
+  });
 
   return renumbered.replace(CITATION_RE, (match, num, pageInMatch) => {
     const idx = parseInt(num, 10) - 1;
-    if (idx < 0 || idx >= sourceUrls.length || !sourceUrls[idx]) return match;
+    const link = links[idx];
+    if (!link?.url) return match;
 
-    let u = sourceUrls[idx];
+    let u = encodeMarkdownUrl(link.url);
+
+    // #page=N is a fragment only the /documents proxy understands.
     const pageNum = pageInMatch
       ? parseInt(pageInMatch, 10)
-      : (compactSources[idx].pages?.length ?? 0) > 0
-        ? compactSources[idx].pages?.[0]
-        : null;
+      : (compactSources[idx].pages?.[0] ?? null);
+    if (!link.external && pageNum != null && pageNum > 0) u = `${u}#page=${pageNum}`;
 
-    if (pageNum != null && pageNum > 0) u = `${u}#page=${pageNum}`;
-
-    const t = sourceTitles[idx];
+    const t = link.title;
     return t ? `[${match}](${u} "${t.replace(/"/g, "&quot;")}")` : `[${match}](${u})`;
   });
 }

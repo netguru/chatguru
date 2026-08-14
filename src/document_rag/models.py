@@ -13,6 +13,7 @@ class DocumentSourceReference:
     title: str | None = None
     chunk_id: str | None = None
     page: int | None = None
+    source_url: str | None = None
 
 
 @dataclass(slots=True)
@@ -37,6 +38,7 @@ class DocumentChunk:
     content: str
     embedding: list[float]
     page: int | None = None
+    source_url: str | None = None
 
 
 @dataclass(slots=True)
@@ -49,3 +51,4 @@ class DocumentSourceFile:
     title: str
     content_bytes: bytes
     content_type: str | None = None
+    source_url: str | None = None

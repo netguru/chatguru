@@ -36,6 +36,7 @@ def projection_stage(similarity: Any) -> dict[str, Any]:
             "title": 1,
             "chunk_id": 1,
             "page": 1,
+            "source_url": 1,
             "similarity": similarity,
         }
     }
@@ -64,6 +65,9 @@ def row_to_hit(row: dict[str, Any]) -> DocumentRetrievalHit | None:
                 str(row["chunk_id"]) if row.get("chunk_id") is not None else None
             ),
             page=(int(row["page"]) if row.get("page") is not None else None),
+            source_url=(
+                str(row["source_url"]) if row.get("source_url") is not None else None
+            ),
         ),
     )
 

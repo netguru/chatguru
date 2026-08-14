@@ -274,3 +274,39 @@ async def test_mongodb_adapter_maps_snippets_and_sources() -> None:
     assert results[0].snippet == "Read me"
     assert results[0].source.source_uri == "docs/readme.md"
     assert results[0].score == 0.85
+
+
+def test_row_to_hit_maps_source_url() -> None:
+    from document_rag.adapters.mongodb import row_to_hit
+
+    hit = row_to_hit(
+        {
+            "snippet": "Example snippet",
+            "similarity": 0.9,
+            "source_id": "doc-1",
+            "source_uri": "article.html",
+            "title": "Article",
+            "chunk_id": "c-1",
+            "source_type": "html",
+            "source_url": "https://example.com/articles/sample/",
+        }
+    )
+
+    assert hit is not None
+    assert hit.source.source_url == "https://example.com/articles/sample/"
+
+
+def test_row_to_hit_source_url_none_for_pre_feature_chunk() -> None:
+    from document_rag.adapters.mongodb import row_to_hit
+
+    hit = row_to_hit(
+        {
+            "snippet": "Old chunk",
+            "similarity": 0.7,
+            "source_id": "doc-2",
+            "source_uri": "old.md",
+        }
+    )
+
+    assert hit is not None
+    assert hit.source.source_url is None

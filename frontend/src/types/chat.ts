@@ -94,6 +94,8 @@ export interface BackendSource {
   chunk_id?: string | null;
   source_type?: string | null;
   page?: number | null;
+  /** Original page URL for HTML sources saved from the web (preferred over the proxy). */
+  source_url?: string | null;
 }
 
 export interface WsEndEvent extends WsBaseEvent {

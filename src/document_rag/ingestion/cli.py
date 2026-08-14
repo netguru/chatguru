@@ -21,6 +21,70 @@ from document_rag.models import DocumentChunk, DocumentSourceFile
 
 DEFAULT_EXTENSIONS = {".md", ".txt", ".pdf", ".docx", ".html", ".htm"}
 
+# Original page URL markers embedded in HTML files saved from the web.
+# The "saved from url" comment wins over <link rel="canonical">.
+_SAVED_FROM_RE = re.compile(
+    r"<!--\s*saved from url=\(\d+\)(https?://[^\s>]+)\s*-->", re.IGNORECASE
+)
+_HEAD_END_RE = re.compile(r"</head\s*>", re.IGNORECASE)
+_LINK_TAG_RE = re.compile(r"<link\s[^>]*>", re.IGNORECASE)
+_REL_CANONICAL_RE = re.compile(
+    r"""\brel\s*=\s*(?:"\s*canonical\s*"|'\s*canonical\s*'|canonical(?=[\s/>]|$))""",
+    re.IGNORECASE,
+)
+# href value, quoted or bare — saved pages are not always well-formed HTML.
+_HREF_RE = re.compile(
+    r"""\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))""", re.IGNORECASE
+)
+
+# Canonical links can sit several KB into <head>.
+_HEAD_SCAN_BYTES = 65536
+
+_HTML_SUFFIXES = {".html", ".htm"}
+
+
+def _find_canonical_href(head: str) -> str | None:
+    for tag in _LINK_TAG_RE.finditer(head):
+        if not _REL_CANONICAL_RE.search(tag.group(0)):
+            continue
+        href = _HREF_RE.search(tag.group(0))
+        if href:
+            return next((g for g in href.groups() if g is not None), None)
+    return None
+
+
+def _extract_source_url(path: Path) -> str | None:
+    """Extract the original page URL of a saved HTML file, if present.
+
+    Only <head> is searched, so page content cannot supply a URL that later
+    renders as a citation link.
+    """
+    if path.suffix.lower() not in _HTML_SUFFIXES:
+        return None
+    try:
+        with path.open("rb") as handle:
+            head = handle.read(_HEAD_SCAN_BYTES).decode("utf-8", errors="ignore")
+    except OSError:
+        return None
+
+    head_end = _HEAD_END_RE.search(head)
+    if head_end:
+        head = head[: head_end.start()]
+
+    saved_from = _SAVED_FROM_RE.search(head)
+    if saved_from:
+        return saved_from.group(1)
+
+    canonical = _find_canonical_href(head)
+    if canonical and canonical.startswith(("http://", "https://")):
+        return canonical
+    return None
+
+
+def _extract_source_urls(files: list[Path]) -> dict[Path, str | None]:
+    """Extract each file's original page URL once, up front."""
+    return {path: _extract_source_url(path) for path in files}
+
 
 def _load_docling_converter() -> Any:
     try:
@@ -259,9 +323,11 @@ def _build_chunk_documents(
     embedder: DocumentEmbeddingProvider,
     chunk_size: int,
     chunk_overlap: int,
+    source_urls: dict[Path, str | None] | None = None,
 ) -> tuple[list[DocumentChunk], int]:
     docs: list[DocumentChunk] = []
     skipped = 0
+    urls = source_urls if source_urls is not None else _extract_source_urls(files)
 
     for file_path in files:
         relative = file_path.relative_to(source_dir).as_posix()
@@ -271,6 +337,7 @@ def _build_chunk_documents(
             skipped += 1
             continue
 
+        source_url = urls.get(file_path)
         chunk_counter = 0
         for unit_text, page in units:
             chunks = _chunk_text(
@@ -296,6 +363,7 @@ def _build_chunk_documents(
                         content=chunk,
                         embedding=vector,
                         page=page,
+                        source_url=source_url,
                     )
                 )
 
@@ -303,9 +371,13 @@ def _build_chunk_documents(
 
 
 def _build_source_files(
-    *, source_dir: Path, files: list[Path]
+    *,
+    source_dir: Path,
+    files: list[Path],
+    source_urls: dict[Path, str | None] | None = None,
 ) -> list[DocumentSourceFile]:
     sources: list[DocumentSourceFile] = []
+    urls = source_urls if source_urls is not None else _extract_source_urls(files)
     for file_path in files:
         relative = file_path.relative_to(source_dir).as_posix()
         content_type, _ = mimetypes.guess_type(str(file_path))
@@ -317,6 +389,7 @@ def _build_source_files(
                 title=file_path.stem,
                 content_bytes=file_path.read_bytes(),
                 content_type=content_type,
+                source_url=urls.get(file_path),
             )
         )
     return sources
@@ -398,7 +471,11 @@ def main() -> int:
         print("No matching files found")
         return 0
 
-    source_files = _build_source_files(source_dir=source_dir, files=files)
+    source_urls = _extract_source_urls(files)
+
+    source_files = _build_source_files(
+        source_dir=source_dir, files=files, source_urls=source_urls
+    )
     if ingestion_repo is not None:
         stored_files = ingestion_repo.upsert_source_files(source_files)
         print(f"Stored source files: {stored_files}")
@@ -413,6 +490,7 @@ def main() -> int:
         embedder=embedder,
         chunk_size=args.chunk_size,
         chunk_overlap=args.chunk_overlap,
+        source_urls=source_urls,
     )
 
     print(f"Scanned files: {len(files)}")

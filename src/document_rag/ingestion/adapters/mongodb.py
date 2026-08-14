@@ -140,6 +140,7 @@ class MongoDocumentRagIngestionRepository:
                         "content": chunk.content,
                         "embedding": chunk.embedding,
                         "page": chunk.page,
+                        "source_url": chunk.source_url,
                     }
                 },
                 upsert=True,
@@ -176,6 +177,7 @@ class MongoDocumentRagIngestionRepository:
                     "source_type": file.source_type,
                     "title": file.title,
                     "content_type": file.content_type,
+                    "source_url": file.source_url,
                 }
                 bucket.upload_from_stream(
                     file.source_uri,
