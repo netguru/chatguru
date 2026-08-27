@@ -86,12 +86,20 @@ class InlineAttachment(BaseModel):
         if self.mime_type not in ALLOWED_IMAGE_MIME_TYPES:
             msg = f"Unsupported inline attachment type '{self.mime_type}'"
             raise ValueError(msg)
+        data_len = len(self.data)
+        if data_len % 4 == 0:
+            pad = 2 if self.data.endswith("==") else 1 if self.data.endswith("=") else 0
+            estimated_size = (data_len // 4) * 3 - pad
+            if estimated_size > _MAX_IMAGE_BYTES_FOR_LLM:
+                msg = (
+                    f"Inline attachment '{self.name}' is {estimated_size} bytes, "
+                    f"over the {_MAX_IMAGE_BYTES_FOR_LLM} byte limit"
+                )
+                raise ValueError(msg)
         try:
-            # Decoded rather than derived from the encoded length: this doubles as
-            # the "is it actually base64" check, and malformed bytes would
-            # otherwise only surface as a provider error mid-turn.
+            # Decode to validate base64 and enforce the limit.
             decoded_size = len(base64.b64decode(self.data, validate=True))
-        except ValueError as exc:
+        except Exception as exc:
             msg = f"Inline attachment '{self.name}' is not valid base64"
             raise ValueError(msg) from exc
         if decoded_size > _MAX_IMAGE_BYTES_FOR_LLM:
@@ -100,7 +108,6 @@ class InlineAttachment(BaseModel):
                 f"over the {_MAX_IMAGE_BYTES_FOR_LLM} byte limit"
             )
             raise ValueError(msg)
-        return self
 
 
 class HistoryMessage(BaseModel):
