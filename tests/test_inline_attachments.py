@@ -61,6 +61,23 @@ class TestInlineAttachmentValidation:
         with pytest.raises(ValidationError, match="over the 4 byte limit"):
             InlineAttachment(name="shot.png", mime_type="image/png", data=PNG_B64)
 
+    def test_rejects_an_oversized_image_without_decoding_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The size check runs on the encoded length precisely so a hostile payload
+        # is never allocated in decoded form just to be rejected. If the checks are
+        # ever reordered, this fails instead of quietly reintroducing that.
+        monkeypatch.setattr(chat_routes, "_MAX_IMAGE_BYTES_FOR_LLM", 4)
+
+        def _fail_if_called(*_args: object, **_kwargs: object) -> bytes:
+            msg = "payload was decoded before the size check"
+            raise AssertionError(msg)
+
+        monkeypatch.setattr(chat_routes.base64, "b64decode", _fail_if_called)
+
+        with pytest.raises(ValidationError, match="over the 4 byte limit"):
+            InlineAttachment(name="big.png", mime_type="image/png", data=PNG_B64)
+
     def test_rejects_attachments_on_an_earlier_message(self) -> None:
         with pytest.raises(ValidationError, match="Only the last"):
             ChatMessage(

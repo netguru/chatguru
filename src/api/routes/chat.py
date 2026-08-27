@@ -66,6 +66,17 @@ _MAX_IMAGE_BYTES_FOR_LLM = 4 * 1024 * 1024  # 4 MB per image sent to the LLM
 _MAX_INLINE_ATTACHMENT_TOTAL_B64 = 8 * 1024 * 1024
 
 
+def _decoded_base64_size(data: str) -> int:
+    """Byte length `data` would decode to, without decoding it.
+
+    Used to enforce the size limit before allocating the decoded bytes. Padding
+    beyond two characters is not accounted for — such a string is not valid
+    base64 and is rejected by the decode that follows.
+    """
+    padding = 2 if data.endswith("==") else 1 if data.endswith("=") else 0
+    return (len(data) // 4) * 3 - padding
+
+
 class InlineAttachment(BaseModel):
     """An image handed over with the turn rather than pre-stored.
 
@@ -86,28 +97,24 @@ class InlineAttachment(BaseModel):
         if self.mime_type not in ALLOWED_IMAGE_MIME_TYPES:
             msg = f"Unsupported inline attachment type '{self.mime_type}'"
             raise ValueError(msg)
-        data_len = len(self.data)
-        if data_len % 4 == 0:
-            pad = 2 if self.data.endswith("==") else 1 if self.data.endswith("=") else 0
-            estimated_size = (data_len // 4) * 3 - pad
-            if estimated_size > _MAX_IMAGE_BYTES_FOR_LLM:
-                msg = (
-                    f"Inline attachment '{self.name}' is {estimated_size} bytes, "
-                    f"over the {_MAX_IMAGE_BYTES_FOR_LLM} byte limit"
-                )
-                raise ValueError(msg)
-        try:
-            # Decode to validate base64 and enforce the limit.
-            decoded_size = len(base64.b64decode(self.data, validate=True))
-        except Exception as exc:
-            msg = f"Inline attachment '{self.name}' is not valid base64"
-            raise ValueError(msg) from exc
+        # Size is derived from the *encoded* length and checked first, so an
+        # oversized payload is rejected without ever allocating its decoded bytes.
+        # The decode below then only has to answer "is this really base64", with
+        # its allocation already bounded by the limit above.
+        decoded_size = _decoded_base64_size(self.data)
         if decoded_size > _MAX_IMAGE_BYTES_FOR_LLM:
             msg = (
                 f"Inline attachment '{self.name}' is {decoded_size} bytes, "
                 f"over the {_MAX_IMAGE_BYTES_FOR_LLM} byte limit"
             )
             raise ValueError(msg)
+        try:
+            base64.b64decode(self.data, validate=True)
+        except ValueError as exc:
+            # binascii.Error (bad alphabet, bad padding) subclasses ValueError.
+            msg = f"Inline attachment '{self.name}' is not valid base64"
+            raise ValueError(msg) from exc
+        return self
 
 
 class HistoryMessage(BaseModel):
