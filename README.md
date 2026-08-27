@@ -363,11 +363,27 @@ The primary interface for chat is via WebSocket at `ws://localhost:8000/ws`.
 
 ```json
 {
-  "message": "Your message here",
   "session_id": "optional-session-id",
+  "visitor_id": "required-when-persistence-is-enabled",
   "messages": [
     {"role": "user", "content": "previous user message"},
-    {"role": "assistant", "content": "previous assistant response"}
+    {"role": "assistant", "content": "previous assistant response"},
+    {"role": "user", "content": "current message"}
+  ]
+}
+```
+
+The last entry is the current user turn; there is no top-level `message` field.
+It may carry images, either pre-stored or inline (last message only, max 5,
+4 MB per image, 8 MB of base64 per turn for the inline route):
+
+```json
+{
+  "role": "user",
+  "content": "what is this?",
+  "attachment_ids": ["id-from-POST-/upload-attachment"],
+  "attachments": [
+    {"name": "shot.png", "mime_type": "image/png", "data": "<base64, no data-URL prefix>"}
   ]
 }
 ```

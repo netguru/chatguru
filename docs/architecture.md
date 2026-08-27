@@ -41,7 +41,7 @@ The system is designed to evolve from a simple chat interface to a full agentic 
 - **CORS Middleware**: Cross-origin resource sharing
 - **Health Checks**: Service health monitoring
 - **Request/Response Models**: Pydantic validation
-- **WebSocket Gateway**: Streaming endpoint at `/ws` (expects a `messages` transcript whose last entry is the current user turn; optional `session_id`, `visitor_id`, `model`, and `auth_token` — there is no top-level `message` field)
+- **WebSocket Gateway**: Streaming endpoint at `/ws` (expects a `messages` transcript whose last entry is the current user turn; optional `session_id`, `visitor_id`, `model`, and `auth_token` — there is no top-level `message` field). The current turn may carry images either as `attachment_ids` (pre-stored via `POST /upload-attachment`) or inline as `attachments`
 
 **Key Features**:
 - Async request handling
@@ -58,7 +58,7 @@ The system is designed to evolve from a simple chat interface to a full agentic 
 - **Agentic Loop**: `astream()` streams tokens, detects tool calls, executes them, appends results, and re-prompts until the model returns a final answer or `MAX_TOOL_ITERATIONS` (10) is reached
 - **Tools**: Built-in `search_products` and `search_documents`, plus optional remote MCP tools discovered live for each turn
 - **System Prompt**: Fetched from Langfuse (`CHAT_SYSTEM_PROMPT`) on every turn so edits apply without a redeploy; falls back to the local `agent/prompt.py` prompt when Langfuse is unavailable
-- **Multimodal**: Image attachments on the current user turn are passed to the LLM as `image_url` content blocks
+- **Multimodal**: Image attachments on the current user turn are passed to the LLM as `image_url` content blocks. Two routes populate them and both end up in the same per-message `attachments` list: **pre-stored** (`attachment_ids`, hydrated from attachment storage — needs both that backend and chat-history persistence) and **inline** (`attachments`, base64 on the turn — for callers that have the bytes but no storage backend, e.g. a stateless deployment). Inline attachments are never persisted
 
 **Architecture**:
 - **Provider-agnostic**: LiteLLM routes by model id (`openai/…`, `azure/…`, `anthropic/…`, `ollama/…`)
@@ -168,7 +168,25 @@ class ChatMessage(BaseModel):
     visitor_id: str | None = None    # required when persistence is enabled
     model: str | None = None         # optional per-request model override
     auth_token: str | None = None    # optional token forwarded to MCP servers
+
+class HistoryMessage(BaseModel):
+    role: str
+    content: str
+    # Images for the current turn — either route, or both. Last message only.
+    attachment_ids: list[str] | None = None          # pre-stored (needs storage + persistence)
+    attachments: list[InlineAttachment] | None = None # inline base64, never persisted
+
+class InlineAttachment(BaseModel):
+    name: str
+    mime_type: str   # must be in ALLOWED_IMAGE_MIME_TYPES
+    data: str        # base64 of the image bytes, no data-URL prefix
 ```
+
+Limits on the current turn, shared across both routes: at most 5 attachments per
+message and 4 MB per image (decoded). Inline attachments additionally cap at 8 MB
+of base64 per turn, because unlike stored ones they travel in the WebSocket frame
+itself — five images at the per-image ceiling would encode past uvicorn's default
+`--ws-max-size` (16 MB) and drop the connection rather than reject a message.
 
 ### 3. Error Handling
 
@@ -272,7 +290,7 @@ class ChatMessage(BaseModel):
 - Error handling per tool
 
 ### 3. Multi-Modal Support
-- ✅ Image input (attachments sent to the LLM as `image_url` content blocks)
+- ✅ Image input (attachments sent to the LLM as `image_url` content blocks; pre-stored or inline)
 - ✅ Document parsing (Docling upload pipeline)
 - Voice input/output (future)
 - Rich media responses (future)
