@@ -66,6 +66,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Inline image attachments on the chat turn.** `HistoryMessage` accepts an
+  `attachments` list of `{name, mime_type, data}` (base64, no data-URL prefix)
+  alongside the existing `attachment_ids`, so a caller that holds the image bytes
+  but has no attachment storage or chat-history persistence configured can still
+  show the model an image. Both routes merge into the same per-message list and
+  render as `image_url` content blocks; inline attachments are **never persisted**.
+  Images only (`ALLOWED_IMAGE_MIME_TYPES`), last user message only, and the
+  existing 5-per-message and 4 MB-per-image limits are now **shared** across the
+  two routes rather than applying to each. Inline attachments additionally cap at
+  8 MB of base64 per turn, keeping the WebSocket frame under uvicorn's default
+  `--ws-max-size`. Additive and backward-compatible: an older client sending no
+  `attachments` is unaffected, and an older server ignores the field.
 - **Redis-backed per-IP rate limiting** (opt-in, disabled by default). Set `RATE_LIMIT_ENABLED=true`
   to enforce a configurable message quota per IP per fixed window. The check and counter increment
   are a single atomic Redis Lua transaction — no TOCTOU gap. Proxy-trust (`RATE_LIMIT_TRUST_PROXY`)
