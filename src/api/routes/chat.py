@@ -30,7 +30,7 @@ from api.errors import (
     ValidationFailedError,
     WebSocketErrorType,
 )
-from api.utils import get_client_ip
+from api.utils import ALLOWED_IMAGE_MIME_TYPES, get_client_ip
 from attachment_storage import get_attachment_storage, is_attachment_storage_enabled
 from config import (
     get_app_settings,
@@ -58,6 +58,49 @@ _MAX_LAST_USER_MESSAGE_LENGTH = 200_000  # same ceiling as _MAX_CONTENT_LENGTH
 
 
 _MAX_ATTACHMENTS_PER_MESSAGE = 5
+_MAX_IMAGE_BYTES_FOR_LLM = 4 * 1024 * 1024  # 4 MB per image sent to the LLM
+# Inline attachments travel in the WebSocket frame itself, unlike stored ones, so
+# the turn total is bounded well under uvicorn's default --ws-max-size (16 MB):
+# five images at the per-image ceiling would encode to ~27 MB of base64 and drop
+# the connection instead of merely skipping an image.
+_MAX_INLINE_ATTACHMENT_TOTAL_B64 = 8 * 1024 * 1024
+
+
+class InlineAttachment(BaseModel):
+    """An image handed over with the turn rather than pre-stored.
+
+    The stored route (`attachment_ids`) resolves through attachment storage *and*
+    chat-history persistence; a deployment that runs the agent statelessly has
+    neither, so a trusted server-to-server caller passes the bytes directly
+    instead. Never persisted — see `_build_transcript`.
+    """
+
+    name: str = Field(..., min_length=1, max_length=255)
+    mime_type: str = Field(..., max_length=255)
+    data: str = Field(
+        ..., description="base64 of the raw image bytes, without a data-URL prefix"
+    )
+
+    @model_validator(mode="after")
+    def ensure_supported_image(self) -> Self:
+        if self.mime_type not in ALLOWED_IMAGE_MIME_TYPES:
+            msg = f"Unsupported inline attachment type '{self.mime_type}'"
+            raise ValueError(msg)
+        try:
+            # Decoded rather than derived from the encoded length: this doubles as
+            # the "is it actually base64" check, and malformed bytes would
+            # otherwise only surface as a provider error mid-turn.
+            decoded_size = len(base64.b64decode(self.data, validate=True))
+        except ValueError as exc:
+            msg = f"Inline attachment '{self.name}' is not valid base64"
+            raise ValueError(msg) from exc
+        if decoded_size > _MAX_IMAGE_BYTES_FOR_LLM:
+            msg = (
+                f"Inline attachment '{self.name}' is {decoded_size} bytes, "
+                f"over the {_MAX_IMAGE_BYTES_FOR_LLM} byte limit"
+            )
+            raise ValueError(msg)
+        return self
 
 
 class HistoryMessage(BaseModel):
@@ -73,6 +116,15 @@ class HistoryMessage(BaseModel):
         description=(
             "IDs of pre-stored attachments (images via POST /upload-attachment, "
             "documents via POST /process-document). Only allowed on the last user message."
+        ),
+    )
+    attachments: list[InlineAttachment] | None = Field(
+        default=None,
+        max_length=_MAX_ATTACHMENTS_PER_MESSAGE,
+        description=(
+            "Images sent inline with the turn, for callers that cannot pre-store "
+            "them. Only allowed on the last user message; counts against the same "
+            "per-message limit as attachment_ids."
         ),
     )
 
@@ -130,24 +182,44 @@ class ChatMessage(BaseModel):
         ),
     )
 
+    def _validate_attachments(self) -> None:
+        """Placement and per-turn limits for both kinds of attachment."""
+        # Only the last message may carry attachments, of either kind.
+        for m in self.messages[:-1]:
+            if m.attachment_ids or m.attachments:
+                msg = "Only the last (current) message may contain attachments"
+                raise ValueError(msg)
+
+        last = self.messages[-1]
+        inline = last.attachments or []
+        # The per-message limit is about how many images one turn shows the model,
+        # so the two kinds share it rather than each getting their own five.
+        if len(last.attachment_ids or []) + len(inline) > _MAX_ATTACHMENTS_PER_MESSAGE:
+            msg = f"At most {_MAX_ATTACHMENTS_PER_MESSAGE} attachments per message"
+            raise ValueError(msg)
+
+        inline_total = sum(len(a.data) for a in inline)
+        if inline_total > _MAX_INLINE_ATTACHMENT_TOTAL_B64:
+            msg = (
+                f"Inline attachments total {inline_total} base64 bytes, "
+                f"over the {_MAX_INLINE_ATTACHMENT_TOTAL_B64} byte per-turn limit"
+            )
+            raise ValueError(msg)
+
     @model_validator(mode="after")
     def ensure_messages_valid(self) -> Self:
         if not self.messages:
             msg = "'messages' must be a non-empty array"
             raise ValueError(msg)
 
-        # Only the last message may carry attachment_ids.
-        for m in self.messages[:-1]:
-            if m.attachment_ids:
-                msg = "Only the last (current) message may contain attachment_ids"
-                raise ValueError(msg)
+        self._validate_attachments()
 
         last = self.messages[-1]
         if last.role != "user":
             msg = 'Last message in messages must have role "user" (current turn)'
             raise ValueError(msg)
 
-        has_attachments = bool(last.attachment_ids)
+        has_attachments = bool(last.attachment_ids or last.attachments)
         # When attachments are present, allow empty text content.
         if has_attachments:
             if len(last.content) > _MAX_LAST_USER_MESSAGE_LENGTH:
@@ -426,9 +498,6 @@ async def submit_feedback(payload: FeedbackRequest, request: Request) -> dict[st
     return {"status": "ok"}
 
 
-_MAX_IMAGE_BYTES_FOR_LLM = 4 * 1024 * 1024  # 4 MB per image sent to the LLM
-
-
 async def _load_image_attachments(
     *,
     attachment_ids: list[str],
@@ -518,24 +587,36 @@ async def _build_transcript(
     visitor_id: str,
     repo: "ChatHistoryRepository | None",
 ) -> list[dict[str, Any]]:
-    """Build the LLM transcript, hydrating image attachments from storage.
+    """Build the LLM transcript, gathering the current turn's image attachments.
 
-    Image bytes are loaded server-side so the client never sends raw base64
-    over the WebSocket.
+    Stored attachments are hydrated from storage, so a *browser* client never
+    sends raw base64 over the WebSocket. Inline attachments are the other route:
+    a trusted server-to-server caller with no storage or persistence backend
+    available hands the bytes over on the turn. Both land in the same
+    ``attachments`` list, which `_convert_history_to_messages` renders as
+    ``image_url`` blocks; neither is persisted from here.
     """
     last_message = chat_message.messages[-1]
     transcript: list[dict[str, Any]] = [
         {"role": m.role, "content": m.content} for m in chat_message.messages[:-1]
     ]
     current_entry: dict[str, Any] = {"role": "user", "content": last_message.content}
+    attachments: list[dict[str, str]] = []
     if last_message.attachment_ids and repo is not None:
-        image_parts = await _load_image_attachments(
-            attachment_ids=last_message.attachment_ids,
-            visitor_id=visitor_id,
-            repo=repo,
+        attachments.extend(
+            await _load_image_attachments(
+                attachment_ids=last_message.attachment_ids,
+                visitor_id=visitor_id,
+                repo=repo,
+            )
         )
-        if image_parts:
-            current_entry["attachments"] = image_parts
+    if last_message.attachments:
+        attachments.extend(
+            {"name": a.name, "mime_type": a.mime_type, "data": a.data}
+            for a in last_message.attachments
+        )
+    if attachments:
+        current_entry["attachments"] = attachments
     transcript.append(current_entry)
     return transcript
 
