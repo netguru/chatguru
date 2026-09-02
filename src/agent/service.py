@@ -217,6 +217,11 @@ def _merge_call_usage(
     cumulative snapshot of that call, not a delta, so summing them would
     double-count the input tokens. Providers that report usage exactly once
     (OpenAI) are unaffected: max of a single value is that value.
+
+    Note ``prompt_tokens`` is *inclusive* of the two cache counts: LiteLLM adds
+    ``cache_creation_input_tokens`` and ``cache_read_input_tokens`` into
+    ``prompt_tokens`` for Anthropic. They are sub-totals of it, never additions
+    to it — see ``_partition_input_tokens``.
     """
     if not usage_metadata:
         return current
@@ -245,6 +250,29 @@ def _add_turn_usage(
     if total is None:
         return dict(call_usage)
     return {key: total[key] + value for key, value in call_usage.items()}
+
+
+def _partition_input_tokens(usage: dict[str, int]) -> dict[str, int]:
+    """Split ``prompt_tokens`` into its three billing classes.
+
+    ``prompt_tokens`` is the inclusive total. The three classes bill at very
+    different rates — uncached at 1x, cache reads at 0.1x, cache writes at
+    1.25x — so a caller that prices ``prompt_tokens`` at the full input rate and
+    *then* adds the cache counts charges the cached tokens twice. Emitting the
+    uncached remainder explicitly makes the split additive and self-checking:
+
+        uncached + cache_read + cache_creation == prompt_tokens
+
+    Clamped at zero: the inclusive convention holds for Anthropic and OpenAI
+    through LiteLLM, but a provider that reported the cache counts *outside*
+    ``prompt_tokens`` would otherwise yield a negative remainder.
+    """
+    cached = usage["cache_read_input_tokens"] + usage["cache_creation_input_tokens"]
+    return {
+        **usage,
+        "uncached_input_tokens": max(0, usage["prompt_tokens"] - cached),
+        "total_tokens": usage["prompt_tokens"] + usage["completion_tokens"],
+    }
 
 
 async def _execute_tool(
@@ -785,14 +813,15 @@ class Agent:
         tool-calling turn reports the whole turn's cost. Returns ``None`` when
         the provider reported no usage, which callers must treat as "unknown"
         rather than zero.
+
+        ``prompt_tokens`` is the inclusive input total; ``uncached_input_tokens``,
+        ``cache_read_input_tokens`` and ``cache_creation_input_tokens`` partition
+        it. Price the three parts, not ``prompt_tokens`` plus the cache counts.
         """
         usage = getattr(self, "_last_turn_usage", None)
         if usage is None:
             return None
-        return {
-            **usage,
-            "total_tokens": usage["prompt_tokens"] + usage["completion_tokens"],
-        }
+        return _partition_input_tokens(usage)
 
     @property
     def last_model(self) -> str | None:

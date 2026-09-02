@@ -730,10 +730,11 @@ async def test_astream_records_usage_across_tool_calling_turn() -> None:
 
     assert agent.get_last_usage() == {
         "prompt_tokens": 24400,
-        "completion_tokens": 350,
-        "total_tokens": 24750,
+        "uncached_input_tokens": 24400 - 11800 - 11800,
         "cache_read_input_tokens": 11800,
         "cache_creation_input_tokens": 11800,
+        "completion_tokens": 350,
+        "total_tokens": 24750,
     }
 
 
@@ -795,3 +796,88 @@ def test_chat_llm_requests_usage_on_the_stream() -> None:
 
     llm = _build_chat_llm(model="anthropic/claude-sonnet-4-6")
     assert getattr(llm, "stream_options") == {"include_usage": True}
+
+
+class TestUsagePartitioning:
+    """`prompt_tokens` is inclusive of the cache counts; the split must be additive.
+
+    Numbers below are from a real Langfuse trace of a cached NGos turn:
+    call 1 = 8,764 in / 37 out with 6,799 written to cache;
+    call 2 = 8,877 in / 21 out with the same 6,799 read back.
+    """
+
+    CALL_1 = _usage(8764, 37, write=6799)
+    CALL_2 = _usage(8877, 21, read=6799)
+
+    def _turn(self) -> dict:
+        from src.agent.service import _add_turn_usage, _merge_call_usage
+
+        total = _add_turn_usage(None, _merge_call_usage(None, self.CALL_1))
+        turn = _add_turn_usage(total, _merge_call_usage(None, self.CALL_2))
+        assert turn is not None
+        return turn
+
+    def test_components_sum_to_prompt_tokens(self) -> None:
+        from src.agent.service import _partition_input_tokens
+
+        usage = _partition_input_tokens(self._turn())
+        assert (
+            usage["uncached_input_tokens"]
+            + usage["cache_read_input_tokens"]
+            + usage["cache_creation_input_tokens"]
+            == usage["prompt_tokens"]
+        )
+
+    def test_matches_the_observed_trace(self) -> None:
+        from src.agent.service import _partition_input_tokens
+
+        assert _partition_input_tokens(self._turn()) == {
+            "prompt_tokens": 8764 + 8877,
+            "uncached_input_tokens": (8764 - 6799) + (8877 - 6799),
+            "cache_read_input_tokens": 6799,
+            "cache_creation_input_tokens": 6799,
+            "completion_tokens": 58,
+            "total_tokens": 8764 + 8877 + 58,
+        }
+
+    def test_reconstructs_the_billed_cost(self) -> None:
+        """The partition must price out to what Langfuse charged for the turn."""
+        from src.agent.service import _partition_input_tokens
+
+        usage = _partition_input_tokens(self._turn())
+        rate_in, rate_out = 3e-6, 15e-6
+        cost = (
+            usage["uncached_input_tokens"] * rate_in
+            + usage["cache_read_input_tokens"] * rate_in * 0.1
+            + usage["cache_creation_input_tokens"] * rate_in * 1.25
+            + usage["completion_tokens"] * rate_out
+        )
+        assert cost == pytest.approx(0.031946 + 0.008589, abs=1e-5)
+
+    def test_naive_pricing_overcharges(self) -> None:
+        """Guards the reason uncached_input_tokens exists at all."""
+        from src.agent.service import _partition_input_tokens
+
+        usage = _partition_input_tokens(self._turn())
+        naive = usage["prompt_tokens"] * 3e-6  # cache tokens billed at full rate
+        correct = (
+            usage["uncached_input_tokens"] * 3e-6
+            + usage["cache_read_input_tokens"] * 3e-7
+            + usage["cache_creation_input_tokens"] * 3.75e-6
+        )
+        # Naive pricing overcharges this turn by ~33%.
+        assert naive > correct * 1.3
+
+    def test_remainder_clamped_when_counts_are_not_inclusive(self) -> None:
+        """A provider reporting cache counts outside prompt_tokens must not go negative."""
+        from src.agent.service import _partition_input_tokens
+
+        usage = _partition_input_tokens(
+            {
+                "prompt_tokens": 100,
+                "completion_tokens": 5,
+                "cache_read_input_tokens": 900,
+                "cache_creation_input_tokens": 0,
+            }
+        )
+        assert usage["uncached_input_tokens"] == 0

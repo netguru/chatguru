@@ -952,13 +952,20 @@ async def websocket_chat(websocket: WebSocket) -> None:
         "trace_id": "langfuse-trace-id",  # end frames only, omitted when Langfuse is disabled
         # end frames only, omitted when the provider reported no usage.
         # Counts cover every LLM call the agentic loop made for the turn.
+        #
+        # "prompt_tokens" is the INCLUSIVE input total. The next three fields
+        # partition it and bill at different rates, so cost is
+        #     uncached x 1.0 + cache_read x 0.1 + cache_creation x 1.25
+        # Pricing "prompt_tokens" at the full input rate and then adding the
+        # cache counts double-charges every cached token.
         "model": "anthropic/claude-sonnet-4-6",
         "usage": {
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0,
+            "prompt_tokens": 0,          # == uncached + cache_read + cache_creation
+            "uncached_input_tokens": 0,
             "cache_read_input_tokens": 0,
-            "cache_creation_input_tokens": 0
+            "cache_creation_input_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0            # prompt_tokens + completion_tokens
         }
     }
     """
