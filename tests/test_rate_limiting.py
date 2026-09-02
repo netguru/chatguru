@@ -425,6 +425,8 @@ def test_websocket_rate_limit_allowed_continues_to_stream(
     ):
         mock_agent = MagicMock(astream=_mock_astream_chunks(chunks), last_trace_id=None)
         mock_agent.get_last_used_sources.return_value = []
+        mock_agent.get_last_usage.return_value = None
+        mock_agent.last_model = None
         mock_agent_class.return_value = mock_agent
 
         with async_app.websocket_connect("/ws") as ws:
@@ -462,6 +464,8 @@ def test_websocket_rate_limit_skipped_when_ip_unknown(async_app: TestClient) -> 
     ):
         mock_agent = MagicMock(astream=_mock_astream_chunks(chunks), last_trace_id=None)
         mock_agent.get_last_used_sources.return_value = []
+        mock_agent.get_last_usage.return_value = None
+        mock_agent.last_model = None
         mock_agent_class.return_value = mock_agent
 
         with async_app.websocket_connect("/ws") as ws:

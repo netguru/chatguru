@@ -51,6 +51,8 @@ def test_websocket_chat_success(async_app: TestClient) -> None:
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = None
+        mock_agent_instance.last_model = None
+        mock_agent_instance.get_last_usage.return_value = None
         mock_agent_instance.get_last_used_sources.return_value = []
         mock_agent_instance.astream = _mock_astream(chunks)
         mock_agent_class.return_value = mock_agent_instance
@@ -89,6 +91,8 @@ def test_websocket_chat_without_session_id(async_app: TestClient) -> None:
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = None
+        mock_agent_instance.last_model = None
+        mock_agent_instance.get_last_usage.return_value = None
         mock_agent_instance.get_last_used_sources.return_value = []
         mock_agent_instance.astream = _mock_astream(["Hello!"])
         mock_agent_class.return_value = mock_agent_instance
@@ -117,6 +121,8 @@ def test_websocket_chat_with_empty_string_session_id(async_app: TestClient) -> N
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = None
+        mock_agent_instance.last_model = None
+        mock_agent_instance.get_last_usage.return_value = None
         mock_agent_instance.get_last_used_sources.return_value = []
         mock_agent_instance.astream = _mock_astream(["Hello!"])
         mock_agent_class.return_value = mock_agent_instance
@@ -234,6 +240,8 @@ def test_websocket_streaming_multiple_chunks(async_app: TestClient) -> None:
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = None
+        mock_agent_instance.last_model = None
+        mock_agent_instance.get_last_usage.return_value = None
         mock_agent_instance.get_last_used_sources.return_value = []
         mock_agent_instance.astream = _mock_astream(chunks)
         mock_agent_class.return_value = mock_agent_instance
@@ -306,6 +314,8 @@ def test_websocket_chat_with_conversation_history(async_app: TestClient) -> None
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = None
+        mock_agent_instance.last_model = None
+        mock_agent_instance.get_last_usage.return_value = None
         mock_agent_instance.get_last_used_sources.return_value = []
 
         async def astream_gen(
@@ -361,6 +371,8 @@ def test_websocket_chat_forwards_auth_token(async_app: TestClient) -> None:
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = None
+        mock_agent_instance.last_model = None
+        mock_agent_instance.get_last_usage.return_value = None
         mock_agent_instance.get_last_used_sources.return_value = []
 
         async def astream_gen(
@@ -427,6 +439,8 @@ def test_websocket_session_id_preserved_across_messages(async_app: TestClient) -
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = None
+        mock_agent_instance.last_model = None
+        mock_agent_instance.get_last_usage.return_value = None
         mock_agent_instance.get_last_used_sources.return_value = []
         mock_agent_instance.astream = _mock_astream(chunks)
         mock_agent_class.return_value = mock_agent_instance
@@ -474,6 +488,8 @@ def test_websocket_error_response_includes_session_id(async_app: TestClient) -> 
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = None
+        mock_agent_instance.last_model = None
+        mock_agent_instance.get_last_usage.return_value = None
         mock_agent_instance.get_last_used_sources.return_value = []
 
         async def astream_gen(
@@ -531,6 +547,8 @@ def test_websocket_history_with_multiple_turns(async_app: TestClient) -> None:
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = None
+        mock_agent_instance.last_model = None
+        mock_agent_instance.get_last_usage.return_value = None
         mock_agent_instance.get_last_used_sources.return_value = []
 
         async def astream_gen(
@@ -595,6 +613,8 @@ def test_websocket_missing_visitor_id_returns_error(async_app: TestClient) -> No
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = None
+        mock_agent_instance.last_model = None
+        mock_agent_instance.get_last_usage.return_value = None
         mock_agent_instance.get_last_used_sources.return_value = []
         mock_agent_instance.astream = _mock_astream(["Hello!"])
         mock_agent_class.return_value = mock_agent_instance
@@ -794,6 +814,8 @@ def test_websocket_omitted_visitor_id_succeeds_without_persistence() -> None:
     ):
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = None
+        mock_agent_instance.last_model = None
+        mock_agent_instance.get_last_usage.return_value = None
         mock_agent_instance.get_last_used_sources.return_value = []
         mock_agent_instance.astream = _mock_astream(["Hi!"])
         mock_agent_class.return_value = mock_agent_instance
@@ -868,6 +890,8 @@ def test_end_frame_includes_trace_id_when_langfuse_active(
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = "trace-abc123"
         mock_agent_instance.get_last_used_sources.return_value = []
+        mock_agent_instance.get_last_usage.return_value = None
+        mock_agent_instance.last_model = None
         mock_agent_instance.astream = _mock_astream(["Hi!"])
         mock_agent_class.return_value = mock_agent_instance
 
@@ -894,6 +918,8 @@ def test_end_frame_omits_trace_id_when_langfuse_disabled(async_app: TestClient) 
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = None
+        mock_agent_instance.last_model = None
+        mock_agent_instance.get_last_usage.return_value = None
         mock_agent_instance.get_last_used_sources.return_value = []
         mock_agent_instance.astream = _mock_astream(["Hi!"])
         mock_agent_class.return_value = mock_agent_instance
@@ -911,6 +937,75 @@ def test_end_frame_omits_trace_id_when_langfuse_disabled(async_app: TestClient) 
                 data = websocket.receive_json()
                 if data["type"] == "end":
                     assert "trace_id" not in data
+                    break
+                elif data["type"] == "error":
+                    pytest.fail(f"Unexpected error: {data['content']}")
+
+
+def test_end_frame_carries_usage_and_model(async_app: TestClient) -> None:
+    """Callers read token spend off the end frame to accrue against a budget."""
+    usage = {
+        "prompt_tokens": 12400,
+        "completion_tokens": 300,
+        "total_tokens": 12700,
+        "cache_read_input_tokens": 11800,
+        "cache_creation_input_tokens": 0,
+    }
+    with patch("api.routes.chat.Agent") as mock_agent_class:
+        mock_agent_instance = MagicMock()
+        mock_agent_instance.last_trace_id = None
+        mock_agent_instance.last_model = "anthropic/claude-sonnet-4-6"
+        mock_agent_instance.get_last_usage.return_value = usage
+        mock_agent_instance.get_last_used_sources.return_value = []
+        mock_agent_instance.astream = _mock_astream(["Hi!"])
+        mock_agent_class.return_value = mock_agent_instance
+
+        with async_app.websocket_connect("/ws") as websocket:
+            websocket.send_json(
+                {
+                    "session_id": "s1",
+                    "visitor_id": "v1",
+                    "messages": [{"role": "user", "content": "Hello!"}],
+                }
+            )
+
+            while True:
+                data = websocket.receive_json()
+                if data["type"] == "end":
+                    assert data["usage"] == usage
+                    assert data["model"] == "anthropic/claude-sonnet-4-6"
+                    break
+                elif data["type"] == "error":
+                    pytest.fail(f"Unexpected error: {data['content']}")
+
+
+def test_end_frame_omits_usage_when_provider_reports_none(
+    async_app: TestClient,
+) -> None:
+    """Unknown usage must be absent, not zero — a zero row would understate spend."""
+    with patch("api.routes.chat.Agent") as mock_agent_class:
+        mock_agent_instance = MagicMock()
+        mock_agent_instance.last_trace_id = None
+        mock_agent_instance.last_model = None
+        mock_agent_instance.get_last_usage.return_value = None
+        mock_agent_instance.get_last_used_sources.return_value = []
+        mock_agent_instance.astream = _mock_astream(["Hi!"])
+        mock_agent_class.return_value = mock_agent_instance
+
+        with async_app.websocket_connect("/ws") as websocket:
+            websocket.send_json(
+                {
+                    "session_id": "s1",
+                    "visitor_id": "v1",
+                    "messages": [{"role": "user", "content": "Hello!"}],
+                }
+            )
+
+            while True:
+                data = websocket.receive_json()
+                if data["type"] == "end":
+                    assert "usage" not in data
+                    assert "model" not in data
                     break
                 elif data["type"] == "error":
                     pytest.fail(f"Unexpected error: {data['content']}")
@@ -952,6 +1047,8 @@ def test_assistant_message_is_persisted_before_the_end_frame(
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = None
+        mock_agent_instance.last_model = None
+        mock_agent_instance.get_last_usage.return_value = None
         mock_agent_instance.get_last_used_sources.return_value = []
         mock_agent_instance.astream = _mock_astream(["Hi!"])
         mock_agent_class.return_value = mock_agent_instance
@@ -1000,6 +1097,8 @@ def test_assistant_message_survives_client_disconnect_on_end(
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
         mock_agent_instance.last_trace_id = None
+        mock_agent_instance.last_model = None
+        mock_agent_instance.get_last_usage.return_value = None
         mock_agent_instance.get_last_used_sources.return_value = []
         mock_agent_instance.astream = _mock_astream(["Hello!"])
         mock_agent_class.return_value = mock_agent_instance
