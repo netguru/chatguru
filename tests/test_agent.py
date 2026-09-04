@@ -595,7 +595,23 @@ class TestPromptCache:
         cached = _apply_prompt_cache(messages, model)
         assert isinstance(cached[0].content, list)
 
-    @pytest.mark.parametrize("model", ["openai/gpt-5-mini", "azure/gpt-4o", "", None])
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "openai/gpt-5-mini",
+            "azure/gpt-4o",
+            # "claude" in the model half of a non-Anthropic route: an operator
+            # -named Azure deployment or gateway alias. `cache_control` content
+            # would reach a provider that does not accept it.
+            "azure/claude-sonnet-proxy",
+            "openai/claude-compat",
+            # Bedrock and Vertex also serve models that aren't Claude.
+            "bedrock/meta.llama3-70b-instruct-v1:0",
+            "vertex_ai/gemini-2.0-flash",
+            "",
+            None,
+        ],
+    )
     def test_noop_for_non_anthropic_models(self, model: str | None) -> None:
         from langchain_core.messages import SystemMessage
 
@@ -758,6 +774,91 @@ async def test_astream_reports_no_usage_when_provider_omits_it() -> None:
             pass
 
     assert agent.get_last_usage() is None
+
+
+@pytest.mark.asyncio
+async def test_astream_reports_no_usage_when_one_call_of_the_turn_omits_it() -> None:
+    """A total missing one call's tokens is reported as unknown, not as the turn.
+
+    Partial and complete totals are indistinguishable to the client, so a
+    caller accruing spend would silently undercharge the turn.
+    """
+    call_count = {"count": 0}
+
+    async def mock_astream(
+        messages: list, *, config: dict | None = None
+    ) -> AsyncIterator[AIMessageChunk]:
+        call_count["count"] += 1
+        if call_count["count"] == 1:
+            yield AIMessageChunk(
+                content="Looking that up...",
+                tool_call_chunks=[
+                    {
+                        "name": "search_products",
+                        "args": '{"query": "x"}',
+                        "id": "call_1",
+                        "index": 0,
+                    }
+                ],
+                usage_metadata=_usage(12000, 50, write=11800),
+            )
+        else:
+            # Second call streams an answer but reports no usage.
+            yield AIMessageChunk(content="Done.")
+
+    mock_db = MagicMock()
+    mock_db.search = AsyncMock(return_value=[])
+    mock_db.format_products.return_value = "No products found."
+
+    with patch("src.agent.service._build_chat_llm") as mock_build:
+        mock_instance = GenericFakeChatModel(messages=iter([]))
+        object.__setattr__(mock_instance, "bind_tools", lambda tools: mock_instance)
+        object.__setattr__(mock_instance, "astream", mock_astream)
+        mock_build.return_value = mock_instance
+        agent = Agent(vector_database=mock_db)
+
+        async for _ in agent.astream([{"role": "user", "content": "hi"}]):
+            pass
+
+    assert call_count["count"] == 2
+    assert agent.get_last_usage() is None
+
+
+@pytest.mark.asyncio
+async def test_partial_usage_flag_resets_between_turns() -> None:
+    """A fully measured turn after a partial one reports its own counts."""
+    call_count = {"count": 0}
+
+    async def mock_astream(
+        messages: list, *, config: dict | None = None
+    ) -> AsyncIterator[AIMessageChunk]:
+        call_count["count"] += 1
+        if call_count["count"] == 1:
+            yield AIMessageChunk(content="A")
+        else:
+            yield AIMessageChunk(content="B", usage_metadata=_usage(100, 10))
+
+    with patch("src.agent.service._build_chat_llm") as mock_build:
+        mock_instance = GenericFakeChatModel(messages=iter([]))
+        object.__setattr__(mock_instance, "bind_tools", lambda tools: mock_instance)
+        object.__setattr__(mock_instance, "astream", mock_astream)
+        mock_build.return_value = mock_instance
+        agent = Agent()
+
+        async for _ in agent.astream([{"role": "user", "content": "hi"}]):
+            pass
+        assert agent.get_last_usage() is None
+
+        async for _ in agent.astream([{"role": "user", "content": "again"}]):
+            pass
+        assert agent.get_last_usage() == {
+            "prompt_tokens": 100,
+            "uncached_input_tokens": 100,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "completion_tokens": 10,
+            "total_tokens": 110,
+        }
 
 
 @pytest.mark.asyncio

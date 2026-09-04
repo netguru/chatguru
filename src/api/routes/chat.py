@@ -950,7 +950,9 @@ async def websocket_chat(websocket: WebSocket) -> None:
         "content": "chunk of text" | null,
         "session_id": "session-id",
         "trace_id": "langfuse-trace-id",  # end frames only, omitted when Langfuse is disabled
-        # end frames only, omitted when the provider reported no usage.
+        # end frames only. BOTH keys are omitted whenever the turn's usage is not
+        # fully known, so a zero is always a real measured zero and never a
+        # stand-in for "unknown" — do not treat a missing "usage" as a free turn.
         # Counts cover every LLM call the agentic loop made for the turn.
         #
         # "prompt_tokens" is the INCLUSIVE input total. The next three fields
@@ -958,14 +960,17 @@ async def websocket_chat(websocket: WebSocket) -> None:
         #     uncached x 1.0 + cache_read x 0.1 + cache_creation x 1.25
         # Pricing "prompt_tokens" at the full input rate and then adding the
         # cache counts double-charges every cached token.
+        #
+        # Example values below are one real two-call turn: call 1 wrote the
+        # cache prefix, call 2 read it back.
         "model": "anthropic/claude-sonnet-4-6",
         "usage": {
-            "prompt_tokens": 0,          # == uncached + cache_read + cache_creation
-            "uncached_input_tokens": 0,
-            "cache_read_input_tokens": 0,
-            "cache_creation_input_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0            # prompt_tokens + completion_tokens
+            "prompt_tokens": 14450,      # == uncached + cache_read + cache_creation
+            "uncached_input_tokens": 852,
+            "cache_read_input_tokens": 6799,
+            "cache_creation_input_tokens": 6799,
+            "completion_tokens": 330,
+            "total_tokens": 14780        # prompt_tokens + completion_tokens
         }
     }
     """

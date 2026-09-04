@@ -103,16 +103,29 @@ _current_sources: ContextVar[list[dict[str, Any]]] = ContextVar("_current_source
 _IMAGE_MIME_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
 
 
+# LiteLLM routes other than `anthropic/` that can serve Claude in Anthropic's
+# native request format, where `cache_control` on system content is understood.
+# Both also serve non-Anthropic models, so the model id must still name Claude.
+_ANTHROPIC_ROUTE_PREFIXES = ("bedrock/", "bedrock_converse/", "vertex_ai/")
+
+
 def _is_anthropic_model(model: str | None) -> bool:
     """Return True when *model* routes to Anthropic through LiteLLM.
 
     Matches the direct ``anthropic/…`` route as well as the Claude models served
     via Bedrock and Vertex (``bedrock/anthropic.claude-…``, ``vertex_ai/claude-…``).
+
+    Matched on the route prefix, not on ``"claude"`` appearing anywhere: model
+    ids are LiteLLM ``provider/model`` pairs whose model half can be an operator
+    -chosen alias (``azure/<deployment>``), so a bare substring test would send
+    Anthropic-only content to a provider that rejects it.
     """
     if not model:
         return False
     normalized = model.lower()
-    return normalized.startswith("anthropic/") or "claude" in normalized
+    if normalized.startswith("anthropic/"):
+        return True
+    return normalized.startswith(_ANTHROPIC_ROUTE_PREFIXES) and "claude" in normalized
 
 
 def _apply_prompt_cache(
@@ -365,6 +378,9 @@ class Agent:
         # Reported to the client on the terminating "end" frame so callers can
         # accrue spend against their own budget.
         self._last_turn_usage: dict[str, int] | None = None
+        # Set when any LLM call of the turn reported no usage, which makes the
+        # running total an undercount rather than a measurement.
+        self._last_turn_usage_partial: bool = False
         self._last_turn_model: str | None = None
 
     @staticmethod
@@ -657,6 +673,7 @@ class Agent:
         """
         self._last_langfuse_handler = None
         self._last_turn_usage = None
+        self._last_turn_usage_partial = False
         lc_messages = Agent._build_messages_from_transcript(messages)
         # Each astream() call gets a fresh, task-local source list via ContextVar.
         turn_sources: list[dict[str, Any]] = []
@@ -790,6 +807,16 @@ class Agent:
                 if content:
                     yield str(content)
 
+            if call_usage is None:
+                # A partial total is indistinguishable from a complete one, so
+                # it would be accrued as truth and silently undercharge the
+                # turn. Flag it and report the whole turn as unknown instead.
+                self._last_turn_usage_partial = True
+                logger.warning(
+                    "LLM call %d of the turn reported no token usage; "
+                    "turn usage will be reported as unknown",
+                    iteration + 1,
+                )
             self._last_turn_usage = _add_turn_usage(self._last_turn_usage, call_usage)
 
             if full_response is None or not full_response.tool_calls:
@@ -811,15 +838,18 @@ class Agent:
 
         Counts are summed across every LLM call the agentic loop made, so a
         tool-calling turn reports the whole turn's cost. Returns ``None`` when
-        the provider reported no usage, which callers must treat as "unknown"
-        rather than zero.
+        the usage of the turn is not fully known — either no call reported any,
+        or *some* call didn't — which callers must treat as "unknown" rather
+        than zero. All-or-nothing on purpose: a total missing one call's tokens
+        looks exactly like a complete one, so a caller accruing spend would
+        undercharge the turn with no way to notice.
 
         ``prompt_tokens`` is the inclusive input total; ``uncached_input_tokens``,
         ``cache_read_input_tokens`` and ``cache_creation_input_tokens`` partition
         it. Price the three parts, not ``prompt_tokens`` plus the cache counts.
         """
         usage = getattr(self, "_last_turn_usage", None)
-        if usage is None:
+        if usage is None or getattr(self, "_last_turn_usage_partial", False):
             return None
         return _partition_input_tokens(usage)
 
