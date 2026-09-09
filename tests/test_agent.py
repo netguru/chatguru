@@ -8,7 +8,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
-from langchain_core.messages import AIMessageChunk
+from langchain_core.messages import AIMessageChunk, BaseMessage
+from langchain_core.messages.ai import UsageMetadata
 
 from src.agent.service import Agent
 
@@ -547,3 +548,437 @@ class TestExtractProductQuery:
         original = "affordable"
         result = Agent._extract_product_query(original)
         assert result == original
+
+
+# --- prompt caching --------------------------------------------------------
+
+
+class TestPromptCache:
+    """Anthropic prompt-cache breakpoint on the stable system prefix."""
+
+    def test_marks_system_prompt_for_anthropic(self) -> None:
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        from src.agent.service import _apply_prompt_cache
+
+        messages: list[BaseMessage] = [
+            SystemMessage(content="Persona."),
+            HumanMessage(content="hi"),
+        ]
+        cached = _apply_prompt_cache(messages, "anthropic/claude-sonnet-4-6")
+
+        assert cached[0].content == [
+            {
+                "type": "text",
+                "text": "Persona.",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+        # Conversation is untouched, so per-turn grounding never invalidates it.
+        assert cached[1] is messages[1]
+        assert messages[0].content == "Persona."
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "anthropic/claude-sonnet-4-6",
+            "bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
+            "vertex_ai/claude-opus-4",
+        ],
+    )
+    def test_applies_to_every_anthropic_route(self, model: str) -> None:
+        from langchain_core.messages import SystemMessage
+
+        from src.agent.service import _apply_prompt_cache
+
+        messages: list[BaseMessage] = [SystemMessage(content="Persona.")]
+        cached = _apply_prompt_cache(messages, model)
+        assert isinstance(cached[0].content, list)
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "openai/gpt-5-mini",
+            "azure/gpt-4o",
+            # "claude" in the model half of a non-Anthropic route: an operator
+            # -named Azure deployment or gateway alias. `cache_control` content
+            # would reach a provider that does not accept it.
+            "azure/claude-sonnet-proxy",
+            "openai/claude-compat",
+            # Bedrock and Vertex also serve models that aren't Claude.
+            "bedrock/meta.llama3-70b-instruct-v1:0",
+            "vertex_ai/gemini-2.0-flash",
+            "",
+            None,
+        ],
+    )
+    def test_noop_for_non_anthropic_models(self, model: str | None) -> None:
+        from langchain_core.messages import SystemMessage
+
+        from src.agent.service import _apply_prompt_cache
+
+        messages: list[BaseMessage] = [SystemMessage(content="Persona.")]
+        assert _apply_prompt_cache(messages, model) is messages
+
+    def test_noop_when_system_content_already_structured(self) -> None:
+        """Never reshape content this function did not build."""
+        from langchain_core.messages import SystemMessage
+
+        from src.agent.service import _apply_prompt_cache
+
+        messages: list[BaseMessage] = [
+            SystemMessage(content=[{"type": "text", "text": "Persona."}])
+        ]
+        assert _apply_prompt_cache(messages, "anthropic/claude-sonnet-4-6") is messages
+
+    def test_noop_without_leading_system_message(self) -> None:
+        from langchain_core.messages import HumanMessage
+
+        from src.agent.service import _apply_prompt_cache
+
+        messages: list[BaseMessage] = [HumanMessage(content="hi")]
+        assert _apply_prompt_cache(messages, "anthropic/claude-sonnet-4-6") is messages
+
+
+# --- token usage accounting ------------------------------------------------
+
+
+def _usage(inp: int, out: int, read: int = 0, write: int = 0) -> UsageMetadata:
+    return UsageMetadata(
+        input_tokens=inp,
+        output_tokens=out,
+        total_tokens=inp + out,
+        input_token_details={"cache_read": read, "cache_creation": write},
+    )
+
+
+class TestUsageAccounting:
+    def test_merge_takes_field_wise_max_within_one_call(self) -> None:
+        """LiteLLM reports Anthropic usage twice per call as cumulative snapshots.
+
+        message_start carries input + cache counts, message_delta carries the
+        output count. Summing them would double-count the input tokens.
+        """
+        from src.agent.service import _merge_call_usage
+
+        merged = _merge_call_usage(None, _usage(12000, 0, read=11800))
+        merged = _merge_call_usage(merged, _usage(12000, 350, read=11800))
+
+        assert merged == {
+            "prompt_tokens": 12000,
+            "completion_tokens": 350,
+            "cache_read_input_tokens": 11800,
+            "cache_creation_input_tokens": 0,
+        }
+
+    def test_merge_ignores_chunks_without_usage(self) -> None:
+        from src.agent.service import _merge_call_usage
+
+        assert _merge_call_usage(None, None) is None
+        existing = _merge_call_usage(None, _usage(10, 2))
+        assert _merge_call_usage(existing, None) == existing
+
+    def test_turn_total_sums_across_llm_calls(self) -> None:
+        """A tool-calling turn bills two separate calls; NGos needs the total."""
+        from src.agent.service import _add_turn_usage, _merge_call_usage
+
+        first = _merge_call_usage(None, _usage(12000, 50, write=11800))
+        second = _merge_call_usage(None, _usage(12400, 300, read=11800))
+
+        total = _add_turn_usage(None, first)
+        total = _add_turn_usage(total, second)
+
+        assert total == {
+            "prompt_tokens": 24400,
+            "completion_tokens": 350,
+            "cache_read_input_tokens": 11800,
+            "cache_creation_input_tokens": 11800,
+        }
+
+
+@pytest.mark.asyncio
+async def test_astream_records_usage_across_tool_calling_turn() -> None:
+    """Usage from both LLM calls of a tool-calling turn reaches get_last_usage()."""
+    call_count = {"count": 0}
+
+    async def mock_astream(
+        messages: list, *, config: dict | None = None
+    ) -> AsyncIterator[AIMessageChunk]:
+        call_count["count"] += 1
+        if call_count["count"] == 1:
+            # Real streaming shape: tool calls arrive as tool_call_chunks, which
+            # survive chunk addition (a bare `.tool_calls` assignment does not).
+            yield AIMessageChunk(
+                content="Looking that up...",
+                tool_call_chunks=[
+                    {
+                        "name": "search_products",
+                        "args": '{"query": "x"}',
+                        "id": "call_1",
+                        "index": 0,
+                    }
+                ],
+                # Anthropic reports usage twice per call, cumulatively.
+                usage_metadata=_usage(12000, 0, write=11800),
+            )
+            yield AIMessageChunk(
+                content="", usage_metadata=_usage(12000, 50, write=11800)
+            )
+        else:
+            yield AIMessageChunk(content="Done.")
+            yield AIMessageChunk(
+                content="", usage_metadata=_usage(12400, 300, read=11800)
+            )
+
+    mock_db = MagicMock()
+    mock_db.search = AsyncMock(return_value=[])
+    mock_db.format_products.return_value = "No products found."
+
+    with patch("src.agent.service._build_chat_llm") as mock_build:
+        mock_instance = GenericFakeChatModel(messages=iter([]))
+        object.__setattr__(mock_instance, "bind_tools", lambda tools: mock_instance)
+        object.__setattr__(mock_instance, "astream", mock_astream)
+        mock_build.return_value = mock_instance
+        agent = Agent(vector_database=mock_db)
+
+        async for _ in agent.astream([{"role": "user", "content": "hi"}]):
+            pass
+
+    assert agent.get_last_usage() == {
+        "prompt_tokens": 24400,
+        "uncached_input_tokens": 24400 - 11800 - 11800,
+        "cache_read_input_tokens": 11800,
+        "cache_creation_input_tokens": 11800,
+        "completion_tokens": 350,
+        "total_tokens": 24750,
+    }
+
+
+@pytest.mark.asyncio
+async def test_astream_reports_no_usage_when_provider_omits_it() -> None:
+    """Absent usage must stay None, never be reported as a free turn."""
+
+    async def mock_astream(
+        messages: list, *, config: dict | None = None
+    ) -> AsyncIterator[AIMessageChunk]:
+        yield AIMessageChunk(content="Hello")
+
+    with patch("src.agent.service._build_chat_llm") as mock_build:
+        mock_instance = GenericFakeChatModel(messages=iter([]))
+        object.__setattr__(mock_instance, "bind_tools", lambda tools: mock_instance)
+        object.__setattr__(mock_instance, "astream", mock_astream)
+        mock_build.return_value = mock_instance
+        agent = Agent()
+
+        async for _ in agent.astream([{"role": "user", "content": "hi"}]):
+            pass
+
+    assert agent.get_last_usage() is None
+
+
+@pytest.mark.asyncio
+async def test_astream_reports_no_usage_when_one_call_of_the_turn_omits_it() -> None:
+    """A total missing one call's tokens is reported as unknown, not as the turn.
+
+    Partial and complete totals are indistinguishable to the client, so a
+    caller accruing spend would silently undercharge the turn.
+    """
+    call_count = {"count": 0}
+
+    async def mock_astream(
+        messages: list, *, config: dict | None = None
+    ) -> AsyncIterator[AIMessageChunk]:
+        call_count["count"] += 1
+        if call_count["count"] == 1:
+            yield AIMessageChunk(
+                content="Looking that up...",
+                tool_call_chunks=[
+                    {
+                        "name": "search_products",
+                        "args": '{"query": "x"}',
+                        "id": "call_1",
+                        "index": 0,
+                    }
+                ],
+                usage_metadata=_usage(12000, 50, write=11800),
+            )
+        else:
+            # Second call streams an answer but reports no usage.
+            yield AIMessageChunk(content="Done.")
+
+    mock_db = MagicMock()
+    mock_db.search = AsyncMock(return_value=[])
+    mock_db.format_products.return_value = "No products found."
+
+    with patch("src.agent.service._build_chat_llm") as mock_build:
+        mock_instance = GenericFakeChatModel(messages=iter([]))
+        object.__setattr__(mock_instance, "bind_tools", lambda tools: mock_instance)
+        object.__setattr__(mock_instance, "astream", mock_astream)
+        mock_build.return_value = mock_instance
+        agent = Agent(vector_database=mock_db)
+
+        async for _ in agent.astream([{"role": "user", "content": "hi"}]):
+            pass
+
+    assert call_count["count"] == 2
+    assert agent.get_last_usage() is None
+
+
+@pytest.mark.asyncio
+async def test_partial_usage_flag_resets_between_turns() -> None:
+    """A fully measured turn after a partial one reports its own counts."""
+    call_count = {"count": 0}
+
+    async def mock_astream(
+        messages: list, *, config: dict | None = None
+    ) -> AsyncIterator[AIMessageChunk]:
+        call_count["count"] += 1
+        if call_count["count"] == 1:
+            yield AIMessageChunk(content="A")
+        else:
+            yield AIMessageChunk(content="B", usage_metadata=_usage(100, 10))
+
+    with patch("src.agent.service._build_chat_llm") as mock_build:
+        mock_instance = GenericFakeChatModel(messages=iter([]))
+        object.__setattr__(mock_instance, "bind_tools", lambda tools: mock_instance)
+        object.__setattr__(mock_instance, "astream", mock_astream)
+        mock_build.return_value = mock_instance
+        agent = Agent()
+
+        async for _ in agent.astream([{"role": "user", "content": "hi"}]):
+            pass
+        assert agent.get_last_usage() is None
+
+        async for _ in agent.astream([{"role": "user", "content": "again"}]):
+            pass
+        assert agent.get_last_usage() == {
+            "prompt_tokens": 100,
+            "uncached_input_tokens": 100,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "completion_tokens": 10,
+            "total_tokens": 110,
+        }
+
+
+@pytest.mark.asyncio
+async def test_usage_resets_between_turns() -> None:
+    """A turn without usage must not inherit the previous turn's counts."""
+    call_count = {"count": 0}
+
+    async def mock_astream(
+        messages: list, *, config: dict | None = None
+    ) -> AsyncIterator[AIMessageChunk]:
+        call_count["count"] += 1
+        if call_count["count"] == 1:
+            yield AIMessageChunk(content="A", usage_metadata=_usage(100, 10))
+        else:
+            yield AIMessageChunk(content="B")
+
+    with patch("src.agent.service._build_chat_llm") as mock_build:
+        mock_instance = GenericFakeChatModel(messages=iter([]))
+        object.__setattr__(mock_instance, "bind_tools", lambda tools: mock_instance)
+        object.__setattr__(mock_instance, "astream", mock_astream)
+        mock_build.return_value = mock_instance
+        agent = Agent()
+
+        async for _ in agent.astream([{"role": "user", "content": "hi"}]):
+            pass
+        assert agent.get_last_usage() is not None
+
+        async for _ in agent.astream([{"role": "user", "content": "again"}]):
+            pass
+        assert agent.get_last_usage() is None
+
+
+def test_chat_llm_requests_usage_on_the_stream() -> None:
+    """langchain_litellm only defaults include_usage on for OpenAI models."""
+    from src.agent.service import _build_chat_llm
+
+    llm = _build_chat_llm(model="anthropic/claude-sonnet-4-6")
+    assert getattr(llm, "stream_options") == {"include_usage": True}
+
+
+class TestUsagePartitioning:
+    """`prompt_tokens` is inclusive of the cache counts; the split must be additive.
+
+    Numbers below are from a real Langfuse trace of a cached NGos turn:
+    call 1 = 8,764 in / 37 out with 6,799 written to cache;
+    call 2 = 8,877 in / 21 out with the same 6,799 read back.
+    """
+
+    CALL_1 = _usage(8764, 37, write=6799)
+    CALL_2 = _usage(8877, 21, read=6799)
+
+    def _turn(self) -> dict:
+        from src.agent.service import _add_turn_usage, _merge_call_usage
+
+        total = _add_turn_usage(None, _merge_call_usage(None, self.CALL_1))
+        turn = _add_turn_usage(total, _merge_call_usage(None, self.CALL_2))
+        assert turn is not None
+        return turn
+
+    def test_components_sum_to_prompt_tokens(self) -> None:
+        from src.agent.service import _partition_input_tokens
+
+        usage = _partition_input_tokens(self._turn())
+        assert (
+            usage["uncached_input_tokens"]
+            + usage["cache_read_input_tokens"]
+            + usage["cache_creation_input_tokens"]
+            == usage["prompt_tokens"]
+        )
+
+    def test_matches_the_observed_trace(self) -> None:
+        from src.agent.service import _partition_input_tokens
+
+        assert _partition_input_tokens(self._turn()) == {
+            "prompt_tokens": 8764 + 8877,
+            "uncached_input_tokens": (8764 - 6799) + (8877 - 6799),
+            "cache_read_input_tokens": 6799,
+            "cache_creation_input_tokens": 6799,
+            "completion_tokens": 58,
+            "total_tokens": 8764 + 8877 + 58,
+        }
+
+    def test_reconstructs_the_billed_cost(self) -> None:
+        """The partition must price out to what Langfuse charged for the turn."""
+        from src.agent.service import _partition_input_tokens
+
+        usage = _partition_input_tokens(self._turn())
+        rate_in, rate_out = 3e-6, 15e-6
+        cost = (
+            usage["uncached_input_tokens"] * rate_in
+            + usage["cache_read_input_tokens"] * rate_in * 0.1
+            + usage["cache_creation_input_tokens"] * rate_in * 1.25
+            + usage["completion_tokens"] * rate_out
+        )
+        assert cost == pytest.approx(0.031946 + 0.008589, abs=1e-5)
+
+    def test_naive_pricing_overcharges(self) -> None:
+        """Guards the reason uncached_input_tokens exists at all."""
+        from src.agent.service import _partition_input_tokens
+
+        usage = _partition_input_tokens(self._turn())
+        naive = usage["prompt_tokens"] * 3e-6  # cache tokens billed at full rate
+        correct = (
+            usage["uncached_input_tokens"] * 3e-6
+            + usage["cache_read_input_tokens"] * 3e-7
+            + usage["cache_creation_input_tokens"] * 3.75e-6
+        )
+        # Naive pricing overcharges this turn by ~33%.
+        assert naive > correct * 1.3
+
+    def test_remainder_clamped_when_counts_are_not_inclusive(self) -> None:
+        """A provider reporting cache counts outside prompt_tokens must not go negative."""
+        from src.agent.service import _partition_input_tokens
+
+        usage = _partition_input_tokens(
+            {
+                "prompt_tokens": 100,
+                "completion_tokens": 5,
+                "cache_read_input_tokens": 900,
+                "cache_creation_input_tokens": 0,
+            }
+        )
+        assert usage["uncached_input_tokens"] == 0

@@ -14,6 +14,7 @@ from langchain_core.messages import (
     SystemMessage,
     ToolMessage,
 )
+from langchain_core.messages.ai import UsageMetadata
 from langchain_core.runnables import Runnable, RunnableConfig
 from langchain_core.tools import BaseTool, tool
 from langchain_litellm import ChatLiteLLM
@@ -64,12 +65,21 @@ def _build_llm_kwargs(settings: Any) -> dict[str, Any]:
 
 
 def _build_chat_llm(model: str | None = None) -> BaseChatModel:
-    """Build a LiteLLM chat client for the configured model."""
+    """Build a LiteLLM chat client for the configured model.
+
+    ``stream_options`` is set explicitly because ``langchain_litellm`` only
+    defaults it on for OpenAI-ish models, and LiteLLM's stream wrapper drops the
+    usage chunk entirely unless ``include_usage`` is requested. Without it a
+    streamed Anthropic turn reports no token counts at all. LiteLLM whitelists
+    ``stream_options`` from its unsupported-parameter check, so passing it is
+    safe for every provider.
+    """
     settings = get_llm_settings()
     return ChatLiteLLM(
         model=model or settings.model,
         streaming=True,
         temperature=settings.temperature,
+        stream_options={"include_usage": True},
         **_build_llm_kwargs(settings),
     )
 
@@ -91,6 +101,64 @@ _current_sources: ContextVar[list[dict[str, Any]]] = ContextVar("_current_source
 
 
 _IMAGE_MIME_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
+
+
+# LiteLLM routes other than `anthropic/` that can serve Claude in Anthropic's
+# native request format, where `cache_control` on system content is understood.
+# Both also serve non-Anthropic models, so the model id must still name Claude.
+_ANTHROPIC_ROUTE_PREFIXES = ("bedrock/", "bedrock_converse/", "vertex_ai/")
+
+
+def _is_anthropic_model(model: str | None) -> bool:
+    """Return True when *model* routes to Anthropic through LiteLLM.
+
+    Matches the direct ``anthropic/…`` route as well as the Claude models served
+    via Bedrock and Vertex (``bedrock/anthropic.claude-…``, ``vertex_ai/claude-…``).
+
+    Matched on the route prefix, not on ``"claude"`` appearing anywhere: model
+    ids are LiteLLM ``provider/model`` pairs whose model half can be an operator
+    -chosen alias (``azure/<deployment>``), so a bare substring test would send
+    Anthropic-only content to a provider that rejects it.
+    """
+    if not model:
+        return False
+    normalized = model.lower()
+    if normalized.startswith("anthropic/"):
+        return True
+    return normalized.startswith(_ANTHROPIC_ROUTE_PREFIXES) and "claude" in normalized
+
+
+def _apply_prompt_cache(
+    messages: list[BaseMessage], model: str | None
+) -> list[BaseMessage]:
+    """Mark the system prompt as an Anthropic prompt-cache breakpoint.
+
+    Anthropic builds its cache prefix in the order ``tools → system → messages``,
+    so a single ``cache_control`` breakpoint on the system message covers both
+    the persona prompt and every bound tool definition — together the largest
+    stable block of the request, re-sent on all ~2 LLM calls of every turn.
+
+    No-op for non-Anthropic models: ``cache_control`` is Anthropic-specific and
+    the multi-model picker can route a turn to OpenAI or Azure.
+    """
+    if not messages or not _is_anthropic_model(model):
+        return messages
+    head = messages[0]
+    # Only a plain string system prompt is converted. Anything else is already
+    # structured content this function did not build and must not reshape.
+    if not isinstance(head, SystemMessage) or not isinstance(head.content, str):
+        return messages
+
+    cached_system = SystemMessage(
+        content=[
+            {
+                "type": "text",
+                "text": head.content,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+    )
+    return [cached_system, *messages[1:]]
 
 
 def _build_trace_input(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -149,6 +217,75 @@ def _convert_history_to_messages(history: list[dict[str, Any]]) -> list[BaseMess
         elif role == "assistant":
             messages.append(AIMessage(content=content))
     return messages
+
+
+def _merge_call_usage(
+    current: dict[str, int] | None, usage_metadata: UsageMetadata | None
+) -> dict[str, int] | None:
+    """Fold one chunk's ``usage_metadata`` into the running total for ONE LLM call.
+
+    Uses a field-wise max rather than a sum because LiteLLM reports usage more
+    than once per Anthropic call — ``message_start`` carries the input and cache
+    counts, ``message_delta`` carries the output count. Each report is a
+    cumulative snapshot of that call, not a delta, so summing them would
+    double-count the input tokens. Providers that report usage exactly once
+    (OpenAI) are unaffected: max of a single value is that value.
+
+    Note ``prompt_tokens`` is *inclusive* of the two cache counts: LiteLLM adds
+    ``cache_creation_input_tokens`` and ``cache_read_input_tokens`` into
+    ``prompt_tokens`` for Anthropic. They are sub-totals of it, never additions
+    to it — see ``_partition_input_tokens``.
+    """
+    if not usage_metadata:
+        return current
+    details = usage_metadata.get("input_token_details") or {}
+    incoming = {
+        "prompt_tokens": int(usage_metadata.get("input_tokens") or 0),
+        "completion_tokens": int(usage_metadata.get("output_tokens") or 0),
+        "cache_read_input_tokens": int(details.get("cache_read") or 0),
+        "cache_creation_input_tokens": int(details.get("cache_creation") or 0),
+    }
+    if current is None:
+        return incoming
+    return {key: max(current[key], value) for key, value in incoming.items()}
+
+
+def _add_turn_usage(
+    total: dict[str, int] | None, call_usage: dict[str, int] | None
+) -> dict[str, int] | None:
+    """Add one completed LLM call's usage to the turn total.
+
+    Summed, not maxed: a tool-calling turn bills two separate LLM calls and NGos
+    needs the combined cost of the whole turn.
+    """
+    if call_usage is None:
+        return total
+    if total is None:
+        return dict(call_usage)
+    return {key: total[key] + value for key, value in call_usage.items()}
+
+
+def _partition_input_tokens(usage: dict[str, int]) -> dict[str, int]:
+    """Split ``prompt_tokens`` into its three billing classes.
+
+    ``prompt_tokens`` is the inclusive total. The three classes bill at very
+    different rates — uncached at 1x, cache reads at 0.1x, cache writes at
+    1.25x — so a caller that prices ``prompt_tokens`` at the full input rate and
+    *then* adds the cache counts charges the cached tokens twice. Emitting the
+    uncached remainder explicitly makes the split additive and self-checking:
+
+        uncached + cache_read + cache_creation == prompt_tokens
+
+    Clamped at zero: the inclusive convention holds for Anthropic and OpenAI
+    through LiteLLM, but a provider that reported the cache counts *outside*
+    ``prompt_tokens`` would otherwise yield a negative remainder.
+    """
+    cached = usage["cache_read_input_tokens"] + usage["cache_creation_input_tokens"]
+    return {
+        **usage,
+        "uncached_input_tokens": max(0, usage["prompt_tokens"] - cached),
+        "total_tokens": usage["prompt_tokens"] + usage["completion_tokens"],
+    }
 
 
 async def _execute_tool(
@@ -237,6 +374,14 @@ class Agent:
             tool.name: tool for tool in self.tools
         }
         self._last_langfuse_handler: CallbackHandler | None = None
+        # Token usage and resolved model for the most recent astream() call.
+        # Reported to the client on the terminating "end" frame so callers can
+        # accrue spend against their own budget.
+        self._last_turn_usage: dict[str, int] | None = None
+        # Set when any LLM call of the turn reported no usage, which makes the
+        # running total an undercount rather than a measurement.
+        self._last_turn_usage_partial: bool = False
+        self._last_turn_model: str | None = None
 
     @staticmethod
     def _create_rag_tool(db: VectorDatabase) -> BaseTool:
@@ -527,6 +672,8 @@ class Agent:
             Response chunks as strings (including tool call notifications)
         """
         self._last_langfuse_handler = None
+        self._last_turn_usage = None
+        self._last_turn_usage_partial = False
         lc_messages = Agent._build_messages_from_transcript(messages)
         # Each astream() call gets a fresh, task-local source list via ContextVar.
         turn_sources: list[dict[str, Any]] = []
@@ -540,6 +687,11 @@ class Agent:
             if model and model != self._default_model
             else self._base_llm
         )
+        # The model actually sent to the provider. Not `self._default_model`,
+        # which is None in multi-model picker mode (ChatLiteLLM then falls back
+        # to LLM_MODEL from settings).
+        turn_model = getattr(base_llm, "model", None)
+        self._last_turn_model = turn_model
 
         # Open MCP sessions for the whole turn so stateful servers keep state
         # across tool calls; sessions close when this block exits.
@@ -558,6 +710,9 @@ class Agent:
             # tools, so without this the model may claim it lacks a capability
             # (e.g. web browsing) even though the tool is bound.
             turn_messages = Agent._augment_system_prompt(lc_messages, accepted)
+            # Applied last so the cache breakpoint sits at the end of the final
+            # system prompt text, tool block included.
+            turn_messages = _apply_prompt_cache(turn_messages, turn_model)
             async for chunk in self._run_agentic_loop(
                 turn_messages, config, turn_llm, turn_registry
             ):
@@ -591,12 +746,20 @@ class Agent:
         messages: list[BaseMessage],
         mcp_tools: list[BaseTool],
     ) -> list[BaseMessage]:
-        """Append a description of the turn's MCP tools to the system prompt.
+        """Tell the model it has extra MCP tools bound for this turn.
 
         Returns ``messages`` unchanged when there are no MCP tools or no system
         message. Otherwise returns a new list with the leading system message
-        extended by a capability block so the model knows these tools exist and
-        is permitted to use them.
+        extended by a short capability note.
+
+        Deliberately does NOT enumerate the tools. Their names, descriptions and
+        parameter schemas already reach the model through the provider's
+        ``tools`` parameter (see ``_bind_turn_tools``), so listing them here was
+        a strictly lossier second copy of the same text — with 40 MCP tools that
+        duplicated ~6.3k characters into every LLM call. Only the framing is
+        kept, because the base system prompt (managed in Langfuse) knows just
+        the built-in tools and without this the model would sometimes deny a
+        capability it actually has.
         """
         if not mcp_tools or not messages:
             return messages
@@ -604,22 +767,13 @@ class Agent:
         if not isinstance(head, SystemMessage):
             return messages
 
-        lines = [
-            (
-                f"- {t.name}: {(t.description or '').strip().splitlines()[0]}"
-                if (t.description or "").strip()
-                else f"- {t.name}"
-            )
-            for t in mcp_tools
-        ]
         block = (
             "\n\n---\n"
             "ADDITIONAL TOOLS AVAILABLE THIS TURN:\n"
-            "Beyond the tools described above, you also have direct access to the "
-            "following tools provided by connected MCP servers. Use them whenever "
-            "the request calls for them (e.g. live web access, browsing, or "
-            "automation). Do NOT claim you lack a capability that these tools "
-            "provide — call the appropriate tool instead.\n" + "\n".join(lines)
+            "Beyond the tools described above, you have direct access to tools "
+            "provided by connected MCP servers. Use them whenever the request "
+            "calls for them. Do NOT claim you lack a capability that these "
+            "tools provide — call the appropriate tool instead."
         )
         base = head.content if isinstance(head.content, str) else str(head.content)
         return [SystemMessage(content=base + block), *messages[1:]]
@@ -634,6 +788,7 @@ class Agent:
         """Run the agentic loop until no more tool calls or max iterations."""
         for iteration in range(MAX_TOOL_ITERATIONS):
             full_response: AIMessageChunk | None = None
+            call_usage: dict[str, int] | None = None
 
             async for chunk in llm.astream(messages, config=config):
                 chunk_msg = chunk if isinstance(chunk, AIMessageChunk) else None
@@ -643,10 +798,26 @@ class Agent:
                         if full_response is None
                         else full_response + chunk_msg
                     )
+                    # Read usage off the raw chunk, not the accumulated
+                    # `full_response`, whose `+` sums usage across chunks and so
+                    # would double-count Anthropic's two usage reports per call.
+                    call_usage = _merge_call_usage(call_usage, chunk_msg.usage_metadata)
 
                 content: Any = getattr(chunk, "content", "")
                 if content:
                     yield str(content)
+
+            if call_usage is None:
+                # A partial total is indistinguishable from a complete one, so
+                # it would be accrued as truth and silently undercharge the
+                # turn. Flag it and report the whole turn as unknown instead.
+                self._last_turn_usage_partial = True
+                logger.warning(
+                    "LLM call %d of the turn reported no token usage; "
+                    "turn usage will be reported as unknown",
+                    iteration + 1,
+                )
+            self._last_turn_usage = _add_turn_usage(self._last_turn_usage, call_usage)
 
             if full_response is None or not full_response.tool_calls:
                 logger.info("Agentic loop completed after %d iterations", iteration + 1)
@@ -661,3 +832,28 @@ class Agent:
     def get_last_used_sources(self) -> list[dict[str, Any]]:
         """Return structured sources collected during the most recent astream() call."""
         return list(getattr(self, "_last_turn_sources", []))
+
+    def get_last_usage(self) -> dict[str, int] | None:
+        """Return token usage for the most recent ``astream()`` call.
+
+        Counts are summed across every LLM call the agentic loop made, so a
+        tool-calling turn reports the whole turn's cost. Returns ``None`` when
+        the usage of the turn is not fully known — either no call reported any,
+        or *some* call didn't — which callers must treat as "unknown" rather
+        than zero. All-or-nothing on purpose: a total missing one call's tokens
+        looks exactly like a complete one, so a caller accruing spend would
+        undercharge the turn with no way to notice.
+
+        ``prompt_tokens`` is the inclusive input total; ``uncached_input_tokens``,
+        ``cache_read_input_tokens`` and ``cache_creation_input_tokens`` partition
+        it. Price the three parts, not ``prompt_tokens`` plus the cache counts.
+        """
+        usage = getattr(self, "_last_turn_usage", None)
+        if usage is None or getattr(self, "_last_turn_usage_partial", False):
+            return None
+        return _partition_input_tokens(usage)
+
+    @property
+    def last_model(self) -> str | None:
+        """Return the model id used for the most recent ``astream()`` call."""
+        return getattr(self, "_last_turn_model", None)
