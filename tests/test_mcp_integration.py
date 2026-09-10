@@ -492,10 +492,40 @@ def test_augment_system_prompt_appends_mcp_tool_block() -> None:
     system_text = augmented[0].content
     assert "Base persona." in system_text
     assert "ADDITIONAL TOOLS AVAILABLE THIS TURN" in system_text
-    assert "browser_navigate" in system_text
     # Original messages untouched; history preserved.
     assert messages[0].content == "Base persona."
     assert augmented[1] is messages[1]
+
+
+def test_augment_system_prompt_does_not_enumerate_tools() -> None:
+    """The block must not restate what the `tools` parameter already carries.
+
+    Names and descriptions reach the model via bind_tools; duplicating them here
+    cost ~6.3k characters per LLM call with the NGos MCP tool set.
+    """
+    from langchain_core.messages import SystemMessage
+
+    from agent.service import Agent
+
+    tools = [_named_tool("browser_navigate"), _named_tool("readFeatures")]
+    for mcp_tool in tools:
+        mcp_tool.description = "Some fairly long tool description text."
+
+    system_text = Agent._augment_system_prompt(
+        [SystemMessage(content="Base persona.")], tools
+    )[0].content
+
+    assert "browser_navigate" not in system_text
+    assert "readFeatures" not in system_text
+    assert "Some fairly long tool description text." not in system_text
+    # Block size is constant regardless of how many tools are bound.
+    many = [_named_tool(f"tool_{i}") for i in range(40)]
+    for mcp_tool in many:
+        mcp_tool.description = "x" * 500
+    many_text = Agent._augment_system_prompt(
+        [SystemMessage(content="Base persona.")], many
+    )[0].content
+    assert many_text == system_text
 
 
 def test_augment_system_prompt_noop_without_mcp_tools() -> None:

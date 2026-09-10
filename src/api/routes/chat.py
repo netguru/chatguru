@@ -805,7 +805,12 @@ async def _send_end_frame(  # noqa: PLR0913
     usage: dict[str, int] | None = None,
     model: str | None = None,
 ) -> None:
-    """Send the terminating ``end`` frame for a chat turn."""
+    """Send the terminating ``end`` frame for a chat turn.
+
+    ``usage`` and ``model`` let the caller record the turn's token spend. Both
+    keys are omitted when unknown rather than sent as zeroes, so a client cannot
+    mistake a missing measurement for a free turn.
+    """
     end_frame: dict[str, Any] = {
         "type": "end",
         "content": resolved_answer,
@@ -813,11 +818,10 @@ async def _send_end_frame(  # noqa: PLR0913
         "sources": sources,
         "user_attachments": stored_user_attachments,
     }
-    if get_app_settings().tool_frames_enabled:
-        if model is not None:
-            end_frame["model"] = model
-        if usage is not None:
-            end_frame["usage"] = usage
+    if usage is not None:
+        end_frame["usage"] = usage
+    if model is not None:
+        end_frame["model"] = model
     safe_trace_id = (
         trace_id.replace("\n", "\\n").replace("\r", "\\r")
         if trace_id is not None
@@ -870,8 +874,8 @@ async def _handle_chat_turn(
     )
     sources = agent.get_last_used_sources()
     trace_id = agent.last_trace_id
-    usage = agent.last_usage
-    model = agent.last_model
+    usage = agent.get_last_usage()
+    used_model = agent.last_model
 
     # Persist *before* the "end" frame, never after.  Clients treat "end" as
     # terminal and may disconnect the moment they see it; anything still awaited
@@ -908,7 +912,7 @@ async def _handle_chat_turn(
         stored_user_attachments=stored_user_attachments,
         trace_id=trace_id,
         usage=usage,
-        model=model,
+        model=used_model,
     )
 
 
@@ -1001,7 +1005,29 @@ async def websocket_chat(websocket: WebSocket) -> None:
         "type": "token" | "end" | "error",
         "content": "chunk of text" | null,
         "session_id": "session-id",
-        "trace_id": "langfuse-trace-id"  # end frames only, omitted when Langfuse is disabled
+        "trace_id": "langfuse-trace-id",  # end frames only, omitted when Langfuse is disabled
+        # end frames only. BOTH keys are omitted whenever the turn's usage is not
+        # fully known, so a zero is always a real measured zero and never a
+        # stand-in for "unknown" — do not treat a missing "usage" as a free turn.
+        # Counts cover every LLM call the agentic loop made for the turn.
+        #
+        # "prompt_tokens" is the INCLUSIVE input total. The next three fields
+        # partition it and bill at different rates, so cost is
+        #     uncached x 1.0 + cache_read x 0.1 + cache_creation x 1.25
+        # Pricing "prompt_tokens" at the full input rate and then adding the
+        # cache counts double-charges every cached token.
+        #
+        # Example values below are one real two-call turn: call 1 wrote the
+        # cache prefix, call 2 read it back.
+        "model": "anthropic/claude-sonnet-4-6",
+        "usage": {
+            "prompt_tokens": 14450,      # == uncached + cache_read + cache_creation
+            "uncached_input_tokens": 852,
+            "cache_read_input_tokens": 6799,
+            "cache_creation_input_tokens": 6799,
+            "completion_tokens": 330,
+            "total_tokens": 14780        # prompt_tokens + completion_tokens
+        }
     }
     """
     await websocket.accept()

@@ -40,9 +40,17 @@ export interface ToolCall {
 
 /** Token usage for a turn. Matches backend end-frame `usage`. */
 export interface TokenUsage {
+  /** Inclusive input total: uncached + cache_read + cache_creation. */
   prompt_tokens: number;
   completion_tokens: number;
   total_tokens: number;
+  /**
+   * Billing-class partition of `prompt_tokens`. Price these three, not
+   * `prompt_tokens` plus the cache counts, or cached input is double-charged.
+   */
+  uncached_input_tokens: number;
+  cache_read_input_tokens: number;
+  cache_creation_input_tokens: number;
 }
 
 export interface ChatMessage {
