@@ -196,7 +196,6 @@ INFO:     Uvicorn running on http://0.0.0.0:8000
 Open your browser and navigate to:
 
 - **Frontend**: http://localhost:5173
-- **Minimal test UI**: http://localhost:8000/ (smoke testing only)
 - **Backend API Docs**: http://localhost:8000/docs
 - **Backend Health Check**: http://localhost:8000/health
 

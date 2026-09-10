@@ -32,7 +32,7 @@ classifiers = [
     "Framework :: FastAPI",
 ]
 dependencies = [
-    "torch>=2.0",
+    "torch>=2.13.0",
     "torchvision>=0.0",
     "fastapi>=0.104.0",
     "python-multipart>=0.0.9",
@@ -71,6 +71,7 @@ dev = [
     "mypy>=1.7.0",
     "ruff>=0.1.0",
     "pre-commit>=3.5.0",
+    "pytest-cov>=7.1.0",
 ]
 
 # ---------------------------------------------------------------------------

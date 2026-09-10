@@ -13,7 +13,10 @@ Attachment storage is **optional**. Set `ATTACHMENT_STORAGE_ENABLED=false` to di
 - `init_attachment_storage()` becomes a no-op.
 - Upload endpoints (`POST /upload-attachment`, `POST /process-document`) still accept files and return a response, but `attachment_id` will be `null` — files are not saved.
 - The retrieval endpoint (`GET /attachments/{id}`) returns `503`.
-- The LLM never receives image data from stored attachments.
+- The LLM never receives image data from stored attachments. **Inline attachments are
+  unaffected by this flag** — they carry their own bytes on the turn and never touch
+  this subsystem, so a deployment with storage disabled can still send the model
+  images (see `HistoryMessage.attachments` in [architecture.md](architecture.md)).
 
 When the flag is omitted or set to `true`, the subsystem initialises normally using the configured backend.
 

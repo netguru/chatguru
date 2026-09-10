@@ -26,10 +26,12 @@ src/document_rag/
 │   ├── factory.py            # Ingestion adapter selection
 │   ├── repository.py         # Ingestion port
 │   └── adapters/
-│       └── mongodb.py        # MongoDB chunk + GridFS file ingestion
+│       ├── mongodb.py        # MongoDB chunk + GridFS file ingestion
+│       └── cosmos.py         # Cosmos vCore chunk + GridFS file ingestion
 └── adapters/
-├── __init__.py
-    └── mongodb.py            # MongoDB vector-search adapter (search-only)
+    ├── __init__.py
+    ├── mongodb.py            # MongoDB vector-search adapter (search-only)
+    └── cosmos.py             # Cosmos vCore vector-search adapter (search-only)
 ```
 
 ## Public contract
@@ -103,7 +105,12 @@ Citation numbers are stable across multi-turn tool calls: chunks from the same
 document share a single number, and documents already tracked from a previous
 call keep their existing number.
 
-The existing `search_products` flow remains active and unchanged.
+The `search_products` code is unchanged but currently unreachable in the live
+chat path: the WebSocket handler builds the only live agent with
+`vector_database=None` hardcoded, and nothing injects a product vector DB
+anywhere in the app. The tool is registered only if a vector database is passed
+to the `Agent` constructor, so as wired today `search_products` is never
+available to the model.
 
 ## Chat response contract
 
@@ -160,7 +167,7 @@ Document RAG uses `DOCUMENT_RAG_*` environment variables:
 | Variable | Description | Default |
 |---|---|---|
 | `DOCUMENT_RAG_ENABLED` | Enable document repository bootstrap | `false` |
-| `DOCUMENT_RAG_BACKEND` | Backend selector (currently only `mongodb`) | `mongodb` |
+| `DOCUMENT_RAG_BACKEND` | Backend selector (`mongodb` or `cosmos`) | `mongodb` |
 | `DOCUMENT_RAG_MONGODB_URI` | MongoDB URI | `mongodb://localhost:27017` |
 | `DOCUMENT_RAG_MONGODB_DATABASE` | MongoDB database for document chunks | `chatguru` |
 | `DOCUMENT_RAG_MONGODB_COLLECTION` | MongoDB collection for document chunks | `documents` |
@@ -170,6 +177,11 @@ Document RAG uses `DOCUMENT_RAG_*` environment variables:
 | `DOCUMENT_RAG_EMBEDDING_PROVIDER` | Embedding provider (`openai` or `custom`) | `openai` |
 | `DOCUMENT_RAG_EMBEDDING_CUSTOM_CLASS` | Custom provider class path (`module.path:ClassName`) when provider is `custom` | *(empty)* |
 | `DOCUMENT_RAG_MONGODB_FILES_BUCKET` | GridFS bucket used for full source document storage | `document_sources` |
+| `DOCUMENT_RAG_COSMOS_VECTOR_INDEX_KIND` | Cosmos vCore vector index kind (`vector-ivf` or `vector-hnsw`); `cosmos` backend only | `vector-ivf` |
+| `DOCUMENT_RAG_COSMOS_VECTOR_NUM_LISTS` | IVF list count (index kind `vector-ivf`) | `1` |
+| `DOCUMENT_RAG_COSMOS_VECTOR_M` | HNSW connections per layer (index kind `vector-hnsw`) | `16` |
+| `DOCUMENT_RAG_COSMOS_VECTOR_EF_CONSTRUCTION` | HNSW `efConstruction` (index kind `vector-hnsw`) | `64` |
+| `DOCUMENT_RAG_COSMOS_VECTOR_SIMILARITY` | Cosmos vCore vector similarity metric (`COS`, `L2`, or `IP`) | `COS` |
 
 ### Custom embedding providers
 
@@ -191,7 +203,7 @@ The repository calls `embed_query` and uses the returned vector in MongoDB `$vec
 ## Notes and scope
 
 - Retrieval API is separate from ingestion API.
-- MongoDB is the first-class backend in this release.
+- MongoDB and Cosmos DB (for MongoDB vCore) are both implemented, co-equal backends.
 - Additional adapters can be added without changing application layers; update
   `document_rag/factory.py` and `document_rag/ingestion/factory.py`.
 
@@ -245,6 +257,7 @@ You can override with `--extensions` (comma-separated).
 Current ingestion adapter support:
 
 - `mongodb` (implemented)
+- `cosmos` (implemented)
 - any other backend returns a clear unsupported-backend error until an adapter is added
 
 ## Quick start (new users)
@@ -274,18 +287,17 @@ make ingest-docs SOURCE_DIR=./rag_data BACKEND=mongodb
 ## Docker startup ingestion
 
 When running via Docker Compose, the corpus served by document RAG lives in the
-`rag-data` Docker volume mounted at `/app/rag_data`. The volume is seeded from
-the files bundled in the image (`COPY rag_data/ /app/rag_data/` in
-`docker/Dockerfile`) the first time it is created, and is authoritative after
-that — operators can update the corpus in production without rebuilding the
-image. Ingestion runs automatically on first startup when
-`DOCUMENT_RAG_ENABLED=true`.
+`rag-data` Docker volume mounted at `/app/rag_data`. The image only creates this
+directory empty (`RUN mkdir -p /app/rag_data` in `docker/Dockerfile`) — the volume
+starts empty and holds whatever corpus you add to it, so operators update the
+corpus in production without rebuilding the image. Ingestion runs automatically on
+first startup when `DOCUMENT_RAG_ENABLED=true`.
 
 ### Volumes involved
 
 | Volume | Mount | Purpose |
 |---|---|---|
-| `rag-data` | `/app/rag_data` | Source corpus the entrypoint reads. Seeded once from the image, then authoritative. |
+| `rag-data` | `/app/rag_data` | Source corpus the entrypoint reads. Empty on first create; holds whatever corpus you add. |
 | `rag-ingest-state` | `/app/rag_ingest_state` | Holds the `.ingested` sentinel so ingestion is skipped on subsequent boots. |
 | `mongodb-data` | `/data/db` (mongodb service) | Persisted embeddings, chunks, and GridFS source files. |
 
@@ -293,9 +305,9 @@ image. Ingestion runs automatically on first startup when
 
 The `docker/entrypoint.sh` runs the ingestion CLI before starting the server:
 
-1. **First start** — `rag-data` is created and seeded from the image's
-   `/app/rag_data`; no sentinel exists → ingestion runs → sentinel written to
-   the `rag-ingest-state` Docker volume at `/app/rag_ingest_state/.ingested`.
+1. **First start** — `rag-data` is created empty; if you have added documents to
+   it and no sentinel exists → ingestion runs → sentinel written to the
+   `rag-ingest-state` Docker volume at `/app/rag_ingest_state/.ingested`.
 2. **Subsequent starts** — sentinel found → ingestion skipped, container boots
    immediately. The indexed data is persisted in the `mongodb-data` volume and
    the source corpus stays in `rag-data`.
@@ -327,9 +339,7 @@ the skip-if-done behavior.
 ### Adding or updating documents in production
 
 Because the corpus lives in the `rag-data` volume, you do **not** need to
-rebuild the image to refresh content. Two supported workflows:
-
-**Option A — copy files into the running volume (recommended for hosting):**
+rebuild the image to refresh content — copy files into the running volume:
 
 ```bash
 # Copy a file from the host into the running agent's /app/rag_data
@@ -339,17 +349,11 @@ docker compose cp ./new_doc.pdf chatguru-agent:/app/rag_data/
 DOCUMENT_RAG_INGEST_FULL_REPLACE=1 docker compose up -d --no-deps chatguru-agent
 ```
 
-**Option B — rebuild the image with new bundled defaults (fresh deployments only):**
-
-Place new files in `rag_data/` in the repo and rebuild. The new content seeds
-the `rag-data` volume **only when the volume does not yet exist**. On existing
-deployments the volume is authoritative and a rebuild alone will not refresh
-the corpus — use Option A instead, or `docker volume rm rag-data` between the
-rebuild and the next `up` if you really want to reset.
-
-```bash
-DOCUMENT_RAG_INGEST_FULL_REPLACE=1 docker compose up --build
-```
+To reset the corpus entirely, remove the volume before the next `up`. The volume
+is named `<compose-project-name>_rag-data` — `chatguru_rag-data` only under the
+default project name (the repo directory basename), so it differs if
+`COMPOSE_PROJECT_NAME` is set. Run `docker volume ls` to find the real name, then
+`docker volume rm <project>_rag-data`.
 
 ### Inspecting / extracting the volume
 

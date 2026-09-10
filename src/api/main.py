@@ -2,11 +2,9 @@
 
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
 
 from agent.service import resolve_default_model
 from api.routes.chat import await_background_tasks
@@ -146,13 +144,6 @@ def create_app() -> FastAPI:
         app.include_router(documents_router)
     if is_persistence_enabled():
         app.include_router(persistence_router)
-
-    # Root route - serve HTML chat interface
-    @app.get("/", response_class=HTMLResponse)
-    async def root() -> str:
-        """Serve the HTML chat interface."""
-        html_path = Path(__file__).parent / "templates" / "index.html"
-        return html_path.read_text(encoding="utf-8")
 
     # Health check endpoint
     @app.get("/health")
