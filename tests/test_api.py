@@ -1032,6 +1032,60 @@ def _mock_astream_with_tool() -> Callable[..., AsyncIterator[dict]]:
     return _gen
 
 
+def _mock_astream_with_failed_tool() -> Callable[..., AsyncIterator[dict]]:
+    async def _gen(
+        messages: list[dict[str, str]],
+        *,
+        session_id: str | None = None,
+        visitor_id: str | None = None,
+        model: str | None = None,
+        auth_token: str | None = None,
+    ) -> AsyncIterator[dict]:
+        # A failed call's result is only its error text — and this text names no
+        # error prefix, which is exactly the case a consumer cannot detect by
+        # pattern-matching the wording.
+        yield {
+            "type": "tool_result",
+            "name": "create_client",
+            "result": "The tool could not be completed.",
+            "ok": False,
+        }
+
+    return _gen
+
+
+def test_websocket_tool_result_frame_reports_failure(async_app: TestClient) -> None:
+    """A failed tool call is flagged `ok: False` on the wire, so the consumer
+    never has to infer error-ness from the error's wording (NGos NET-2011)."""
+    with patch("api.routes.chat.Agent") as mock_agent_class:
+        mock_agent_instance = MagicMock()
+        mock_agent_instance.last_trace_id = None
+        mock_agent_instance.get_last_used_sources.return_value = []
+        mock_agent_instance.get_last_usage.return_value = None
+        mock_agent_instance.last_model = None
+        mock_agent_instance.astream = _mock_astream_with_failed_tool()
+        mock_agent_class.return_value = mock_agent_instance
+
+        with async_app.websocket_connect("/ws") as websocket:
+            websocket.send_json(
+                {
+                    "session_id": "s1",
+                    "visitor_id": "v1",
+                    "messages": [{"role": "user", "content": "create a client"}],
+                }
+            )
+            frames = []
+            while True:
+                data = websocket.receive_json()
+                frames.append(data)
+                if data["type"] in ("end", "error"):
+                    break
+
+    result = next(f for f in frames if f["type"] == "tool_result")
+    assert result["ok"] is False
+    assert result["result"] == "The tool could not be completed."
+
+
 def test_websocket_emits_tool_frames_and_usage(async_app: TestClient) -> None:
     with patch("api.routes.chat.Agent") as mock_agent_class:
         mock_agent_instance = MagicMock()
@@ -1071,6 +1125,9 @@ def test_websocket_emits_tool_frames_and_usage(async_app: TestClient) -> None:
     assert call["args"]["auth_token"] == "[redacted]"  # sanitized
     result = next(f for f in frames if f["type"] == "tool_result")
     assert result["result"] == "3 docs"
+    # An event without an explicit `ok` is a success (the agent only sets it
+    # False on failure), so consumers never have to infer it from the wording.
+    assert result["ok"] is True
     end = frames[-1]
     assert end["model"] == "openai/gpt-5-mini"
     assert end["usage"]["total_tokens"] == 15

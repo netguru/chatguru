@@ -788,6 +788,12 @@ async def _stream_assistant_response(  # noqa: PLR0913
                     "result": _sanitize_frame_value(
                         event["result"], auth_token=auth_token
                     ),
+                    # Whether the call succeeded is ours to report: a failure's
+                    # `result` is only its error text, and a consumer left to
+                    # infer that from the wording gets it wrong — NetguruOS
+                    # rendered a green "Changes applied" over a write that never
+                    # happened (NGos NET-2011).
+                    "ok": event.get("ok", True),
                     "session_id": session_id,
                 }
             )

@@ -589,11 +589,21 @@ class Agent:
 
             yield {"type": "tool_call", "name": tool_name, "args": tool_args}
 
-            result, _ = await _execute_tool(
+            result, ok = await _execute_tool(
                 tool_name, tool_args, tool_registry, config=config
             )
             messages.append(ToolMessage(content=result, tool_call_id=tool_call_id))
-            yield {"type": "tool_result", "name": tool_name, "result": result}
+            # `ok` rides the event because only we know it: a failed call's
+            # result is just its error text, so a consumer without this flag has
+            # to guess error-ness from wording. NetguruOS guessed wrong and
+            # rendered a green "Changes applied" over a write that never
+            # happened (NGos NET-2011).
+            yield {
+                "type": "tool_result",
+                "name": tool_name,
+                "result": result,
+                "ok": ok,
+            }
 
     @asynccontextmanager
     async def _tracing_context(
@@ -675,7 +685,11 @@ class Agent:
             Structured event dicts, one of:
             ``{"type": "token", "content": str}``,
             ``{"type": "tool_call", "name": str, "args": dict}``,
-            ``{"type": "tool_result", "name": str, "result": Any}``
+            ``{"type": "tool_result", "name": str, "result": Any, "ok": bool}``
+
+            ``ok`` is False when the tool raised or was unknown. A failed call's
+            ``result`` is only its error text, so consumers must read ``ok``
+            rather than pattern-match the wording.
         """
         self._last_langfuse_handler = None
         self._last_turn_usage = None

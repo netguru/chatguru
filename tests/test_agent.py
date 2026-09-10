@@ -227,8 +227,39 @@ async def test_astream_yields_structured_events_for_tool_call() -> None:
     tool_result = next(e for e in events if e["type"] == "tool_result")
     assert tool_result["name"] == "search_products"
     assert isinstance(tool_result["result"], str)
+    # The success flag rides the event: a failed call's result is only its error
+    # text, so a consumer without it has to guess (NGos NET-2011).
+    assert tool_result["ok"] is True
     # tool_call must precede its tool_result
     assert types.index("tool_call") < types.index("tool_result")
+
+
+@pytest.mark.asyncio
+async def test_astream_tool_result_reports_a_failed_call() -> None:
+    """An unknown tool fails, and the event says so via `ok` rather than
+    leaving the consumer to read it out of the error text."""
+
+    async def mock_astream(
+        messages: list, *, config: dict | None = None
+    ) -> AsyncIterator[AIMessageChunk]:
+        chunk = AIMessageChunk(content="")
+        chunk.tool_calls = [{"name": "no_such_tool", "args": {}, "id": "c1"}]
+        yield chunk
+
+    mock_db = MagicMock()
+    mock_db.search = AsyncMock(return_value=[])
+
+    with patch("src.agent.service._build_chat_llm") as mock_build:
+        mock_instance = GenericFakeChatModel(messages=iter([]))
+        object.__setattr__(mock_instance, "bind_tools", lambda tools: mock_instance)
+        object.__setattr__(mock_instance, "astream", mock_astream)
+        mock_build.return_value = mock_instance
+        agent = Agent(vector_database=mock_db)
+
+        events = [e async for e in agent.astream([{"role": "user", "content": "hi"}])]
+
+    tool_result = next(e for e in events if e["type"] == "tool_result")
+    assert tool_result["ok"] is False
 
 
 @pytest.mark.asyncio
