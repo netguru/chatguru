@@ -72,7 +72,7 @@ interface AppState {
   finalizeLastMessage: (content: string, sources: Source[] | null, traceId?: string | null) => void;
   markLastMessageError: (content: string) => void;
   addToolCallToLastMessage: (name: string, args: Record<string, unknown>) => void;
-  resolveToolResultOnLastMessage: (name: string, result: unknown) => void;
+  resolveToolResultOnLastMessage: (name: string, result: unknown, ok: boolean) => void;
   addToHistory: (entry: HistoryMessage) => void;
 
   // ── Layout ────────────────────────────────────────────────────────────────
@@ -221,7 +221,7 @@ export const useAppStore = create<AppState>((set) => ({
       }),
     })),
 
-  resolveToolResultOnLastMessage: (name, result) =>
+  resolveToolResultOnLastMessage: (name, result, ok) =>
     set((state) => ({
       sessions: state.sessions.map((s) => {
         if (s.id !== state.currentSessionId) return s;
@@ -232,7 +232,7 @@ export const useAppStore = create<AppState>((set) => ({
         // Fill the earliest still-running call with the same name.
         const idx = toolCalls.findIndex((c) => c.name === name && c.status === "running");
         if (idx === -1) return s;
-        toolCalls[idx] = { ...toolCalls[idx], result, status: "done" };
+        toolCalls[idx] = { ...toolCalls[idx], result, status: ok ? "done" : "failed" };
         msgs[msgs.length - 1] = { ...last, toolCalls };
         return { ...s, messages: msgs };
       }),

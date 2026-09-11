@@ -134,7 +134,7 @@ export function useChat() {
       } else if (data.type === "tool_result") {
         if (TOOL_CALLS_ENABLED) {
           const e = data as WsToolResultEvent;
-          resolveToolResultOnLastMessage(e.name, e.result);
+          resolveToolResultOnLastMessage(e.name, e.result, e.ok);
         }
       } else if (data.type === "end") {
         const endEvent = data as WsEndEvent;

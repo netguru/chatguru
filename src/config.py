@@ -125,9 +125,9 @@ class AppSettings(BaseSettings):
     tool_frames_enabled: bool = Field(
         default=True,
         description=(
-            "Emit tool_call/tool_result WS frames and attach usage/model to the "
-            "end frame. Disable to revert /ws to the pre-tool-frames behavior "
-            "(TOOL_FRAMES_ENABLED)."
+            "Emit tool_call/tool_result WS frames. Disable to revert /ws to the "
+            "pre-tool-frames behavior (TOOL_FRAMES_ENABLED). Does not affect "
+            "usage/model on the end frame, which are sent whenever known."
         ),
     )
 

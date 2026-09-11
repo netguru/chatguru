@@ -35,7 +35,11 @@ export interface ToolCall {
   name: string;
   args: Record<string, unknown>;
   result?: unknown;
-  status: "running" | "done";
+  /**
+   * "failed" means the tool definitely did not succeed, as reported by the
+   * backend's `ok` flag. A failure's `result` is its error text.
+   */
+  status: "running" | "done" | "failed";
 }
 
 /** Token usage for a turn. Matches backend end-frame `usage`. */
@@ -119,6 +123,8 @@ export interface WsToolResultEvent extends WsBaseEvent {
   type: "tool_result";
   name: string;
   result: unknown;
+  /** False when the tool call definitely failed; `result` is then the error text. */
+  ok: boolean;
 }
 
 // Raw source shape sent by the backend in the "end" WebSocket frame.

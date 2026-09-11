@@ -21,9 +21,23 @@ describe("tool-call store actions", () => {
       { name: "search_documents", args: { query: "pricing" }, status: "running" },
     ]);
 
-    s.resolveToolResultOnLastMessage("search_documents", "3 docs");
+    s.resolveToolResultOnLastMessage("search_documents", "3 docs", true);
     expect(lastAssistant().toolCalls).toEqual([
       { name: "search_documents", args: { query: "pricing" }, result: "3 docs", status: "done" },
+    ]);
+  });
+
+  it("marks a call failed when the backend reports ok=false", () => {
+    const s = useAppStore.getState();
+    s.addToolCallToLastMessage("write_file", { path: "/tmp/x" });
+    s.resolveToolResultOnLastMessage("write_file", "permission denied", false);
+    expect(lastAssistant().toolCalls).toEqual([
+      {
+        name: "write_file",
+        args: { path: "/tmp/x" },
+        result: "permission denied",
+        status: "failed",
+      },
     ]);
   });
 
@@ -31,7 +45,7 @@ describe("tool-call store actions", () => {
     const s = useAppStore.getState();
     s.addToolCallToLastMessage("search_documents", { query: "a" });
     s.addToolCallToLastMessage("search_documents", { query: "b" });
-    s.resolveToolResultOnLastMessage("search_documents", "first");
+    s.resolveToolResultOnLastMessage("search_documents", "first", true);
     const calls = lastAssistant().toolCalls ?? [];
     expect(calls[0]).toMatchObject({ args: { query: "a" }, result: "first", status: "done" });
     expect(calls[1]).toMatchObject({ args: { query: "b" }, status: "running" });

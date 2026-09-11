@@ -1,4 +1,4 @@
-import { CaretRightIcon, WrenchIcon } from "@phosphor-icons/react";
+import { CaretRightIcon, WarningIcon, WrenchIcon } from "@phosphor-icons/react";
 import { useState } from "react";
 import type { ToolCall } from "../../types/chat";
 import { cn } from "../../utils/utils";
@@ -19,16 +19,30 @@ function formatValue(value: unknown): string {
 
 function ToolCallChip({ call }: { call: ToolCall }) {
   const [open, setOpen] = useState(false);
+  const failed = call.status === "failed";
   return (
-    <div className="rounded-m border border-border-neutral-soft bg-surface-neutral-soft">
+    <div
+      className={cn(
+        "rounded-m border bg-surface-neutral-soft",
+        failed ? "border-semantic-error-medium" : "border-border-neutral-soft"
+      )}
+    >
       <button
         type="button"
         aria-expanded={open}
+        // Colour alone must not carry the failure signal.
+        aria-label={failed ? `${call.name} failed` : undefined}
         onClick={() => setOpen((v) => !v)}
         className="flex w-full items-center gap-2 px-3 py-2 text-t3 text-text-primary cursor-pointer"
       >
-        <WrenchIcon weight="bold" className="size-3.5 shrink-0 text-text-secondary" />
-        <span className="font-medium">{call.name}</span>
+        {failed ? (
+          <WarningIcon weight="bold" className="size-3.5 shrink-0 text-semantic-error-strong" />
+        ) : (
+          <WrenchIcon weight="bold" className="size-3.5 shrink-0 text-text-secondary" />
+        )}
+        <span className={cn("font-medium", failed && "text-semantic-error-strong")}>
+          {call.name}
+        </span>
         {call.status === "running" ? (
           <Loader className="ms-auto basis-auto [&>span]:size-1.5" />
         ) : (
@@ -44,9 +58,11 @@ function ToolCallChip({ call }: { call: ToolCall }) {
           <pre className="mb-2 max-h-40 overflow-auto whitespace-pre-wrap break-words">
             {formatValue(call.args)}
           </pre>
-          {call.status === "done" && (
+          {call.status !== "running" && (
             <>
-              <div className="mb-1 font-medium">result</div>
+              <div className={cn("mb-1 font-medium", failed && "text-semantic-error-strong")}>
+                {failed ? "error" : "result"}
+              </div>
               <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words">
                 {formatValue(call.result)}
               </pre>

@@ -23,6 +23,24 @@ describe("ToolCallList", () => {
     expect(screen.getByText(/3 docs/)).toBeInTheDocument();
   });
 
+  it("distinguishes a failed call and labels its result as an error", async () => {
+    const failed: ToolCall[] = [
+      {
+        name: "write_file",
+        args: { path: "/tmp/x" },
+        result: "permission denied",
+        status: "failed",
+      },
+    ];
+    render(<ToolCallList toolCalls={failed} />);
+    // The failure is announced, not conveyed by colour alone.
+    const chip = screen.getByRole("button", { name: /write_file failed/ });
+    await userEvent.click(chip);
+    expect(screen.getByText("error")).toBeInTheDocument();
+    expect(screen.queryByText("result")).not.toBeInTheDocument();
+    expect(screen.getByText(/permission denied/)).toBeInTheDocument();
+  });
+
   it("renders nothing when there are no tool calls", () => {
     const { container } = render(<ToolCallList toolCalls={[]} />);
     expect(container).toBeEmptyDOMElement();
