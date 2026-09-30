@@ -122,6 +122,14 @@ class AppSettings(BaseSettings):
         default="INFO",
         description="Logging level",
     )
+    tool_frames_enabled: bool = Field(
+        default=True,
+        description=(
+            "Emit tool_call/tool_result WS frames. Disable to revert /ws to the "
+            "pre-tool-frames behavior (TOOL_FRAMES_ENABLED). Does not affect "
+            "usage/model on the end frame, which are sent whenever known."
+        ),
+    )
 
 
 class FastAPISettings(BaseSettings):

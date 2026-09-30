@@ -70,12 +70,13 @@ async def test_agent_astream() -> None:
         mock_build.return_value = mock_instance
         agent = Agent()
 
-        received_chunks = []
-        async for chunk in agent.astream([{"role": "user", "content": "Hello"}]):
-            received_chunks.append(chunk)
-
-        assert len(received_chunks) == len(chunks)
-        assert "".join(received_chunks) == "".join(chunks)
+        received = [
+            e["content"]
+            async for e in agent.astream([{"role": "user", "content": "Hello"}])
+            if e["type"] == "token"
+        ]
+        assert len(received) == len(chunks)
+        assert "".join(received) == "".join(chunks)
 
 
 @pytest.mark.asyncio
@@ -97,12 +98,12 @@ async def test_agent_astream_empty_response() -> None:
         mock_build.return_value = mock_instance
         agent = Agent()
 
-        received_chunks = []
-        async for chunk in agent.astream([{"role": "user", "content": "Hello"}]):
-            received_chunks.append(chunk)
-
-        # Empty content should be filtered out
-        assert len(received_chunks) == 0
+        received = [
+            e
+            async for e in agent.astream([{"role": "user", "content": "Hello"}])
+            if e["type"] == "token"
+        ]
+        assert len(received) == 0
 
 
 @pytest.mark.asyncio
@@ -123,12 +124,13 @@ async def test_agent_astream_single_chunk() -> None:
         mock_build.return_value = mock_instance
         agent = Agent()
 
-        received_chunks = []
-        async for chunk in agent.astream([{"role": "user", "content": "Hello"}]):
-            received_chunks.append(chunk)
-
-        assert len(received_chunks) == 1
-        assert received_chunks[0] == "Single response"
+        received = [
+            e["content"]
+            async for e in agent.astream([{"role": "user", "content": "Hello"}])
+            if e["type"] == "token"
+        ]
+        assert len(received) == 1
+        assert received[0] == "Single response"
 
 
 @pytest.mark.asyncio
@@ -170,21 +172,94 @@ async def test_agent_with_tool_call() -> None:
         mock_build.return_value = mock_instance
         agent = Agent(vector_database=mock_db)
 
-        received_chunks = []
-        async for chunk in agent.astream(
-            [{"role": "user", "content": "Show me red jeans"}]
-        ):
-            received_chunks.append(chunk)
-
-        # Verify the agentic loop worked correctly
-        full_response = "".join(received_chunks)
-        # Should have initial response and final response
+        received = [
+            e["content"]
+            async for e in agent.astream(
+                [{"role": "user", "content": "Show me red jeans"}]
+            )
+            if e["type"] == "token"
+        ]
+        full_response = "".join(received)
         assert "Let me search for that..." in full_response
         assert "Here are the results!" in full_response
-        # Verify the database search was actually invoked (tool was executed)
         mock_db.search.assert_called_once()
-        # Verify we got multiple iterations (initial + after tool call)
         assert call_count["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_astream_yields_structured_events_for_tool_call() -> None:
+    """astream yields token/tool_call/tool_result event dicts in order."""
+    call_count = {"count": 0}
+
+    async def mock_astream(
+        messages: list, *, config: dict | None = None
+    ) -> AsyncIterator[AIMessageChunk]:
+        call_count["count"] += 1
+        if call_count["count"] == 1:
+            chunk = AIMessageChunk(content="Searching...")
+            chunk.tool_calls = [
+                {"name": "search_products", "args": {"query": "red jeans"}, "id": "c1"}
+            ]
+            yield chunk
+        else:
+            yield AIMessageChunk(content="Done")
+
+    mock_db = MagicMock()
+    mock_db.search = AsyncMock(return_value=[])
+    mock_db.format_products.return_value = "No products found."
+
+    with patch("src.agent.service._build_chat_llm") as mock_build:
+        mock_instance = GenericFakeChatModel(messages=iter([]))
+        object.__setattr__(mock_instance, "bind_tools", lambda tools: mock_instance)
+        object.__setattr__(mock_instance, "astream", mock_astream)
+        mock_build.return_value = mock_instance
+        agent = Agent(vector_database=mock_db)
+
+        events = [
+            e async for e in agent.astream([{"role": "user", "content": "red jeans"}])
+        ]
+
+    types = [e["type"] for e in events]
+    assert "token" in types
+    tool_call = next(e for e in events if e["type"] == "tool_call")
+    assert tool_call["name"] == "search_products"
+    assert tool_call["args"] == {"query": "red jeans"}
+    tool_result = next(e for e in events if e["type"] == "tool_result")
+    assert tool_result["name"] == "search_products"
+    assert isinstance(tool_result["result"], str)
+    # The success flag rides the event: a failed call's result is only its error
+    # text, so a consumer without it has to guess (NGos NET-2011).
+    assert tool_result["ok"] is True
+    # tool_call must precede its tool_result
+    assert types.index("tool_call") < types.index("tool_result")
+
+
+@pytest.mark.asyncio
+async def test_astream_tool_result_reports_a_failed_call() -> None:
+    """An unknown tool fails, and the event says so via `ok` rather than
+    leaving the consumer to read it out of the error text."""
+
+    async def mock_astream(
+        messages: list, *, config: dict | None = None
+    ) -> AsyncIterator[AIMessageChunk]:
+        chunk = AIMessageChunk(content="")
+        chunk.tool_calls = [{"name": "no_such_tool", "args": {}, "id": "c1"}]
+        yield chunk
+
+    mock_db = MagicMock()
+    mock_db.search = AsyncMock(return_value=[])
+
+    with patch("src.agent.service._build_chat_llm") as mock_build:
+        mock_instance = GenericFakeChatModel(messages=iter([]))
+        object.__setattr__(mock_instance, "bind_tools", lambda tools: mock_instance)
+        object.__setattr__(mock_instance, "astream", mock_astream)
+        mock_build.return_value = mock_instance
+        agent = Agent(vector_database=mock_db)
+
+        events = [e async for e in agent.astream([{"role": "user", "content": "hi"}])]
+
+    tool_result = next(e for e in events if e["type"] == "tool_result")
+    assert tool_result["ok"] is False
 
 
 @pytest.mark.asyncio

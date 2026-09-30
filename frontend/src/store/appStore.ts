@@ -1,5 +1,12 @@
 import { create } from "zustand";
-import type { ChatMessage, HistoryMessage, Source, StoredAttachment, VectorDbType } from "../types/chat";
+import type {
+  ChatMessage,
+  HistoryMessage,
+  Source,
+  StoredAttachment,
+  ToolCall,
+  VectorDbType,
+} from "../types/chat";
 
 // ─── Session ─────────────────────────────────────────────────────────────────
 
@@ -19,6 +26,11 @@ export interface Session {
 
 function generateId(): string {
   return Math.random().toString(36).slice(2, 11);
+}
+
+/** Resolve any still-running tool calls so chips don't spin forever after the stream ends. */
+function settleRunningToolCalls(toolCalls: ToolCall[] | undefined): ToolCall[] | undefined {
+  return toolCalls?.map((c) => (c.status === "running" ? { ...c, status: "done" } : c));
 }
 
 function createSession(): Session {
@@ -59,6 +71,8 @@ interface AppState {
   appendTokenToLastMessage: (token: string) => void;
   finalizeLastMessage: (content: string, sources: Source[] | null, traceId?: string | null) => void;
   markLastMessageError: (content: string) => void;
+  addToolCallToLastMessage: (name: string, args: Record<string, unknown>) => void;
+  resolveToolResultOnLastMessage: (name: string, result: unknown, ok: boolean) => void;
   addToHistory: (entry: HistoryMessage) => void;
 
   // ── Layout ────────────────────────────────────────────────────────────────
@@ -166,6 +180,7 @@ export const useAppStore = create<AppState>((set) => ({
           ...last,
           content,
           sources: sources ?? undefined,
+          toolCalls: settleRunningToolCalls(last.toolCalls),
           isStreaming: false,
           ...(traceId != null ? { traceId } : {}),
         };
@@ -180,7 +195,45 @@ export const useAppStore = create<AppState>((set) => ({
         const msgs = [...s.messages];
         const last = msgs[msgs.length - 1];
         if (!last?.isStreaming) return s;
-        msgs[msgs.length - 1] = { ...last, content, isStreaming: false };
+        msgs[msgs.length - 1] = {
+          ...last,
+          content,
+          toolCalls: settleRunningToolCalls(last.toolCalls),
+          isStreaming: false,
+        };
+        return { ...s, messages: msgs };
+      }),
+    })),
+
+  addToolCallToLastMessage: (name, args) =>
+    set((state) => ({
+      sessions: state.sessions.map((s) => {
+        if (s.id !== state.currentSessionId) return s;
+        const msgs = [...s.messages];
+        const last = msgs[msgs.length - 1];
+        if (!last?.isStreaming) return s;
+        const toolCalls: ToolCall[] = [
+          ...(last.toolCalls ?? []),
+          { name, args, status: "running" },
+        ];
+        msgs[msgs.length - 1] = { ...last, toolCalls };
+        return { ...s, messages: msgs };
+      }),
+    })),
+
+  resolveToolResultOnLastMessage: (name, result, ok) =>
+    set((state) => ({
+      sessions: state.sessions.map((s) => {
+        if (s.id !== state.currentSessionId) return s;
+        const msgs = [...s.messages];
+        const last = msgs[msgs.length - 1];
+        if (!last?.isStreaming || !last.toolCalls) return s;
+        const toolCalls = [...last.toolCalls];
+        // Fill the earliest still-running call with the same name.
+        const idx = toolCalls.findIndex((c) => c.name === name && c.status === "running");
+        if (idx === -1) return s;
+        toolCalls[idx] = { ...toolCalls[idx], result, status: ok ? "done" : "failed" };
+        msgs[msgs.length - 1] = { ...last, toolCalls };
         return { ...s, messages: msgs };
       }),
     })),
@@ -238,7 +291,7 @@ export const useAppStore = create<AppState>((set) => ({
         currentSessionId:
           state.currentSessionId && mergedSessions.some((s) => s.id === state.currentSessionId)
             ? state.currentSessionId
-            : mergedSessions[0]?.id ?? null,
+            : (mergedSessions[0]?.id ?? null),
       };
     }),
 
@@ -252,7 +305,9 @@ export const useAppStore = create<AppState>((set) => ({
           content: entry.content,
           ...(entry.traceId ? { traceId: entry.traceId } : {}),
           ...(entry.sources ? { sources: entry.sources } : {}),
-          ...(entry.storedAttachments?.length ? { storedAttachments: entry.storedAttachments } : {}),
+          ...(entry.storedAttachments?.length
+            ? { storedAttachments: entry.storedAttachments }
+            : {}),
         }));
         return {
           ...s,

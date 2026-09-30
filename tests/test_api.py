@@ -16,8 +16,8 @@ from api.routes import chat as chat_routes
 from persistence import get_chat_history_repository
 
 
-def _mock_astream(chunks: list[str]) -> Callable[..., AsyncIterator[str]]:
-    """Create a mock async generator matching ``Agent.astream`` signature."""
+def _mock_astream(chunks: list[str]) -> Callable[..., AsyncIterator[dict]]:
+    """Create a mock astream yielding token event dicts."""
 
     async def _gen(
         messages: list[dict[str, str]],
@@ -26,9 +26,9 @@ def _mock_astream(chunks: list[str]) -> Callable[..., AsyncIterator[str]]:
         visitor_id: str | None = None,
         model: str | None = None,
         auth_token: str | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[dict]:
         for chunk in chunks:
-            yield chunk
+            yield {"type": "token", "content": chunk}
 
     return _gen
 
@@ -325,11 +325,11 @@ def test_websocket_chat_with_conversation_history(async_app: TestClient) -> None
             visitor_id: str | None = None,
             model: str | None = None,
             auth_token: str | None = None,
-        ) -> AsyncIterator[str]:
+        ) -> AsyncIterator[dict]:
             nonlocal received_messages
             received_messages = messages
             for chunk in chunks:
-                yield chunk
+                yield {"type": "token", "content": chunk}
 
         mock_agent_instance.astream = astream_gen
         mock_agent_class.return_value = mock_agent_instance
@@ -382,10 +382,10 @@ def test_websocket_chat_forwards_auth_token(async_app: TestClient) -> None:
             visitor_id: str | None = None,
             model: str | None = None,
             auth_token: str | None = None,
-        ) -> AsyncIterator[str]:
+        ) -> AsyncIterator[dict]:
             nonlocal received_auth_token
             received_auth_token = auth_token
-            yield "ok"
+            yield {"type": "token", "content": "ok"}
 
         mock_agent_instance.astream = astream_gen
         mock_agent_class.return_value = mock_agent_instance
@@ -558,11 +558,11 @@ def test_websocket_history_with_multiple_turns(async_app: TestClient) -> None:
             visitor_id: str | None = None,
             model: str | None = None,
             auth_token: str | None = None,
-        ) -> AsyncIterator[str]:
+        ) -> AsyncIterator[dict]:
             nonlocal received_messages
             received_messages = messages
             for chunk in chunks:
-                yield chunk
+                yield {"type": "token", "content": chunk}
 
         mock_agent_instance.astream = astream_gen
         mock_agent_class.return_value = mock_agent_instance
@@ -1009,6 +1009,254 @@ def test_end_frame_omits_usage_when_provider_reports_none(
                     break
                 elif data["type"] == "error":
                     pytest.fail(f"Unexpected error: {data['content']}")
+
+
+def _mock_astream_with_tool() -> Callable[..., AsyncIterator[dict]]:
+    async def _gen(
+        messages: list[dict[str, str]],
+        *,
+        session_id: str | None = None,
+        visitor_id: str | None = None,
+        model: str | None = None,
+        auth_token: str | None = None,
+    ) -> AsyncIterator[dict]:
+        yield {"type": "token", "content": "Let me check. "}
+        yield {
+            "type": "tool_call",
+            "name": "search_documents",
+            "args": {"query": "pricing", "auth_token": "SECRET"},
+        }
+        yield {"type": "tool_result", "name": "search_documents", "result": "3 docs"}
+        yield {"type": "token", "content": "Done."}
+
+    return _gen
+
+
+def _mock_astream_with_failed_tool() -> Callable[..., AsyncIterator[dict]]:
+    async def _gen(
+        messages: list[dict[str, str]],
+        *,
+        session_id: str | None = None,
+        visitor_id: str | None = None,
+        model: str | None = None,
+        auth_token: str | None = None,
+    ) -> AsyncIterator[dict]:
+        # A failed call's result is only its error text — and this text names no
+        # error prefix, which is exactly the case a consumer cannot detect by
+        # pattern-matching the wording.
+        yield {
+            "type": "tool_result",
+            "name": "create_client",
+            "result": "The tool could not be completed.",
+            "ok": False,
+        }
+
+    return _gen
+
+
+def test_websocket_tool_result_frame_reports_failure(async_app: TestClient) -> None:
+    """A failed tool call is flagged `ok: False` on the wire, so the consumer
+    never has to infer error-ness from the error's wording (NGos NET-2011)."""
+    with patch("api.routes.chat.Agent") as mock_agent_class:
+        mock_agent_instance = MagicMock()
+        mock_agent_instance.last_trace_id = None
+        mock_agent_instance.get_last_used_sources.return_value = []
+        mock_agent_instance.get_last_usage.return_value = None
+        mock_agent_instance.last_model = None
+        mock_agent_instance.astream = _mock_astream_with_failed_tool()
+        mock_agent_class.return_value = mock_agent_instance
+
+        with async_app.websocket_connect("/ws") as websocket:
+            websocket.send_json(
+                {
+                    "session_id": "s1",
+                    "visitor_id": "v1",
+                    "messages": [{"role": "user", "content": "create a client"}],
+                }
+            )
+            frames = []
+            while True:
+                data = websocket.receive_json()
+                frames.append(data)
+                if data["type"] in ("end", "error"):
+                    break
+
+    result = next(f for f in frames if f["type"] == "tool_result")
+    assert result["ok"] is False
+    assert result["result"] == "The tool could not be completed."
+
+
+def test_websocket_emits_tool_frames_and_usage(async_app: TestClient) -> None:
+    with patch("api.routes.chat.Agent") as mock_agent_class:
+        mock_agent_instance = MagicMock()
+        mock_agent_instance.last_trace_id = None
+        mock_agent_instance.get_last_used_sources.return_value = []
+        mock_agent_instance.get_last_usage.return_value = {
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+        }
+        mock_agent_instance.last_model = "openai/gpt-5-mini"
+        mock_agent_instance.astream = _mock_astream_with_tool()
+        mock_agent_class.return_value = mock_agent_instance
+
+        with async_app.websocket_connect("/ws") as websocket:
+            websocket.send_json(
+                {
+                    "session_id": "s1",
+                    "visitor_id": "v1",
+                    "messages": [{"role": "user", "content": "hi"}],
+                }
+            )
+            frames = []
+            while True:
+                data = websocket.receive_json()
+                frames.append(data)
+                if data["type"] == "end":
+                    break
+                elif data["type"] == "error":
+                    pytest.fail(data["content"])
+
+    types = [f["type"] for f in frames]
+    assert types.index("tool_call") < types.index("tool_result")
+    call = next(f for f in frames if f["type"] == "tool_call")
+    assert call["name"] == "search_documents"
+    assert call["args"]["query"] == "pricing"
+    assert call["args"]["auth_token"] == "[redacted]"  # sanitized
+    result = next(f for f in frames if f["type"] == "tool_result")
+    assert result["result"] == "3 docs"
+    # An event without an explicit `ok` is a success (the agent only sets it
+    # False on failure), so consumers never have to infer it from the wording.
+    assert result["ok"] is True
+    end = frames[-1]
+    assert end["model"] == "openai/gpt-5-mini"
+    assert end["usage"]["total_tokens"] == 15
+    # No frame anywhere leaks the raw secret.
+    assert "SECRET" not in str(frames)
+
+
+def test_websocket_flag_off_hides_tool_frames(async_app: TestClient) -> None:
+    from config import get_app_settings
+
+    get_app_settings.cache_clear()
+    try:
+        with (
+            patch.dict("os.environ", {"TOOL_FRAMES_ENABLED": "false"}),
+            patch("api.routes.chat.Agent") as mock_agent_class,
+        ):
+            mock_agent_instance = MagicMock()
+            mock_agent_instance.last_trace_id = None
+            mock_agent_instance.get_last_used_sources.return_value = []
+            mock_agent_instance.get_last_usage.return_value = {
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15,
+            }
+            mock_agent_instance.last_model = "openai/gpt-5-mini"
+            mock_agent_instance.astream = _mock_astream_with_tool()
+            mock_agent_class.return_value = mock_agent_instance
+
+            with async_app.websocket_connect("/ws") as websocket:
+                websocket.send_json(
+                    {
+                        "session_id": "s1",
+                        "visitor_id": "v1",
+                        "messages": [{"role": "user", "content": "hi"}],
+                    }
+                )
+                frames = []
+                while True:
+                    data = websocket.receive_json()
+                    frames.append(data)
+                    if data["type"] == "end":
+                        break
+                    elif data["type"] == "error":
+                        pytest.fail(data["content"])
+    finally:
+        get_app_settings.cache_clear()
+
+    types = [f["type"] for f in frames]
+    assert "tool_call" not in types
+    assert "tool_result" not in types
+    # The flag gates tool frames only. Token usage and the resolved model are
+    # reported independently of it, so they stay on the "end" frame.
+    end = frames[-1]
+    assert end["usage"]["total_tokens"] == 15
+    assert end["model"] == "openai/gpt-5-mini"
+
+
+def _mock_astream_echoing_token(token: str) -> Callable[..., AsyncIterator[dict]]:
+    """Mock astream whose tool args and result echo the auth token verbatim."""
+
+    async def _gen(
+        messages: list[dict[str, str]],
+        *,
+        session_id: str | None = None,
+        visitor_id: str | None = None,
+        model: str | None = None,
+        auth_token: str | None = None,
+    ) -> AsyncIterator[dict]:
+        yield {"type": "token", "content": "Checking. "}
+        yield {
+            "type": "tool_call",
+            "name": "search_documents",
+            "args": {
+                "query": "pricing",
+                "nested": {"note": f"bearer {token}", "api_key": "SECRET"},
+                "headers": [f"Authorization: {token}"],
+            },
+        }
+        yield {
+            "type": "tool_result",
+            "name": "search_documents",
+            "result": f"MCP error: invalid token: {token}",
+        }
+        yield {"type": "token", "content": "Done."}
+
+    return _gen
+
+
+def test_websocket_scrubs_auth_token_from_tool_frames(async_app: TestClient) -> None:
+    """The forwarded auth token never appears in any frame — not in nested args,
+    not in the tool result."""
+    token = "tok-live-abc123-do-not-leak"
+    with patch("api.routes.chat.Agent") as mock_agent_class:
+        mock_agent_instance = MagicMock()
+        mock_agent_instance.last_trace_id = None
+        mock_agent_instance.get_last_used_sources.return_value = []
+        mock_agent_instance.get_last_usage.return_value = None
+        mock_agent_instance.last_model = None
+        mock_agent_instance.astream = _mock_astream_echoing_token(token)
+        mock_agent_class.return_value = mock_agent_instance
+
+        with async_app.websocket_connect("/ws") as websocket:
+            websocket.send_json(
+                {
+                    "session_id": "s1",
+                    "visitor_id": "v1",
+                    "auth_token": token,
+                    "messages": [{"role": "user", "content": "hi"}],
+                }
+            )
+            frames = []
+            while True:
+                data = websocket.receive_json()
+                frames.append(data)
+                if data["type"] == "end":
+                    break
+                elif data["type"] == "error":
+                    pytest.fail(data["content"])
+
+    # The token literal appears in NO frame.
+    assert token not in str(frames)
+    call = next(f for f in frames if f["type"] == "tool_call")
+    assert call["args"]["query"] == "pricing"
+    assert call["args"]["nested"]["api_key"] == "[redacted]"  # nested key redaction
+    assert call["args"]["nested"]["note"] == "bearer [redacted]"
+    assert call["args"]["headers"] == ["Authorization: [redacted]"]
+    result = next(f for f in frames if f["type"] == "tool_result")
+    assert result["result"] == "MCP error: invalid token: [redacted]"
+    assert "SECRET" not in str(frames)
 
 
 # ============================================================================

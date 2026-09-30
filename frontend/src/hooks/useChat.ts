@@ -7,6 +7,8 @@ import type {
   WsEvent,
   WsOutboundMessage,
   WsTokenEvent,
+  WsToolCallEvent,
+  WsToolResultEvent,
 } from "../types/chat";
 import { mapBackendSources } from "../utils/sourceMapping";
 import { getOrCreateVisitorId } from "../utils/visitorId";
@@ -15,6 +17,7 @@ import { getOrCreateVisitorId } from "../utils/visitorId";
 // In development the Vite dev server proxies this path to the backend (see vite.config.ts).
 const WS_PATH = "/ws";
 const RECONNECT_DELAY_MS = 3000;
+const TOOL_CALLS_ENABLED = import.meta.env.VITE_TOOL_CALLS_ENABLED !== "false";
 
 /**
  * Manages the WebSocket lifecycle and wires incoming events to the Zustand store.
@@ -38,6 +41,8 @@ export function useChat() {
     addToHistory,
     updateSessionTitle,
     setLastUserMessageAttachments,
+    addToolCallToLastMessage,
+    resolveToolResultOnLastMessage,
   } = useAppStore();
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -121,6 +126,16 @@ export function useChat() {
 
       if (data.type === "token") {
         appendTokenToLastMessage((data as WsTokenEvent).content);
+      } else if (data.type === "tool_call") {
+        if (TOOL_CALLS_ENABLED) {
+          const e = data as WsToolCallEvent;
+          addToolCallToLastMessage(e.name, e.args);
+        }
+      } else if (data.type === "tool_result") {
+        if (TOOL_CALLS_ENABLED) {
+          const e = data as WsToolResultEvent;
+          resolveToolResultOnLastMessage(e.name, e.result, e.ok);
+        }
       } else if (data.type === "end") {
         const endEvent = data as WsEndEvent;
         setStreaming(false);
@@ -147,6 +162,8 @@ export function useChat() {
     markLastMessageError,
     addToHistory,
     setLastUserMessageAttachments,
+    addToolCallToLastMessage,
+    resolveToolResultOnLastMessage,
   ]);
 
   useEffect(() => {

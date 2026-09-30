@@ -117,6 +117,43 @@ class InlineAttachment(BaseModel):
         return self
 
 
+_REDACT_TOOL_ARG_KEYS = frozenset(
+    {"auth_token", "user_token", "token", "authorization", "api_key"}
+)
+_MAX_FRAME_VALUE_CHARS = 10_000
+
+
+def _truncate_frame_value(value: Any) -> Any:
+    """Cap long string values so frames stay small; non-strings pass through."""
+    if isinstance(value, str) and len(value) > _MAX_FRAME_VALUE_CHARS:
+        return value[:_MAX_FRAME_VALUE_CHARS] + "…[truncated]"
+    return value
+
+
+def _sanitize_frame_value(value: Any, *, auth_token: str | None = None) -> Any:
+    """Recursively sanitize a tool frame value before sending it to the client.
+
+    Redacts auth-bearing keys at any nesting depth, replaces every occurrence
+    of the literal *auth_token* inside string values, and truncates long strings.
+    """
+    if isinstance(value, str):
+        if auth_token:
+            value = value.replace(auth_token, "[redacted]")
+        return _truncate_frame_value(value)
+    if isinstance(value, dict):
+        return {
+            k: (
+                "[redacted]"
+                if isinstance(k, str) and k.lower() in _REDACT_TOOL_ARG_KEYS
+                else _sanitize_frame_value(v, auth_token=auth_token)
+            )
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_sanitize_frame_value(item, auth_token=auth_token) for item in value]
+    return value
+
+
 class HistoryMessage(BaseModel):
     """Individual message in conversation history."""
 
@@ -716,25 +753,50 @@ async def _stream_assistant_response(  # noqa: PLR0913
     model: str | None = None,
     auth_token: str | None = None,
 ) -> str:
-    """Stream the assistant reply token-by-token to *websocket* and return the
-    accumulated full response.
+    """Stream the assistant reply to *websocket*, emitting token and (when enabled)
+    tool_call/tool_result frames, and return the accumulated assistant text.
     """
+    frames_enabled = get_app_settings().tool_frames_enabled
     full_response = ""
-    async for chunk in agent.astream(
+    async for event in agent.astream(
         transcript,
         session_id=session_id,
         visitor_id=visitor_id,
         model=model,
         auth_token=auth_token,
     ):
-        full_response += chunk
-        await websocket.send_json(
-            {
-                "type": "token",
-                "content": chunk,
-                "session_id": session_id,
-            }
-        )
+        etype = event["type"]
+        if etype == "token":
+            full_response += event["content"]
+            await websocket.send_json(
+                {"type": "token", "content": event["content"], "session_id": session_id}
+            )
+        elif etype == "tool_call" and frames_enabled:
+            await websocket.send_json(
+                {
+                    "type": "tool_call",
+                    "name": event["name"],
+                    "args": _sanitize_frame_value(event["args"], auth_token=auth_token),
+                    "session_id": session_id,
+                }
+            )
+        elif etype == "tool_result" and frames_enabled:
+            await websocket.send_json(
+                {
+                    "type": "tool_result",
+                    "name": event["name"],
+                    "result": _sanitize_frame_value(
+                        event["result"], auth_token=auth_token
+                    ),
+                    # Whether the call succeeded is ours to report: a failure's
+                    # `result` is only its error text, and a consumer left to
+                    # infer that from the wording gets it wrong — NetguruOS
+                    # rendered a green "Changes applied" over a write that never
+                    # happened (NGos NET-2011).
+                    "ok": event.get("ok", True),
+                    "session_id": session_id,
+                }
+            )
     return full_response
 
 

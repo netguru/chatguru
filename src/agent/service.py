@@ -577,8 +577,8 @@ class Agent:
         messages: list[BaseMessage],
         tool_registry: dict[str, BaseTool],
         config: RunnableConfig | None = None,
-    ) -> None:
-        """Execute tool calls and append results to messages."""
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Execute tool calls, append results to messages, and yield tool events."""
         logger.info("Processing %d tool call(s)", len(full_response.tool_calls))
         messages.append(full_response)
 
@@ -587,10 +587,23 @@ class Agent:
             tool_args = tool_call["args"]
             tool_call_id = tool_call["id"]
 
-            result, _ = await _execute_tool(
+            yield {"type": "tool_call", "name": tool_name, "args": tool_args}
+
+            result, ok = await _execute_tool(
                 tool_name, tool_args, tool_registry, config=config
             )
             messages.append(ToolMessage(content=result, tool_call_id=tool_call_id))
+            # `ok` rides the event because only we know it: a failed call's
+            # result is just its error text, so a consumer without this flag has
+            # to guess error-ness from wording. NetguruOS guessed wrong and
+            # rendered a green "Changes applied" over a write that never
+            # happened (NGos NET-2011).
+            yield {
+                "type": "tool_result",
+                "name": tool_name,
+                "result": result,
+                "ok": ok,
+            }
 
     @asynccontextmanager
     async def _tracing_context(
@@ -648,7 +661,7 @@ class Agent:
         visitor_id: str | None = None,
         model: str | None = None,
         auth_token: str | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[dict[str, Any]]:
         """
         Stream agent responses asynchronously with conversation context.
 
@@ -669,7 +682,14 @@ class Agent:
                 headers reference ``${user_token}`` (see ``open_mcp_tools``).
 
         Yields:
-            Response chunks as strings (including tool call notifications)
+            Structured event dicts, one of:
+            ``{"type": "token", "content": str}``,
+            ``{"type": "tool_call", "name": str, "args": dict}``,
+            ``{"type": "tool_result", "name": str, "result": Any, "ok": bool}``
+
+            ``ok`` is False when the tool raised or was unknown. A failed call's
+            ``result`` is only its error text, so consumers must read ``ok``
+            rather than pattern-match the wording.
         """
         self._last_langfuse_handler = None
         self._last_turn_usage = None
@@ -717,7 +737,10 @@ class Agent:
                 turn_messages, config, turn_llm, turn_registry
             ):
                 # Accumulate for the trace-level output written on context exit.
-                output_chunks.append(chunk)
+                # Only token events carry assistant text; tool_call/tool_result
+                # events are structured and would not join into the reply.
+                if chunk.get("type") == "token":
+                    output_chunks.append(chunk["content"])
                 yield chunk
 
     def _bind_turn_tools(
@@ -784,7 +807,7 @@ class Agent:
         config: RunnableConfig,
         llm: Runnable[Any, BaseMessage],
         tool_registry: dict[str, BaseTool],
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[dict[str, Any]]:
         """Run the agentic loop until no more tool calls or max iterations."""
         for iteration in range(MAX_TOOL_ITERATIONS):
             full_response: AIMessageChunk | None = None
@@ -805,7 +828,7 @@ class Agent:
 
                 content: Any = getattr(chunk, "content", "")
                 if content:
-                    yield str(content)
+                    yield {"type": "token", "content": str(content)}
 
             if call_usage is None:
                 # A partial total is indistinguishable from a complete one, so
@@ -823,11 +846,15 @@ class Agent:
                 logger.info("Agentic loop completed after %d iterations", iteration + 1)
                 return
 
-            await self._process_tool_calls(
+            async for event in self._process_tool_calls(
                 full_response, messages, tool_registry, config=config
-            )
+            ):
+                yield event
         logger.warning("Reached maximum tool iterations (%d)", MAX_TOOL_ITERATIONS)
-        yield "\n\n⚠️ Reached maximum tool call limit. Please rephrase your question."
+        yield {
+            "type": "token",
+            "content": "\n\n⚠️ Reached maximum tool call limit. Please rephrase your question.",
+        }
 
     def get_last_used_sources(self) -> list[dict[str, Any]]:
         """Return structured sources collected during the most recent astream() call."""
