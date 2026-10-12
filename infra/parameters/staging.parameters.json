@@ -1,0 +1,69 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "value": "westeurope"
+    },
+    "containerAppsEnvironmentName": {
+      "value": "acae-chatguru-staging"
+    },
+    "containerAppName": {
+      "value": "ca-chatguru-staging"
+    },
+    "logAnalyticsWorkspaceName": {
+      "value": "law-chatguru-staging"
+    },
+    "storageAccountName": {
+      "value": "stchatgurustage001"
+    },
+    "acrServer": {
+      "value": "example.azurecr.io"
+    },
+    "acrPullIdentityResourceId": {
+      "value": ""
+    },
+    "llmApiKey": {
+      "value": "replace-me"
+    },
+    "langfusePublicKey": {
+      "value": "replace-me"
+    },
+    "langfuseSecretKey": {
+      "value": "replace-me"
+    },
+    "langfuseHost": {
+      "value": "https://cloud.langfuse.com"
+    },
+    "openAiEndpoint": {
+      "value": "https://example.openai.azure.com/openai/v1"
+    },
+    "llmDeploymentName": {
+      "value": "gpt-4o-mini"
+    },
+    "llmApiVersion": {
+      "value": ""
+    },
+    "llmOpenAiBaseUrl": {
+      "value": ""
+    },
+    "embeddingDeploymentName": {
+      "value": "text-embedding-3-small"
+    },
+    "rateLimitEnabled": {
+      "value": false
+    },
+    "rateLimitTrustProxy": {
+      "value": true
+    },
+    "rateLimitMaxMessages": {
+      "value": 1000
+    },
+    "rateLimitWindowSeconds": {
+      "value": 86400
+    },
+    "imageTag": {
+      "value": "staging-latest"
+    }
+  }
+}
